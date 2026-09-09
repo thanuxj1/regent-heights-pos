@@ -20,6 +20,9 @@ import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 // ─────────────────────────────────────────────
 const VALID_STATUSES = ["pending", "preparing", "completed", "cancelled"];
 const VALID_TYPES = ["dine-in", "takeaway", "delivery"];
+// Tenders the till can take. "room" is a charge to a guest folio, not money
+// in the drawer, so it is a tender but never a cash one.
+const TENDERS = ["cash", "card", "mobile_pay", "voucher", "room", "split"];
 
 // Legal status transitions for a POS system
 // Key = current status, Value = allowed next statuses
@@ -514,11 +517,14 @@ export const updateOrder = async (req, res) => {
     // completed as 1 and the difference pocketed.
     if (or_status === "completed") {
       const priced = await pool.query(
+        // Same COALESCE as the menu and the creation-time check: the promotion
+        // usually lives on Product, not on Branch_Product.
         `SELECT COALESCE(SUM(oi.pro_quantity * bp." Pro_Price"
-                             * (1 - COALESCE(bp.discount_pct, 0) / 100.0)), 0) AS expected,
+                             * (1 - COALESCE(bp.discount_pct, pr.discount_pct, 0) / 100.0)), 0) AS expected,
                 COUNT(*) AS lines
          FROM "ORDER_ITEM" oi
          JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"
+         LEFT JOIN "Product" pr ON pr.pro_id = bp.pro_id
          WHERE oi.order_id = $1`,
         [id],
       );
@@ -1011,10 +1017,19 @@ export const createOrderWithItems = async (req, res) => {
   // The prices come back too — the till is not the authority on what things cost.
   const ids = [...new Set(items.map((it) => Number(it.Bpro_id)))];
   const owned = await pool.query(
+    // Priced exactly as the menu endpoint prices it, including the COALESCE.
+    // A promotion lives on Product and is only sometimes overridden on
+    // Branch_Product, so reading the branch column alone reported every
+    // discounted item at full price and refused the sale — the till could not
+    // sell anything that was on offer.
+    //
     // The price column really is named with a leading space in this schema;
     // aliased here so nothing downstream has to know that.
-    `SELECT "Bpro_id", " Pro_Price" AS pro_price, discount_pct
-     FROM "Branch_Product" WHERE "Bpro_id" = ANY($1::int[]) AND "B_id" = $2`,
+    `SELECT bp."Bpro_id", bp." Pro_Price" AS pro_price,
+            COALESCE(bp.discount_pct, pr.discount_pct, 0) AS discount_pct
+     FROM "Branch_Product" bp
+     LEFT JOIN "Product" pr ON pr.pro_id = bp.pro_id
+     WHERE bp."Bpro_id" = ANY($1::int[]) AND bp."B_id" = $2`,
     [ids, b_id],
   );
   if (owned.rows.length !== ids.length) {
@@ -1079,6 +1094,26 @@ export const createOrderWithItems = async (req, res) => {
     });
   }
 
+  // How it was paid, and whose drawer it belongs to.
+  //
+  // The tender used to be recorded only if the cashier pressed "Pay" on the
+  // invoice screen afterwards — a separate, optional step on another page, and
+  // the Payment table was empty in practice. Without it no drawer can be
+  // counted, because there is no way to tell a cash sale from a card one.
+  const tender = TENDERS.includes(String(order.payment_method || "").toLowerCase())
+    ? String(order.payment_method).toLowerCase()
+    : null;
+
+  // Attach the sale to the cashier's open drawer if they have one. Deliberately
+  // not required: a missing shift must never stop a queue being served. The
+  // close-out surfaces sales that belong to no drawer instead of losing them.
+  const drawer = await pool.query(
+    `SELECT session_id FROM "CASH_SESSION"
+     WHERE b_id = $1 AND opened_by = $2 AND status = 'open'`,
+    [b_id, order.u_id],
+  );
+  const drawerId = drawer.rows[0]?.session_id ?? null;
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1087,8 +1122,9 @@ export const createOrderWithItems = async (req, res) => {
       `INSERT INTO "ORDER"
          (or_tax, or_totalcost, "or_totalCostWtax", or_status, or_type,
           cust_id, u_id, b_id, table_id, client_ref,
-          discount_pct, service_fee, discount_approved_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          discount_pct, service_fee, discount_approved_by,
+          payment_method, session_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1096,6 +1132,7 @@ export const createOrderWithItems = async (req, res) => {
         order.or_type, order.cust_id ?? null, order.u_id, b_id,
         order.table_id ?? null, clientRef,
         discountPct, serviceFee, discountApprover,
+        tender, drawerId,
       ],
     );
     const created = rows[0];

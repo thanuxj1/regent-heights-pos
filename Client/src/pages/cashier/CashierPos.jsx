@@ -20,6 +20,7 @@ import { useAuth } from "../../context/AuthContext";
 import {
   createOrder,
   createOrderWithItems,
+  getCashSession,
   createOrderItem,
   getBranchById,
   getBranchProducts,
@@ -39,6 +40,7 @@ import {
   queuedCount, onQueueChange, parkedSales, clearParked, connected,
 } from "../../services/offline";
 import OrderReadyAlerts from "../../components/cashier/OrderReadyAlerts";
+import CashDrawerModal from "../../components/cashier/CashDrawerModal";
 import { printKot } from "../../utils/printKot";
 import { withRetry, isTransient } from "../../utils/retryRequest";
 import Sidebar from "../../components/branch-admin/Sidebar";
@@ -151,6 +153,18 @@ const CashierPos = () => {
     if (r.sent) setSuccessNote(`${r.sent} offline sale${r.sent === 1 ? "" : "s"} sent.`);
     else if (r.remaining) setError("Still no connection — the sales are safe and will go up automatically.");
   };
+
+  // The drawer. Checked on load so the till can prompt for a float rather than
+  // letting an hour of cash sales pile up against no shift.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawer, setDrawer] = useState(null);
+
+  const refreshDrawer = useCallback(async () => {
+    if (!branchId) return;
+    try { setDrawer(await getCashSession(branchId)); } catch { /* till still works */ }
+  }, [branchId]);
+
+  useEffect(() => { refreshDrawer(); }, [refreshDrawer]);
 
   const [waiterOrders, setWaiterOrders] = useState([]);
   const [showWaiterOrdersModal, setShowWaiterOrdersModal] = useState(false);
@@ -725,6 +739,10 @@ const CashierPos = () => {
             // baked into a smaller number.
             discount_pct: Number(discountPct || 0),
             service_fee: Number(serviceFee || 0),
+            // How it was paid, sent with the sale itself. Without this the
+            // drawer cannot be counted at the end of the day: there is no way
+            // to tell which takings were notes and which were card.
+            payment_method: String(paymentMethod || "cash").toLowerCase(),
             ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
           },
           items: cart.map((item) => ({
@@ -933,9 +951,23 @@ const CashierPos = () => {
               <button type="button" onClick={handleOpenWaiterOrders} style={headerBtn(waiterOrders.length > 0)}>
                 Waiter Orders ({waiterOrders.length})
               </button>
+              {/* Highlighted when no drawer is open — a cash sale with no shift
+                  behind it cannot be counted at the end of the day. */}
+              <button type="button" onClick={() => setDrawerOpen(true)}
+                style={headerBtn(drawer ? !drawer.open : false)}>
+                {drawer?.open ? "Drawer" : "Open Drawer"}
+              </button>
             </>
           }
         />
+
+      {drawerOpen && (
+        <CashDrawerModal
+          branchId={branchId}
+          onClose={() => setDrawerOpen(false)}
+          onChanged={refreshDrawer}
+        />
+      )}
 
       <OrderReadyAlerts alerts={orderReadyAlerts} onDismiss={handleDismissOrderReady} />
 

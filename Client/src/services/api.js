@@ -894,3 +894,42 @@ export const getActivitySummary = async (params = {}) => {
   const res = await api.get("/activity/summary", { params });
   return res.data ?? {};
 };
+
+/* ── The cash drawer ─────────────────────────────────────────────────────────
+ * A shift at the till: opened with a counted float, closed with a physical
+ * count. `getCashSession` is what the POS asks on load to know whether to
+ * prompt for a float.
+ */
+export const getCashSession = async (b_id) => {
+  const res = await api.get("/cash/session", { params: { b_id } });
+  return res.data;
+};
+
+export const openCashSession = async (payload) => {
+  const res = await api.post("/cash/session/open", payload);
+  return res.data;
+};
+
+export const addCashMovement = async (payload) => {
+  const res = await api.post("/cash/session/movement", payload);
+  return res.data;
+};
+
+/**
+ * Close the shift. `counted_cash` is required — the expected figure comes back
+ * in the response, never before, so the count is a real count.
+ */
+export const closeCashSession = async (payload) => {
+  const res = await api.post("/cash/session/close", payload);
+  return res.data;
+};
+
+export const getCashSessions = async (params) => {
+  const res = await api.get("/cash/sessions", { params });
+  return res.data;
+};
+
+export const getCashSessionById = async (id) => {
+  const res = await api.get(`/cash/sessions/${id}`);
+  return res.data;
+};

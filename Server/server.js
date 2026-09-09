@@ -74,6 +74,7 @@ import commissionRoutes from "./routes/commissionRoutes.js";
 import expenseRoutes from "./routes/expenseRoutes.js";
 import hotelRoutes from "./routes/hotelRoutes.js";
 import securityRoutes from "./routes/securityRoutes.js";
+import cashRoutes from "./routes/cashRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import activityRoutes from "./routes/activityRoutes.js";
 
@@ -171,6 +172,7 @@ app.use("/api/commission", commissionRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/hotel", hotelRoutes);
 app.use("/api/security", securityRoutes);
+app.use("/api/cash", cashRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/activity", activityRoutes);
 
