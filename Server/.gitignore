@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Environment variables.
+#
+# The glob matters: a plain `.env` does not match `.env.backup-before-singapore`,
+# and a backup taken during the region move was sitting one `git add .` away from
+# publishing the live database password and the JWT secret that signs every
+# session token.
+.env
+.env.*
+!.env.example
+*.env
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build files
+dist/
+build/
+

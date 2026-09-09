@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Printing
+   window.print() prints the whole document, so a receipt used to
+   come out as a mostly-blank page with the sidebar and filters on
+   it. Hide everything, then reveal only the element marked
+   .print-area and lift it to the top of the sheet.
+   visibility (not display) is used so fixed-position modal
+   ancestors keep their layout while their chrome stays hidden.
+   ───────────────────────────────────────────────────────────── */
+@media print {
+  html, body {
+    background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body * { visibility: hidden !important; }
+
+  .print-area, .print-area * { visibility: visible !important; }
+
+  /* Modal overlays are position:fixed, and a fixed element prints only on the
+     first page. Flatten the overlay and the panel into normal flow so a long
+     document (a folio with many lines, say) paginates properly. */
+  .print-root {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    padding: 0 !important;
+    background: none !important;
+    backdrop-filter: none !important;
+    z-index: auto !important;
+  }
+
+  /* AppShell leaves a 240px gutter for the fixed sidebar; no sidebar on paper. */
+  .print-shell { margin-left: 0 !important; }
+
+  /* On screen the shell is exactly one viewport and clips; on paper it must
+     grow to whatever it takes, or printing stops at the first page. */
+  .app-shell,
+  .print-shell,
+  .print-shell > main {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /* Ctrl+P fallback only. The Print buttons use printElement(), which copies the
+     node into its own window and paginates properly; this just keeps an
+     accidental browser print from emitting the sidebar and filters. */
+  .print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+  }
+
+  /* Scrollable panes inside the receipt must expand, not clip. */
+  .print-area * {
+    max-height: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+  }
+
+  /* Buttons, close icons and anything else that makes no sense on paper. */
+  .no-print, .no-print * { display: none !important; }
+
+  /* The mirror image: blocks that exist only on the printed copy. */
+  .print-only { display: block !important; }
+
+  .print-area a[href]::after { content: "" !important; }
+
+  table { page-break-inside: auto; }
+  tr    { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }
+
+  @page { margin: 14mm; }
+}

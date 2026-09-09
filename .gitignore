@@ -1,0 +1,41 @@
+# Dependencies — installed with `npm install`, never committed.
+# There was no .gitignore at the repository root, only inside Client/ and
+# Server/, so the root node_modules (nearly 5,000 files) was staged the first
+# time this project's history was created.
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+build/
+**/dist/
+**/build/
+
+# Secrets.
+#
+# The glob matters: a plain `.env` does not match `.env.backup-before-singapore`,
+# and a backup taken during a database migration was one `git add .` away from
+# publishing the live database password and the JWT secret that signs every
+# session token.
+.env
+.env.*
+*.env
+!.env.example
+!ENV_SETUP.txt
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local tooling scratch
+*.local

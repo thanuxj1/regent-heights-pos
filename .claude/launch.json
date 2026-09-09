@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pos-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "Client",
+      "port": 3000
+    },
+    {
+      "name": "pos-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview", "--port", "4173", "--host", "localhost"],
+      "cwd": "Client",
+      "port": 4173
+    }
+  ]
+}

@@ -1,0 +1,527 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { FaArrowLeft, FaSave, FaTimes } from "react-icons/fa";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import AdminSidebar from "../../components/admin/Sidebar";
+import AdminHeader from "../../components/admin/Header";
+import SuperAdminSidebar from "../../components/super-admin/Sidebar";
+import SuperAdminHeader from "../../components/super-admin/Header";
+import StatusToggle from "../../components/admin/StatusToggle";
+import { getBranchById, getUsers, updateBranch, updateUser } from "../../services/api";
+
+const inputBase = {
+  width: "100%",
+  border: "1px solid #d8e0ed",
+  borderRadius: "12px",
+  padding: "10px 14px",
+  color: "#30425f",
+  background: "#ffffff",
+  fontSize: "0.95rem",
+  outline: "none",
+};
+
+const labelBase = {
+  display: "block",
+  marginBottom: "7px",
+  color: "#303f60",
+  fontWeight: 500,
+  fontSize: "1rem",
+};
+
+const normalizeStatus = (value) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "active" || normalized === "true" || normalized === "1";
+  }
+
+  if (typeof value === "number") {
+    return value === 1;
+  }
+
+  return true;
+};
+
+const splitFullName = (fullName, fallbackFirst = "", fallbackLast = "") => {
+  const trimmed = fullName.trim();
+
+  if (!trimmed) {
+    return {
+      firstName: fallbackFirst,
+      lastName: fallbackLast,
+    };
+  }
+
+  const parts = trimmed.split(/\s+/);
+  const firstName = parts.shift() || fallbackFirst;
+  const lastName = parts.join(" ") || fallbackLast;
+
+  return { firstName, lastName };
+};
+
+const buildEmailFromUsername = (username, fallbackEmail) => {
+  const trimmedUsername = username.trim();
+
+  if (!trimmedUsername) {
+    return fallbackEmail;
+  }
+
+  const fallbackDomain = fallbackEmail.includes("@") ? fallbackEmail.split("@").slice(1).join("@") : "";
+  if (!fallbackDomain) {
+    return fallbackEmail;
+  }
+
+  return `${trimmedUsername}@${fallbackDomain}`;
+};
+
+const BranchProfileEdit = () => {
+  const { branchId } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Conditionally use super-admin layout when role_id === 6
+  const storedUser = JSON.parse(localStorage.getItem("user") || "{}");
+  const isSuperAdmin = storedUser?.role_id === 6;
+  const Sidebar = isSuperAdmin ? SuperAdminSidebar : AdminSidebar;
+  const Header = isSuperAdmin ? SuperAdminHeader : AdminHeader;
+
+  const [branch, setBranch] = useState(location.state?.branch || null);
+  const [manager, setManager] = useState(location.state?.manager || null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [allBranchAdmins, setAllBranchAdmins] = useState([]);
+  const [selectedManagerId, setSelectedManagerId] = useState(null);
+  const [form, setForm] = useState({
+    B_name: "",
+    B_email: "",
+    B_address: "",
+    B_conNo: "",
+    managerName: "",
+    username: "",
+    password: "",
+    status: true,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadProfile = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        let branchData = location.state?.branch || null;
+        let managerData = location.state?.manager || null;
+
+        if (!branchData || String(branchData.B_id) !== String(branchId)) {
+          branchData = await getBranchById(branchId);
+        }
+
+        // Load all users to find branch admin and populate selector
+        try {
+          const allUsers = await getUsers();
+          const branchAdmins = (allUsers || []).filter(u => u.role_id === 1);
+          setAllBranchAdmins(branchAdmins);
+          // Find current manager: user with B_id matching this branch and role_id=1
+          if (!managerData) {
+            managerData = branchAdmins.find(
+              u => String(u.b_id ?? u.B_id) === String(branchId)
+            ) || null;
+          }
+          if (managerData) {
+            setSelectedManagerId(managerData.u_id ?? managerData.U_id ?? null);
+          }
+        } catch {
+          // non-fatal — continue without manager list
+        }
+
+        if (!mounted) {
+          return;
+        }
+
+        setBranch(branchData);
+        setManager(managerData);
+
+        const fullName = [managerData?.u_fname || "", managerData?.u_lname || ""]
+          .join(" ")
+          .trim();
+
+        setForm({
+          B_name: branchData?.B_name || "",
+          B_email: branchData?.B_email || "",
+          B_address: branchData?.B_address || "",
+          B_conNo: branchData?.B_conNo || "",
+          managerName: fullName,
+          username: managerData?.u_email ? managerData.u_email.split("@")[0] : "",
+          password: "",
+          status: normalizeStatus(branchData?.B_status ?? branchData?.status ?? branchData?.branch_status),
+        });
+      } catch (err) {
+        if (mounted) {
+          setError(err?.response?.data?.message || "Unable to load branch profile.");
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadProfile();
+
+    return () => {
+      mounted = false;
+    };
+  }, [branchId, location.state]);
+
+  const branchInitial = useMemo(() => {
+    const name = form.B_name || branch?.B_name || "B";
+    return name.charAt(0).toUpperCase();
+  }, [form.B_name, branch]);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleStatusToggle = (e) => {
+    setForm((prev) => ({ ...prev, status: e.target.checked }));
+  };
+
+  const updateLocalState = (branchData, managerData) => {
+    setBranch(branchData);
+    setManager(managerData);
+
+    const fullName = [managerData?.u_fname || "", managerData?.u_lname || ""].join(" ").trim();
+
+    setForm({
+      B_name: branchData?.B_name || "",
+      B_email: branchData?.B_email || "",
+      B_address: branchData?.B_address || "",
+      B_conNo: branchData?.B_conNo || "",
+      managerName: fullName,
+      username: managerData?.u_email ? managerData.u_email.split("@")[0] : "",
+      password: "",
+      status: normalizeStatus(branchData?.status ?? branchData?.B_status ?? branchData?.branch_status),
+    });
+  };
+
+  const goToProfile = () => {
+    navigate(`/branch_profile/${branchId}`, {
+      state: { branch, manager },
+    });
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+
+    if (!branchId) {
+      setError("Branch id is missing.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+
+      const branchPayload = {
+        B_name: form.B_name.trim(),
+        B_email: form.B_email.trim(),
+        B_address: form.B_address.trim(),
+        B_conNo: form.B_conNo.trim(),
+        B_status: form.status,
+      };
+
+      const updatedBranch = await updateBranch(branchId, branchPayload);
+
+      let updatedManager = manager;
+      const currentManagerId = manager?.u_id ?? manager?.U_id ?? null;
+
+      // If manager changed, re-assign B_id
+      if (selectedManagerId && selectedManagerId !== currentManagerId) {
+        // Remove old manager's branch link
+        if (currentManagerId) {
+          await updateUser(currentManagerId, { B_id: null }).catch(() => {});
+        }
+        // Assign new manager to this branch
+        updatedManager = await updateUser(selectedManagerId, { B_id: Number(branchId) });
+      } else if (currentManagerId) {
+        // Edit existing manager's personal details
+        const { firstName, lastName } = splitFullName(
+          form.managerName,
+          manager?.u_fname || "",
+          manager?.u_lname || "",
+        );
+        const managerPayload = {
+          u_fname: firstName,
+          u_lname: lastName,
+          u_email: buildEmailFromUsername(form.username, manager?.u_email || ""),
+        };
+        if (form.password.trim()) {
+          managerPayload.u_pw = form.password;
+        }
+        updatedManager = await updateUser(currentManagerId, managerPayload);
+      }
+
+      const nextBranch = {
+        ...(branch || {}),
+        ...updatedBranch,
+        status: form.status,
+      };
+
+      updateLocalState(nextBranch, updatedManager);
+
+      navigate(`/branch_profile/${branchId}`, {
+        state: { branch: nextBranch, manager: updatedManager },
+      });
+    } catch (err) {
+      setError(err?.response?.data?.message || "Unable to save branch profile.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", background: "#eff1f5", minHeight: "100vh" }}>
+      <Sidebar />
+
+      <div style={{ flex: 1, marginLeft: "var(--sidebar-w, 240px)" }}>
+        {isSuperAdmin ? <Header title="Branch Management" /> : <Header />}
+
+        <div style={{ padding: "0 20px 20px" }}>
+          <div
+            style={{
+              minHeight: "calc(100vh - 90px)",
+              background: "#ffffff",
+              borderRadius: "0 0 10px 10px",
+              padding: "28px 34px",
+            }}
+          >
+            <button
+              type="button"
+              onClick={goToProfile}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                border: "none",
+                background: "transparent",
+                color: "#5a5f6a",
+                cursor: "pointer",
+                fontWeight: 500,
+                fontSize: "0.98rem",
+                marginBottom: "20px",
+              }}
+            >
+              <FaArrowLeft /> Back to Branch Profile
+            </button>
+
+            <h1
+              style={{
+                textAlign: "center",
+                margin: "0",
+                color: "#2d3d73",
+                fontWeight: 700,
+                fontSize: "40px",
+                lineHeight: 1,
+              }}
+            >
+              Edit Branch Profile
+            </h1>
+
+            <div style={{ marginTop: "22px", borderBottom: "1px solid #e5e9f2" }}>
+              <span
+                style={{
+                  color: "#2f3cff",
+                  fontWeight: 500,
+                  fontSize: "1rem",
+                  padding: "0 10px 10px",
+                  display: "inline-block",
+                  borderBottom: "3px solid #2f3cff",
+                }}
+              >
+                Edit Profile
+              </span>
+            </div>
+
+            {loading ? (
+              <p style={{ color: "#5f6d8a", textAlign: "center", marginTop: "32px" }}>Loading branch profile...</p>
+            ) : error ? (
+              <p style={{ color: "#c0392b", textAlign: "center", marginTop: "32px" }}>{error}</p>
+            ) : (
+              <form onSubmit={handleSave}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "110px 1fr",
+                    gap: "24px",
+                    alignItems: "start",
+                    marginTop: "34px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "92px",
+                      height: "92px",
+                      borderRadius: "50%",
+                      background: "linear-gradient(145deg, #4b84ff 0%, #1e3f9a 100%)",
+                      display: "grid",
+                      placeItems: "center",
+                      color: "#ffffff",
+                      fontSize: "2.2rem",
+                      fontWeight: 700,
+                      marginTop: "18px",
+                      boxShadow: "0 6px 15px rgba(30, 63, 154, 0.35)",
+                    }}
+                  >
+                    {branchInitial}
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                      gap: "14px 18px",
+                    }}
+                  >
+                    <EditableField label="Branch Name" name="B_name" value={form.B_name} onChange={handleChange} />
+
+                    {/* Branch Admin selector */}
+                    <div>
+                      <label style={labelBase}>Branch Admin</label>
+                      <select
+                        value={selectedManagerId ?? ""}
+                        onChange={(e) => setSelectedManagerId(e.target.value ? Number(e.target.value) : null)}
+                        style={inputBase}
+                      >
+                        <option value="">— No admin assigned —</option>
+                        {allBranchAdmins.map((u) => {
+                          const uid = u.u_id ?? u.U_id;
+                          const name = [u.u_fname, u.u_lname].filter(Boolean).join(" ") || u.u_email;
+                          const alreadyHere = String(u.b_id ?? u.B_id) === String(branchId);
+                          const unassigned = !u.b_id && !u.B_id;
+                          if (!alreadyHere && !unassigned) return null;
+                          return <option key={uid} value={uid}>{name} {alreadyHere ? "(current)" : ""}</option>;
+                        })}
+                      </select>
+                    </div>
+
+                    <EditableField
+                      label="Manager Name (current)"
+                      name="managerName"
+                      value={form.managerName}
+                      onChange={handleChange}
+                    />
+                    <EditableField label="Email" name="B_email" value={form.B_email} onChange={handleChange} />
+                    <EditableField label="Manager Username" name="username" value={form.username} onChange={handleChange} />
+                    <EditableField label="Address" name="B_address" value={form.B_address} onChange={handleChange} />
+                    <EditableField
+                      label="Password"
+                      name="password"
+                      value={form.password}
+                      onChange={handleChange}
+                      type="password"
+                      placeholder="Enter new password"
+                    />
+                    <div
+                      style={{
+                        display: "grid",
+                        gridColumn: "1 / -2",
+                        gridTemplateColumns: "minmax(26px, 1fr) auto",
+                        gap: "18px",
+                        alignItems: "end",
+                      }}
+                    >
+                      <EditableField
+                        label="Contact Number"
+                        name="B_conNo"
+                        value={form.B_conNo}
+                        onChange={handleChange}
+                      />
+                      <StatusToggle checked={form.status} onChange={handleStatusToggle} />
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    gap: "20px",
+                    marginTop: "84px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    style={{
+                      border: "none",
+                      width: "128px",
+                      height: "44px",
+                      borderRadius: "10px",
+                      color: "white",
+                      cursor: saving ? "not-allowed" : "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "8px",
+                      background: saving ? "#8bc99a" : "#22ba3f",
+                      fontWeight: 600,
+                      fontSize: "1.05rem",
+                    }}
+                  >
+                    <FaSave /> {saving ? "Saving..." : "Save"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={goToProfile}
+                    style={{
+                      border: "none",
+                      width: "128px",
+                      height: "44px",
+                      borderRadius: "10px",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "8px",
+                      background: "#f24848",
+                      fontWeight: 600,
+                      fontSize: "1.05rem",
+                    }}
+                  >
+                    <FaTimes /> Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const EditableField = ({ label, name, value, onChange, type = "text", placeholder }) => {
+  return (
+    <div>
+      <label style={labelBase}>{label}</label>
+      <input
+        name={name}
+        value={value}
+        onChange={onChange}
+        type={type}
+        placeholder={placeholder}
+        style={inputBase}
+      />
+    </div>
+  );
+};
+
+export default BranchProfileEdit;
