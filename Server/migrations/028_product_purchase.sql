@@ -11,7 +11,13 @@ ALTER TABLE purchase_item
 ALTER TABLE purchase_item
   ALTER COLUMN rm_id DROP NOT NULL;
 
--- Ensure every row still points to something
+-- Ensure every row still points to something.
+-- Postgres has no ADD CONSTRAINT IF NOT EXISTS, so drop-then-add like 034 does
+-- — this landed on a live database once already outside this runner (its
+-- effect was there, the migrate.js record of it was not), so re-running it
+-- unconditionally failing on "already exists" would block every migration
+-- after it forever.
+ALTER TABLE purchase_item DROP CONSTRAINT IF EXISTS purchase_item_target_check;
 ALTER TABLE purchase_item
   ADD CONSTRAINT purchase_item_target_check
   CHECK (
