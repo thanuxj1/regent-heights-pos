@@ -7,6 +7,14 @@ import { useNavigate, useLocation } from "react-router-dom";
 import ToggleSwitch from "../../components/super-admin/ToggleSwitch";
 import Spinner from "../../components/super-admin/Spinner";
 import { useToast, ToastContainer } from "../../components/super-admin/Toast";
+import { dayKey, todayKey } from "../../utils/dates";
+
+// DD-MM-YYYY for display; "—" for anything that isn't a real date. Goes through
+// dayKey() first — see utils/dates.js for why toISOString().slice(0, 10) was wrong.
+const displayDate = (value) => {
+  const k = dayKey(value);
+  return k ? k.split("-").reverse().join("-") : "—";
+};
 
 const StatusBadge = ({ status }) => {
   const statusStr = String(status || "").toLowerCase();
@@ -85,7 +93,7 @@ const HotelManagement = () => {
   };
 
   const openAddModal = () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayKey();
     setFormData({ id: null, name: "", location: "", email: "", phone: "", date: today, status: true });
     setModalMode("add");
     setModalError("");
@@ -99,7 +107,7 @@ const HotelManagement = () => {
       location: company.location || "",
       email: company.c_email || "",
       phone: company.phone || "",
-      date: company.reg_date ? new Date(company.reg_date).toISOString().slice(0, 10) : "",
+      date: company.reg_date ? dayKey(company.reg_date) : "",
       status: company.c_status === true || String(company.c_status).toLowerCase() === "active",
     });
     setModalMode("edit");
@@ -163,7 +171,7 @@ const HotelManagement = () => {
         phone: formData.phone,
         c_status: !!formData.status,
         c_email: formData.email,
-        reg_date: formData.date || new Date().toISOString().slice(0, 10),
+        reg_date: formData.date || todayKey(),
       };
 
       if (modalMode === "add") {
@@ -399,11 +407,7 @@ const HotelManagement = () => {
                           {company.phone || "—"}
                         </div>
                       </td>
-                      <td style={tdStyle}>
-                        {company.reg_date
-                          ? new Date(company.reg_date).toISOString().slice(0, 10).split('-').reverse().join('-')
-                          : "—"}
-                      </td>
+                      <td style={tdStyle}>{displayDate(company.reg_date)}</td>
                       <td style={tdStyle}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <ToggleSwitch

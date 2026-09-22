@@ -1,4 +1,5 @@
 import pool from "../config/database.js";
+import { hotelToday } from "../utils/hotelTime.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -142,7 +143,11 @@ function isDiscountValid(discount, orderAmount = 0, now = new Date()) {
   if (!discount.is_active)
     return { valid: false, reason: "Discount is inactive." };
 
-  const today = now.toISOString().split("T")[0];
+  // hotelToday(now), not now.toISOString() — UTC named yesterday's discount
+  // window as still-expired (or a not-yet-started one as already live) for
+  // the same midnight–05:30 Sri Lanka window as everywhere else. See
+  // utils/hotelTime.js.
+  const today = hotelToday(now);
   const currentTime = now.toTimeString().split(" ")[0];
 
   if (discount.start_date && today < discount.start_date)
@@ -819,7 +824,7 @@ export const getActiveDiscountsToday = async (req, res) => {
   try {
     const { branch_id, company_id } = req.query;
     const now = new Date();
-    const today = now.toISOString().split("T")[0];
+    const today = hotelToday(now);
     const currentTime = now.toTimeString().split(" ")[0];
     const dayMap = [
       "apply_sunday",

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { BarChart2, ShoppingBag, Users, Truck } from "lucide-react";
 import { getStatsOverview, getBranches, getOrders, getBranchStats, getCurrentUser } from "../../services/api";
+import { dayKey, todayKey, dayOffset } from "../../utils/dates";
 import Header from "../../components/admin/Header";
 import Sidebar from "../../components/admin/Sidebar";
 import StatCard from "../../components/admin/StatCard";
@@ -50,14 +51,13 @@ export default function AdminStatistics() {
   }, [currentComId]);
 
   useEffect(() => {
-    const toISODate = (d) => d.toISOString().slice(0, 10);
+    // dayOffset(-i) reads the hotel's own calendar day, i days back. The old code
+    // built a Date with local setDate() math but then read it back through
+    // toISOString(), which is UTC — between midnight and 05:30 in Sri Lanka that
+    // silently named yesterday. See utils/dates.js.
     const lastNDates = (n) => {
       const arr = [];
-      for (let i = n - 1; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        arr.push(toISODate(d));
-      }
+      for (let i = n - 1; i >= 0; i--) arr.push(dayOffset(-i));
       return arr;
     };
 
@@ -69,15 +69,19 @@ export default function AdminStatistics() {
         // allowed branch ids for the current company (if scoped)
         const allowedBranchIds = (branches || []).map((b) => String(b.B_id ?? b.b_id ?? b.id));
 
-        const now = new Date();
-        const cutoff = new Date();
-        cutoff.setDate(now.getDate() - (filters.days - 1));
-        const prevCutoff = new Date();
-        prevCutoff.setDate(now.getDate() - (filters.days * 2 - 1));
+        // Whole-day boundaries as "YYYY-MM-DD" strings, not Date instants — a
+        // Date-instant cutoff (the old code) carried today's time-of-day along
+        // with it, so it quietly excluded the early hours of the oldest day in
+        // range. String boundaries compare correctly because dayKey() is already
+        // zero-padded YYYY-MM-DD.
+        const todayStr = todayKey();
+        const cutoffStr = dayOffset(-(filters.days - 1));
+        const prevCutoffStr = dayOffset(-(filters.days * 2 - 1));
+        const prevEndStr = dayOffset(-filters.days);
 
-        const inRange = (o, from, to) => {
-          const d = o.or_date ? new Date(o.or_date) : null;
-          return d && d >= from && d <= to;
+        const inRange = (o, fromStr, toStr) => {
+          const od = o.or_date ? dayKey(o.or_date) : "";
+          return od && od >= fromStr && od <= toStr;
         };
 
         const applyBaseFilters = (o) => {
@@ -86,13 +90,13 @@ export default function AdminStatistics() {
           return true;
         };
 
-        const filtered = allOrders.filter((o) => applyBaseFilters(o) && inRange(o, cutoff, now));
-        const prevFiltered = allOrders.filter((o) => applyBaseFilters(o) && inRange(o, prevCutoff, cutoff));
+        const filtered = allOrders.filter((o) => applyBaseFilters(o) && inRange(o, cutoffStr, todayStr));
+        const prevFiltered = allOrders.filter((o) => applyBaseFilters(o) && inRange(o, prevCutoffStr, prevEndStr));
 
         const dates = lastNDates(filters.days);
         const salesSeries = dates.map((date) => {
           const ordersOnDay = filtered.filter((o) => {
-            const od = o.or_date ? o.or_date.slice(0, 10) : "";
+            const od = o.or_date ? dayKey(o.or_date) : "";
             return od === date && o.or_status === "completed";
           });
           const revenue = ordersOnDay.reduce((s, o) => s + Number(o.or_totalCostWtax || 0), 0);

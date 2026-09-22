@@ -1,4 +1,5 @@
 import pool from "../config/database.js";
+import { branchScope, branchClause, assertInScope, writeBranchId } from "../utils/scope.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -28,12 +29,18 @@ function sanitizeBody(body, allowedFields) {
 // ─── GET /api/tables ────────────────────────────────────────────────────────
 export async function getTables(req, res, next) {
   try {
+    // Unfiltered, this handed every hotel's tables to any signed-in branch
+    // admin — the same "?b_id= or nothing" gap utils/scope.js was written for.
+    const params = [];
+    const scope = branchClause(req, "t.branch_id", params);
     const result = await pool.query(
       `SELECT t.table_id, t.table_number, t.table_capacity, t.table_status,
               t.branch_id, b."B_name" AS branch_name
        FROM "TABLES" t
        LEFT JOIN "Branch" b ON t.branch_id = b."B_id"
+       ${scope ? `WHERE ${scope}` : ""}
        ORDER BY t.table_id`,
+      params,
     );
     res.json(result.rows);
   } catch (err) {
@@ -45,6 +52,8 @@ export async function getTables(req, res, next) {
 export async function getTableById(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "table_id");
+    // 404, not 403 — a stranger should not learn the table exists.
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id, branchColumn: "branch_id" });
 
     const result = await pool.query(
       `SELECT t.table_id, t.table_number, t.table_capacity, t.table_status,
@@ -71,10 +80,13 @@ export async function getTablesByBranch(req, res, next) {
   try {
     const branchId = parsePositiveInt(req.params.branchId, "branch_id");
 
-    // Confirm branch exists
+    // Confirm branch exists AND is one this caller may see — otherwise this is
+    // just getTableById's bug again, one hop up.
+    const params = [branchId];
+    const scope = branchClause(req, '"B_id"', params);
     const branchCheck = await pool.query(
-      'SELECT "B_id" FROM "Branch" WHERE "B_id" = $1',
-      [branchId],
+      `SELECT "B_id" FROM "Branch" WHERE "B_id" = $1${scope ? ` AND ${scope}` : ""}`,
+      params,
     );
     if (branchCheck.rows.length === 0) {
       res.status(404);
@@ -107,7 +119,10 @@ export async function createTable(req, res, next) {
       "branch_id",
     ]);
 
-    const { table_number, table_capacity, table_status, branch_id } = body;
+    const { table_number, table_capacity, table_status } = body;
+    // A branch-level caller's own token wins over anything in the body — see
+    // utils/scope.js. Only the legacy company-wide Admin role must state one.
+    const branch_id = writeBranchId(req, body.branch_id);
 
     // Required fields
     if (!table_number || table_capacity === undefined || !branch_id) {
@@ -209,6 +224,9 @@ export async function updateTable(req, res, next) {
       return next(new Error("No fields provided to update"));
     }
 
+    // 404s before the row is confirmed to belong to this caller at all.
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id, branchColumn: "branch_id" });
+
     // Existence check
     const existing = await pool.query(
       'SELECT table_id, branch_id FROM "TABLES" WHERE table_id = $1',
@@ -229,9 +247,12 @@ export async function updateTable(req, res, next) {
       }
     }
 
-    // Branch validation
+    // Branch validation — a branch-scoped caller's row is already confirmed to
+    // be their own branch above, so reassigning it to another hotel is simply
+    // not offered to them; only the legacy company-wide Admin role may move a
+    // table between branches it owns.
     let branchIdInt = null;
-    if (branch_id !== undefined) {
+    if (branch_id !== undefined && branchScope(req).mode !== "one") {
       branchIdInt = parsePositiveInt(branch_id, "branch_id");
       const branchCheck = await pool.query(
         'SELECT "B_id" FROM "Branch" WHERE "B_id" = $1',
@@ -310,6 +331,7 @@ export async function updateTable(req, res, next) {
 export async function updateTableStatus(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "table_id");
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id, branchColumn: "branch_id" });
     const { table_status } = req.body;
 
     if (!table_status) {
@@ -363,6 +385,7 @@ export async function updateTableStatus(req, res, next) {
 export async function deleteTable(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "table_id");
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id, branchColumn: "branch_id" });
 
     // Proactive check: block delete if upcoming reservations exist
     const activeReservation = await pool.query(

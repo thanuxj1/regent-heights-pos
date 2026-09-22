@@ -2,6 +2,7 @@ import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
 import { returnStock } from "../utils/inventory.js";
 import { emitOrderEvent, emitSocketEvent, getKitchenSocketRoom } from "../utils/socket.js";
+import { hotelToday } from "../utils/hotelTime.js";
 
 const VALID_STATUSES = ["pending", "preparing", "completed", "cancelled"];
 
@@ -15,8 +16,11 @@ function parsePositiveInt(value, fieldName) {
   return parsed;
 }
 
+// Was `new Date().toISOString().split("T")[0]` — UTC, so between midnight and
+// 05:30 in Sri Lanka this named yesterday, and a waiter's own table assignment
+// for *today* would silently fail to match. See utils/hotelTime.js.
 function getTodayStr() {
-  return new Date().toISOString().split("T")[0];
+  return hotelToday();
 }
 
 function validateCosts(or_tax, or_totalcost, or_totalCostWtax) {

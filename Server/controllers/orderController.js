@@ -14,6 +14,7 @@ import { branchClause, writeBranchId } from "../utils/scope.js";
 import { takeStock, returnStock, isStockProblem } from "../utils/inventory.js";
 import { logActivity } from "../utils/activityLog.js";
 import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
+import { hotelToday } from "../utils/hotelTime.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -311,7 +312,7 @@ export const createOrder = async (req, res) => {
         });
       }
 
-      const today = new Date().toISOString().split("T")[0];
+      const today = hotelToday();
       const assigned = await pool.query(
         `SELECT assign_id
          FROM "TABLE_ASSIGNMENT"

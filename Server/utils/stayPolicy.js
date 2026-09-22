@@ -60,8 +60,13 @@ export function prettyTime(t) {
 
 /** The moment the guest was due out: their check-out date at the house time. */
 export function dueOutAt(checkOutDate, checkOutTime) {
+  // Read back with local getters, not .toISOString() (UTC). A DATE column
+  // reaches Node as a Date object built from local-time parts (year, month,
+  // day) — reading it back through UTC can name the day before. Same story as
+  // utils/hotelTime.js, kept local instead of importing it so this stays the
+  // pure function the rest of the file promises.
   const day = checkOutDate instanceof Date
-    ? checkOutDate.toISOString().slice(0, 10)
+    ? `${checkOutDate.getFullYear()}-${String(checkOutDate.getMonth() + 1).padStart(2, "0")}-${String(checkOutDate.getDate()).padStart(2, "0")}`
     : String(checkOutDate).slice(0, 10);
   const [h = "11", m = "00"] = String(checkOutTime || "11:00").split(":");
   // Built in local server time, which is the clock the front desk is reading.

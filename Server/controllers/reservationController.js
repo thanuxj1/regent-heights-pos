@@ -1,4 +1,6 @@
 import pool from "../config/database.js";
+import { hotelToday, hotelDay } from "../utils/hotelTime.js";
+import { branchScope, branchClause, assertInScope, writeBranchId } from "../utils/scope.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -59,8 +61,11 @@ function sanitizeBody(body, allowedFields) {
   return sanitized;
 }
 
+// Was `new Date().toISOString().split("T")[0]` — UTC, so between midnight and
+// 05:30 in Sri Lanka this named yesterday, and a reservation for a date that
+// had truly already passed slipped past the "no past dates" guard below.
 function getTodayStr() {
-  return new Date().toISOString().split("T")[0];
+  return hotelToday();
 }
 
 // pay_date must be strictly before reserv_date
@@ -76,6 +81,10 @@ function validatePayDate(payDateStr, reservDateStr) {
 // ─── GET /api/reservations ───────────────────────────────────────────────────
 export async function getReservations(req, res, next) {
   try {
+    // Unfiltered, this handed every hotel's reservations to any signed-in
+    // cashier — the same gap utils/scope.js exists to close.
+    const params = [];
+    const scope = branchClause(req, "r.branch_id", params);
     const result = await pool.query(
       `SELECT
          r.reserv_id,
@@ -94,7 +103,9 @@ export async function getReservations(req, res, next) {
        LEFT JOIN "CUSTOMER" c  ON r.cust_id   = c.cust_id
        LEFT JOIN "TABLES"   t  ON r.table_id  = t.table_id
        LEFT JOIN "Branch"   b  ON r.branch_id = b."B_id"
+       ${scope ? `WHERE ${scope}` : ""}
        ORDER BY r.reserv_date DESC, r.reserv_time ASC`,
+      params,
     );
     res.json(result.rows);
   } catch (err) {
@@ -106,6 +117,7 @@ export async function getReservations(req, res, next) {
 export async function getReservationById(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "reserv_id");
+    await assertInScope(req, res, { table: "RESERVATION", idColumn: "reserv_id", id, branchColumn: "branch_id" });
 
     const result = await pool.query(
       `SELECT
@@ -145,10 +157,12 @@ export async function getReservationsByBranch(req, res, next) {
   try {
     const branchId = parsePositiveInt(req.params.branchId, "branch_id");
 
-    // Confirm branch exists
+    // Confirm branch exists AND is one this caller may see
+    const branchParams = [branchId];
+    const branchScopeClause = branchClause(req, '"B_id"', branchParams);
     const branchCheck = await pool.query(
-      'SELECT "B_id" FROM "Branch" WHERE "B_id" = $1',
-      [branchId],
+      `SELECT "B_id" FROM "Branch" WHERE "B_id" = $1${branchScopeClause ? ` AND ${branchScopeClause}` : ""}`,
+      branchParams,
     );
     if (branchCheck.rows.length === 0) {
       res.status(404);
@@ -199,6 +213,10 @@ export async function getReservationsByCustomer(req, res, next) {
       return next(new Error("Customer not found"));
     }
 
+    // Scoped like every other list here — a shared customer record must not
+    // hand one hotel another's reservations of them.
+    const params = [custId];
+    const scope = branchClause(req, "r.branch_id", params);
     const result = await pool.query(
       `SELECT
          r.reserv_id,
@@ -217,9 +235,9 @@ export async function getReservationsByCustomer(req, res, next) {
        LEFT JOIN "CUSTOMER" c  ON r.cust_id   = c.cust_id
        LEFT JOIN "TABLES"   t  ON r.table_id  = t.table_id
        LEFT JOIN "Branch"   b  ON r.branch_id = b."B_id"
-       WHERE r.cust_id = $1
+       WHERE r.cust_id = $1${scope ? ` AND ${scope}` : ""}
        ORDER BY r.reserv_date DESC, r.reserv_time ASC`,
-      [custId],
+      params,
     );
 
     res.json(result.rows);
@@ -233,16 +251,12 @@ export async function getReservationsByTable(req, res, next) {
   try {
     const tableId = parsePositiveInt(req.params.tableId, "table_id");
 
-    // Confirm table exists
-    const tableCheck = await pool.query(
-      'SELECT table_id FROM "TABLES" WHERE table_id = $1',
-      [tableId],
-    );
-    if (tableCheck.rows.length === 0) {
-      res.status(404);
-      return next(new Error("Table not found"));
-    }
+    // Confirm table exists AND is one this caller may see, not just that the
+    // reservations query happens to come back empty for someone else's table.
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id: tableId, branchColumn: "branch_id" });
 
+    const params = [tableId];
+    const scope = branchClause(req, "r.branch_id", params);
     const result = await pool.query(
       `SELECT
          r.reserv_id,
@@ -261,9 +275,9 @@ export async function getReservationsByTable(req, res, next) {
        LEFT JOIN "CUSTOMER" c  ON r.cust_id   = c.cust_id
        LEFT JOIN "TABLES"   t  ON r.table_id  = t.table_id
        LEFT JOIN "Branch"   b  ON r.branch_id = b."B_id"
-       WHERE r.table_id = $1
+       WHERE r.table_id = $1${scope ? ` AND ${scope}` : ""}
        ORDER BY r.reserv_date DESC, r.reserv_time ASC`,
-      [tableId],
+      params,
     );
 
     res.json(result.rows);
@@ -292,8 +306,9 @@ export async function createReservation(req, res, next) {
       pay_date,
       cust_id,
       table_id,
-      branch_id,
     } = body;
+    // A branch-level caller's own token wins over anything in the body.
+    const branch_id = writeBranchId(req, body.branch_id);
 
     // Required fields
     if (!reserv_date || !reserv_time || !cust_id || !table_id || !branch_id) {
@@ -334,9 +349,7 @@ export async function createReservation(req, res, next) {
     }
 
     // Max 90 days in advance — realistic restaurant booking window
-    const maxDate = new Date();
-    maxDate.setDate(maxDate.getDate() + 90);
-    const maxDateStr = maxDate.toISOString().split("T")[0];
+    const maxDateStr = hotelDay(90);
     if (dateStr > maxDateStr) {
       res.status(400);
       return next(
@@ -477,6 +490,7 @@ export async function createReservation(req, res, next) {
 export async function updateReservation(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "reserv_id");
+    await assertInScope(req, res, { table: "RESERVATION", idColumn: "reserv_id", id, branchColumn: "branch_id" });
 
     const body = sanitizeBody(req.body, [
       "reserv_date",
@@ -526,10 +540,11 @@ export async function updateReservation(req, res, next) {
 
     const current = existing.rows[0];
 
-    // Block editing past reservations
-    const currentDateStr = new Date(current.reserv_date)
-      .toISOString()
-      .split("T")[0];
+    // Block editing past reservations. Reading the stored date back through
+    // hotelToday() (not .toISOString(), which is UTC) matters here too: a DATE
+    // column reaches Node as a Date object built from local-time parts, so
+    // slicing its UTC string can name the day before. See utils/hotelTime.js.
+    const currentDateStr = hotelToday(new Date(current.reserv_date));
     const today = getTodayStr();
     if (currentDateStr < today) {
       res.status(409);
@@ -547,7 +562,10 @@ export async function updateReservation(req, res, next) {
     if (cust_id !== undefined) custIdInt = parsePositiveInt(cust_id, "cust_id");
     if (table_id !== undefined)
       tableIdInt = parsePositiveInt(table_id, "table_id");
-    if (branch_id !== undefined)
+    // Reassigning to another branch is only offered to the legacy company-wide
+    // Admin role — a branch-scoped caller's reservation is already confirmed
+    // to be their own branch above, same as tableController.
+    if (branch_id !== undefined && branchScope(req).mode !== "one")
       branchIdInt = parsePositiveInt(branch_id, "branch_id");
 
     if (duration_minutes !== undefined) {
@@ -568,9 +586,7 @@ export async function updateReservation(req, res, next) {
         res.status(400);
         return next(new Error("reserv_date cannot be in the past"));
       }
-      const maxDate = new Date();
-      maxDate.setDate(maxDate.getDate() + 90);
-      if (dateStr > maxDate.toISOString().split("T")[0]) {
+      if (dateStr > hotelDay(90)) {
         res.status(400);
         return next(
           new Error("reserv_date cannot be more than 90 days in advance"),
@@ -724,6 +740,7 @@ export async function updateReservation(req, res, next) {
 export async function deleteReservation(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "reserv_id");
+    await assertInScope(req, res, { table: "RESERVATION", idColumn: "reserv_id", id, branchColumn: "branch_id" });
 
     const reservation = await pool.query(
       'SELECT reserv_date, reserv_time FROM "RESERVATION" WHERE reserv_id = $1',
@@ -734,9 +751,7 @@ export async function deleteReservation(req, res, next) {
       return next(new Error("Reservation not found"));
     }
 
-    const reservDateStr = new Date(reservation.rows[0].reserv_date)
-      .toISOString()
-      .split("T")[0];
+    const reservDateStr = hotelToday(new Date(reservation.rows[0].reserv_date));
     const today = getTodayStr();
 
     // Block cancelling past reservations — they are historical records

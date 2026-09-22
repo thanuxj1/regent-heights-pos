@@ -1,4 +1,6 @@
 import pool from "../config/database.js";
+import { hotelToday, hotelDay } from "../utils/hotelTime.js";
+import { branchClause, assertInScope } from "../utils/scope.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -42,13 +44,39 @@ function sanitizeBody(body, allowedFields) {
   return sanitized;
 }
 
+// Was `new Date().toISOString().split("T")[0]` — UTC, so between midnight and
+// 05:30 in Sri Lanka this named yesterday, and a fresh assignment made for
+// today could be wrongly rejected as "in the past". See utils/hotelTime.js.
 function getTodayStr() {
-  return new Date().toISOString().split("T")[0];
+  return hotelToday();
+}
+
+/**
+ * assertInScope from utils/scope.js, adapted: TABLE_ASSIGNMENT has no branch
+ * column of its own (see schema.sql) — it is reached only through its table.
+ * Unfiltered, this whole controller handed every hotel's staff schedule to
+ * any signed-in branch admin, the same gap utils/scope.js exists to close.
+ */
+async function assertAssignmentInScope(req, res, assignId) {
+  const params = [assignId];
+  const scope = branchClause(req, "t.branch_id", params);
+  const { rows } = await pool.query(
+    `SELECT 1 FROM "TABLE_ASSIGNMENT" ta
+     JOIN "TABLES" t ON ta.table_id = t.table_id
+     WHERE ta.assign_id = $1${scope ? ` AND ${scope}` : ""}`,
+    params,
+  );
+  if (!rows.length) {
+    res.status(404);
+    throw new Error("Assignment not found");
+  }
 }
 
 // ─── GET /api/table-assignments ──────────────────────────────────────────────
 export async function getTableAssignments(req, res, next) {
   try {
+    const params = [];
+    const scope = branchClause(req, "t.branch_id", params);
     const result = await pool.query(
       `SELECT
          ta.assign_id,
@@ -67,7 +95,9 @@ export async function getTableAssignments(req, res, next) {
        FROM "TABLE_ASSIGNMENT" ta
        LEFT JOIN "TABLES" t ON ta.table_id = t.table_id
        LEFT JOIN "User"   u ON ta.u_id     = u.u_id
+       ${scope ? `WHERE ${scope}` : ""}
        ORDER BY ta.assigned_date DESC, ta.shift, ta.assign_id`,
+      params,
     );
     res.json(result.rows);
   } catch (err) {
@@ -79,6 +109,7 @@ export async function getTableAssignments(req, res, next) {
 export async function getTableAssignmentById(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "assign_id");
+    await assertAssignmentInScope(req, res, id);
 
     const result = await pool.query(
       `SELECT
@@ -117,15 +148,9 @@ export async function getTableAssignmentById(req, res, next) {
 export async function getAssignmentsByTable(req, res, next) {
   try {
     const tableId = parsePositiveInt(req.params.tableId, "table_id");
-
-    const tableCheck = await pool.query(
-      'SELECT table_id FROM "TABLES" WHERE table_id = $1',
-      [tableId],
-    );
-    if (tableCheck.rows.length === 0) {
-      res.status(404);
-      return next(new Error("Table not found"));
-    }
+    // Confirming the table itself is in scope is enough — every assignment on
+    // it inherits the same branch.
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id: tableId, branchColumn: "branch_id" });
 
     const result = await pool.query(
       `SELECT
@@ -161,9 +186,13 @@ export async function getAssignmentsByUser(req, res, next) {
   try {
     const userId = parsePositiveInt(req.params.userId, "u_id");
 
+    // A user's own branch, not a fixed table.branch_id join — the target may
+    // have no assignment yet, and the 404 must still be scope-aware.
+    const userParams = [userId];
+    const userScope = branchClause(req, 'u."B_id"', userParams);
     const userCheck = await pool.query(
-      'SELECT u_id FROM "User" WHERE u_id = $1',
-      [userId],
+      `SELECT u_id FROM "User" u WHERE u_id = $1${userScope ? ` AND ${userScope}` : ""}`,
+      userParams,
     );
     if (userCheck.rows.length === 0) {
       res.status(404);
@@ -245,9 +274,7 @@ export async function createTableAssignment(req, res, next) {
     }
 
     // Max 30 days in advance
-    const maxDate = new Date();
-    maxDate.setDate(maxDate.getDate() + 30);
-    const maxDateStr = maxDate.toISOString().split("T")[0];
+    const maxDateStr = hotelDay(30);
     if (dateStr > maxDateStr) {
       res.status(400);
       return next(
@@ -255,19 +282,17 @@ export async function createTableAssignment(req, res, next) {
       );
     }
 
-    // Table existence check
+    // Table existence + scope check — also the only place that learns the
+    // table's real branch, needed below to keep the waiter on the same one.
+    await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id: tableIdInt, branchColumn: "branch_id" });
     const tableCheck = await pool.query(
-      'SELECT table_id, table_status FROM "TABLES" WHERE table_id = $1',
+      'SELECT table_id, table_status, branch_id FROM "TABLES" WHERE table_id = $1',
       [tableIdInt],
     );
-    if (tableCheck.rows.length === 0) {
-      res.status(404);
-      return next(new Error("Table not found"));
-    }
 
     // User existence + Waiter role check (role_id = 8)
     const userCheck = await pool.query(
-      'SELECT u_id, role_id FROM "User" WHERE u_id = $1',
+      'SELECT u_id, role_id, "B_id" FROM "User" WHERE u_id = $1',
       [uIdInt],
     );
     if (userCheck.rows.length === 0) {
@@ -277,6 +302,10 @@ export async function createTableAssignment(req, res, next) {
     if (userCheck.rows[0].role_id !== 8) {
       res.status(400);
       return next(new Error("Only Waiters can be assigned to tables"));
+    }
+    if (Number(userCheck.rows[0].B_id) !== Number(tableCheck.rows[0].branch_id)) {
+      res.status(400);
+      return next(new Error("The waiter and the table must belong to the same branch"));
     }
 
     // One waiter per shift per day — DB unique constraint handles
@@ -351,6 +380,7 @@ export async function createTableAssignment(req, res, next) {
 export async function updateTableAssignment(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "assign_id");
+    await assertAssignmentInScope(req, res, id);
 
     const body = sanitizeBody(req.body, [
       "table_id",
@@ -386,10 +416,11 @@ export async function updateTableAssignment(req, res, next) {
 
     const current = existing.rows[0];
 
-    // Block editing past assignments
-    const currentDateStr = new Date(current.assigned_date)
-      .toISOString()
-      .split("T")[0];
+    // Block editing past assignments. Reading the stored date back through
+    // hotelToday() (not .toISOString(), which is UTC) matters here too: a DATE
+    // column reaches Node as a Date object built from local-time parts, so
+    // slicing its UTC string can name the day before. See utils/hotelTime.js.
+    const currentDateStr = hotelToday(new Date(current.assigned_date));
     const today = getTodayStr();
     if (currentDateStr < today) {
       res.status(409);
@@ -426,9 +457,7 @@ export async function updateTableAssignment(req, res, next) {
         res.status(400);
         return next(new Error("assigned_date cannot be in the past"));
       }
-      const maxDate = new Date();
-      maxDate.setDate(maxDate.getDate() + 30);
-      if (dateStr > maxDate.toISOString().split("T")[0]) {
+      if (dateStr > hotelDay(30)) {
         res.status(400);
         return next(
           new Error("assigned_date cannot be more than 30 days in advance"),
@@ -436,22 +465,16 @@ export async function updateTableAssignment(req, res, next) {
       }
     }
 
-    // Table existence check
+    // Table existence + scope check — a branch-scoped caller may only move an
+    // assignment onto a table that is also theirs.
     if (tableIdInt !== null) {
-      const tableCheck = await pool.query(
-        'SELECT table_id FROM "TABLES" WHERE table_id = $1',
-        [tableIdInt],
-      );
-      if (tableCheck.rows.length === 0) {
-        res.status(404);
-        return next(new Error("Table not found"));
-      }
+      await assertInScope(req, res, { table: "TABLES", idColumn: "table_id", id: tableIdInt, branchColumn: "branch_id" });
     }
 
     // User existence + Waiter role check
     if (uIdInt !== null) {
       const userCheck = await pool.query(
-        'SELECT u_id, role_id FROM "User" WHERE u_id = $1',
+        'SELECT u_id, role_id, "B_id" FROM "User" WHERE u_id = $1',
         [uIdInt],
       );
       if (userCheck.rows.length === 0) {
@@ -469,6 +492,21 @@ export async function updateTableAssignment(req, res, next) {
     const resolvedUserId = uIdInt ?? current.u_id;
     const resolvedDate = dateStr ?? currentDateStr;
     const resolvedShift = shift ?? current.shift;
+
+    // Whichever end of the pairing just changed, the waiter and the table must
+    // still agree on a branch once both are resolved.
+    if (tableIdInt !== null || uIdInt !== null) {
+      const pair = await pool.query(
+        `SELECT
+           (SELECT branch_id FROM "TABLES" WHERE table_id = $1) AS table_branch,
+           (SELECT "B_id" FROM "User" WHERE u_id = $2) AS user_branch`,
+        [resolvedTableId, resolvedUserId],
+      );
+      if (Number(pair.rows[0]?.table_branch) !== Number(pair.rows[0]?.user_branch)) {
+        res.status(400);
+        return next(new Error("The waiter and the table must belong to the same branch"));
+      }
+    }
 
     // Duplicate table + shift + date (excluding self)
     const tableDuplicate = await pool.query(
@@ -548,6 +586,7 @@ export async function updateTableAssignment(req, res, next) {
 export async function deleteTableAssignment(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "assign_id");
+    await assertAssignmentInScope(req, res, id);
 
     const assignment = await pool.query(
       'SELECT assigned_date, shift FROM "TABLE_ASSIGNMENT" WHERE assign_id = $1',
@@ -558,9 +597,7 @@ export async function deleteTableAssignment(req, res, next) {
       return next(new Error("Assignment not found"));
     }
 
-    const assignedDate = new Date(assignment.rows[0].assigned_date)
-      .toISOString()
-      .split("T")[0];
+    const assignedDate = hotelToday(new Date(assignment.rows[0].assigned_date));
     const today = getTodayStr();
 
     // Block delete of today's or future assignments

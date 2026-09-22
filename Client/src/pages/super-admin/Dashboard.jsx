@@ -4,6 +4,14 @@ import Sidebar from "../../components/super-admin/Sidebar";
 import Header from "../../components/super-admin/Header";
 import { getBranches, getUsers, getCompanies, setAuthToken, logout } from "../../services/api";
 import Spinner from "../../components/super-admin/Spinner";
+import { dayKey } from "../../utils/dates";
+
+// DD-MM-YYYY for display; "—" for anything that isn't a real date. Goes through
+// dayKey() first — see utils/dates.js for why toISOString().slice(0, 10) was wrong.
+const displayDate = (value) => {
+  const k = dayKey(value);
+  return k ? k.split("-").reverse().join("-") : "—";
+};
 import {
   FaFileInvoiceDollar,
   FaMoneyBillWave,
@@ -182,16 +190,17 @@ const Dashboard = () => {
 
     companies.forEach((c) => {
       const dateStr = c.reg_date || c.created_at;
-      if (dateStr) {
-        const d = new Date(dateStr);
-        if (!isNaN(d.getTime())) {
-          const monthIndex = d.getMonth();
-          data[monthIndex].count++;
-          data[monthIndex].companies.push({
-            name: c.com_name,
-            date: d.toISOString().slice(0, 10).split('-').reverse().join('-')
-          });
-        }
+      // dayKey() reads the hotel's own calendar day — a raw new Date().getMonth() +
+      // toISOString() mix (the old code) could bucket a registration into one month
+      // while displaying a date from the day before. See utils/dates.js.
+      const key = dayKey(dateStr);
+      if (key) {
+        const monthIndex = Number(key.slice(5, 7)) - 1;
+        data[monthIndex].count++;
+        data[monthIndex].companies.push({
+          name: c.com_name,
+          date: key.split('-').reverse().join('-')
+        });
       }
     });
     return data;
@@ -280,11 +289,7 @@ const Dashboard = () => {
                       <tr key={c.com_id || i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                         <td style={cellStyle}>{c.com_name || "—"}</td>
                         <td style={cellStyle}>{c.c_email || "Not Provided"}</td>
-                        <td style={cellStyle}>
-                          {(c.reg_date || c.created_at)
-                            ? new Date(c.reg_date || c.created_at).toISOString().slice(0, 10).split('-').reverse().join('-')
-                            : "N/A"}
-                        </td>
+                        <td style={cellStyle}>{displayDate(c.reg_date || c.created_at) === "—" ? "N/A" : displayDate(c.reg_date || c.created_at)}</td>
                         <td style={cellStyle}>
                           <StatusBadge status={c.c_status} />
                         </td>
