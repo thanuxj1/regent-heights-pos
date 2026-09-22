@@ -4,14 +4,14 @@ import {
   emitSocketEvent,
   emitOrderEvent,
   getCashierSocketRoom,
-  KITCHEN_SOCKET_ROOM,
+  getKitchenSocketRoom,
 } from "../utils/socket.js";
 import {
-  adjustStockForOrderItem,
   validateQuantity as validateItemQuantity,
   validateUnitPrice as validateItemUnitPrice,
 } from "./orderItemController.js";
 import { branchClause, writeBranchId } from "../utils/scope.js";
+import { takeStock, returnStock, isStockProblem } from "../utils/inventory.js";
 import { logActivity } from "../utils/activityLog.js";
 import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 
@@ -169,9 +169,11 @@ export const getAllOrders = async (req, res) => {
 
     const { rows } = await pool.query(
       // u_name lets the ledger show who rang the sale up; the table has u_id only.
-      `SELECT o.*, TRIM(COALESCE(u.u_fname,'') || ' ' || COALESCE(u.u_lname,'')) AS u_name
+      `SELECT o.*, TRIM(COALESCE(u.u_fname,'') || ' ' || COALESCE(u.u_lname,'')) AS u_name,
+              t.table_number
        FROM "ORDER" o
        LEFT JOIN "User" u ON u.u_id = o.u_id
+       LEFT JOIN "TABLES" t ON t.table_id = o.table_id
        ${where}
        ORDER BY o.or_date DESC, o.or_time DESC`,
       values,
@@ -378,7 +380,7 @@ export const createOrder = async (req, res) => {
 
     emitOrderEvent("order:new", rows[0]);
     // Also notify kitchen staff so they see new orders without a manual refresh.
-    emitSocketEvent("order:created", rows[0], { room: KITCHEN_SOCKET_ROOM });
+    emitSocketEvent("order:created", rows[0], { room: getKitchenSocketRoom(rows[0].b_id) });
 
     // The till kept no record of who rang up what. It does now, with the IP.
     logActivity(req, {
@@ -431,6 +433,7 @@ export const updateOrder = async (req, res) => {
       u_id,
       b_id,
       table_id,
+      payment_method,
     } = req.body;
 
     // ── Required fields for full update ──
@@ -453,7 +456,7 @@ export const updateOrder = async (req, res) => {
     const existing = await pool.query(
       // discount_pct and service_fee come along so the settle-time total check
       // below allows for a discount that was properly declared and approved.
-      `SELECT or_status, discount_pct, service_fee FROM "ORDER" WHERE or_id = $1`,
+      `SELECT or_status, discount_pct, service_fee, payment_method FROM "ORDER" WHERE or_id = $1`,
       [id],
     );
     if (!existing.rows.length) {
@@ -482,17 +485,42 @@ export const updateOrder = async (req, res) => {
       }
     }
 
-    // ── Block editing terminal orders (completed / cancelled) ──
-    const isCashier = req.user?.role_id === ROLES.CASHIER;
-    const isStatusUnchanged = or_status === currentStatus;
-    if (
-      currentStatus === "cancelled" ||
-      (currentStatus === "completed" && !(isCashier && isStatusUnchanged))
-    ) {
+    // ── A finished ticket and a billed ticket are not the same thing ──
+    //
+    // "completed" means the kitchen has finished cooking. The customer pays
+    // afterwards, so the till has to be able to settle a ticket that is already
+    // completed. What actually says a ticket has been billed is the tender
+    // recorded on it.
+    //
+    // Guarding on the status alone meant exempting the cashier from the rule
+    // altogether, and that exemption let one ticket be settled twice with a
+    // second payment taken against it: 1,800 taken on a 900 sale, measured.
+    const tenderOnFile = TENDERS.includes(
+      String(existing.rows[0].payment_method || "").toLowerCase(),
+    );
+    const settlingNow =
+      or_status === "completed" &&
+      TENDERS.includes(String(payment_method || "").toLowerCase());
+
+    if (currentStatus === "cancelled") {
       return res.status(400).json({
         success: false,
         error: `Cannot edit a "${currentStatus}" order`,
       });
+    }
+    if (currentStatus === "completed") {
+      if (tenderOnFile) {
+        return res.status(409).json({
+          success: false,
+          error: "This ticket has already been billed. Void it if it has to change.",
+        });
+      }
+      if (!settlingNow) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot edit a "${currentStatus}" order`,
+        });
+      }
     }
 
     // ── Cost validation ──
@@ -546,6 +574,22 @@ export const updateOrder = async (req, res) => {
       }
     }
 
+    // Settling at the till records how it was paid, and puts it in the drawer
+    // of the cashier taking the money. A ticket sent to the kitchen first used
+    // to settle with no tender at all, so the drawer never counted it as cash.
+    const tender = TENDERS.includes(String(payment_method || "").toLowerCase())
+      ? String(payment_method).toLowerCase()
+      : null;
+    let drawerId = null;
+    if (or_status === "completed" && tender) {
+      const drawer = await pool.query(
+        `SELECT session_id FROM "CASH_SESSION"
+         WHERE b_id = $1 AND opened_by = $2 AND status = 'open'`,
+        [writeBranchId(req, b_id), req.user?.u_id ?? u_id],
+      );
+      drawerId = drawer.rows[0]?.session_id ?? null;
+    }
+
     const { rows } = await pool.query(
       `UPDATE "ORDER" SET
          or_tax             = $1,
@@ -556,7 +600,9 @@ export const updateOrder = async (req, res) => {
          cust_id            = $6,
          u_id               = $7,
          b_id               = $8,
-         table_id           = $9
+         table_id           = $9,
+         payment_method     = COALESCE($11, payment_method),
+         session_id         = COALESCE(session_id, $12)
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -570,6 +616,8 @@ export const updateOrder = async (req, res) => {
         b_id,
         table_id ?? null,
         id,
+        tender,
+        drawerId,
       ],
     );
 
@@ -790,20 +838,36 @@ export const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: transitionError });
     }
 
-    // Restore stock when cancelling a non-terminal order
+    // Two screens can act on one order at once — two kitchen tablets, or the
+    // till cancelling while the kitchen plates it. A change applies only if the
+    // order is still where it was read; the second screen is told, instead of
+    // one silently undoing the other (a cancel's returned stock sitting under an
+    // order then marked ready).
+    const changedMeanwhile = () =>
+      res.status(409).json({
+        success: false,
+        error: "This order was just changed on another screen. Refresh to see where it is now.",
+      });
+
+    // Cancelling puts back exactly what the order took from stock.
     if (status === "cancelled") {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const itemsResult = await client.query(
-          `SELECT "Bpro_id", pro_quantity FROM public."ORDER_ITEM" WHERE order_id = $1`,
+        // NO KEY UPDATE: a line being added to this order holds a KEY SHARE on
+        // it, and asking to upgrade past that is how transactions deadlock.
+        const locked = await client.query(
+          `SELECT or_status FROM "ORDER" WHERE or_id = $1 FOR NO KEY UPDATE`,
           [id],
         );
-        for (const item of itemsResult.rows) {
-          await adjustStockForOrderItem(client, item.Bpro_id, item.pro_quantity, "add");
+        if (locked.rows[0]?.or_status !== currentStatus) {
+          await client.query("ROLLBACK");
+          client.release();
+          return changedMeanwhile();
         }
+        await returnStock(client, { order_id: id, u_id: req.user?.u_id ?? null });
         await client.query(
-          `UPDATE "ORDER" SET or_status = $1 WHERE or_id = $2`,
+          `UPDATE "ORDER" SET or_status = $1, status_changed_at = NOW() WHERE or_id = $2`,
           [status, id],
         );
         await client.query("COMMIT");
@@ -814,10 +878,12 @@ export const updateOrderStatus = async (req, res) => {
         throw err;
       }
     } else {
-      await pool.query(
-        `UPDATE "ORDER" SET or_status = $1 WHERE or_id = $2`,
-        [status, id],
+      const moved = await pool.query(
+        `UPDATE "ORDER" SET or_status = $1, status_changed_at = NOW()
+          WHERE or_id = $2 AND or_status = $3`,
+        [status, id, currentStatus],
       );
+      if (!moved.rowCount) return changedMeanwhile();
     }
 
     const { rows } = await pool.query(
@@ -825,7 +891,7 @@ export const updateOrderStatus = async (req, res) => {
       [id],
     );
 
-    emitSocketEvent("order:updated", rows[0], { room: KITCHEN_SOCKET_ROOM });
+    emitSocketEvent("order:updated", rows[0], { room: getKitchenSocketRoom(rows[0].b_id) });
     emitOrderEvent("order:updated", rows[0]);
 
     if (status === "completed") {
@@ -899,15 +965,22 @@ export const deleteOrder = async (req, res) => {
     try {
       await client.query("BEGIN");
 
-      // Fetch all items in the order to restore their raw materials
-      const itemsResult = await client.query(
-        `SELECT "Bpro_id", pro_quantity FROM public."ORDER_ITEM" WHERE order_id = $1`,
-        [id]
+      // Look again under a lock: the kitchen may have started it since it was
+      // read above, and a started order is cancelled, never deleted.
+      const now = await client.query(
+        `SELECT or_status FROM "ORDER" WHERE or_id = $1 FOR UPDATE`,
+        [id],
       );
-
-      for (const item of itemsResult.rows) {
-        await adjustStockForOrderItem(client, item.Bpro_id, item.pro_quantity, "add");
+      if (!now.rows.length || ["preparing", "completed"].includes(now.rows[0].or_status)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          success: false,
+          error: "The kitchen has already started this order. Cancel it instead.",
+        });
       }
+
+      // Put back exactly what the order took, before its lines go.
+      await returnStock(client, { order_id: id, u_id: req.user?.u_id ?? null });
 
       await client.query(`DELETE FROM public."ORDER_ITEM" WHERE order_id = $1`, [
         id,
@@ -919,6 +992,12 @@ export const deleteOrder = async (req, res) => {
       );
       rows = deleted.rows;
       await client.query("COMMIT");
+      // Screens showing it drop it now, not at their next refresh.
+      if (rows[0]) {
+        const gone = { or_id: id, b_id: rows[0].b_id };
+        emitSocketEvent("order:deleted", gone, { room: getKitchenSocketRoom(gone.b_id) });
+        emitOrderEvent("order:deleted", gone);
+      }
       // Even the owner's repair path is on the record.
       logActivity(req, {
         action: "delete", entity: "order", entity_id: id, b_id: rows[0]?.b_id,
@@ -983,6 +1062,9 @@ export const createOrderWithItems = async (req, res) => {
   if (!b_id || b_id < 0) {
     return res.status(400).json({ success: false, error: "No branch for this sale" });
   }
+  // Who rang it up comes from the token, like the branch. Taken from the body, a
+  // cashier could put a sale under a colleague's name — or another property's user.
+  if (req.user?.u_id) order.u_id = req.user.u_id;
   if (!order.u_id) {
     return res.status(400).json({ success: false, error: "Missing required fields: u_id" });
   }
@@ -1123,8 +1205,8 @@ export const createOrderWithItems = async (req, res) => {
          (or_tax, or_totalcost, "or_totalCostWtax", or_status, or_type,
           cust_id, u_id, b_id, table_id, client_ref,
           discount_pct, service_fee, discount_approved_by,
-          payment_method, session_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          payment_method, session_id, kitchen_note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1133,6 +1215,7 @@ export const createOrderWithItems = async (req, res) => {
         order.table_id ?? null, clientRef,
         discountPct, serviceFee, discountApprover,
         tender, drawerId,
+        String(order.kitchen_note ?? "").trim().slice(0, 500) || null,
       ],
     );
     const created = rows[0];
@@ -1141,7 +1224,6 @@ export const createOrderWithItems = async (req, res) => {
     for (const it of items) {
       const qty = Number(it.pro_quantity);
       const unit = Number(it.unit_price);
-      await adjustStockForOrderItem(client, it.Bpro_id, qty, "subtract");
       const line = await client.query(
         `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id)
          VALUES ($1,$2,$3,$4,$5) RETURNING *`,
@@ -1150,25 +1232,46 @@ export const createOrderWithItems = async (req, res) => {
       lines.push(line.rows[0]);
     }
 
+    // The sale's ingredients, taken together and recorded against each line.
+    // Never refused for stock: if the count says there is not enough, it is the
+    // count that is wrong. It goes below zero and the manager is told to recount.
+    const stock = await takeStock(client, {
+      b_id,
+      order_id: created.or_id,
+      lines: lines.map((l) => ({
+        bpro_id: Number(l.Bpro_id), qty: Number(l.pro_quantity), order_item_id: l.orderItem_id,
+      })),
+      u_id: req.user?.u_id ?? null,
+    });
+
     await client.query("COMMIT");
 
     emitOrderEvent("order:new", created);
-    emitSocketEvent("order:created", created, { room: KITCHEN_SOCKET_ROOM });
+    emitSocketEvent("order:created", created, { room: getKitchenSocketRoom(created.b_id) });
 
     logActivity(req, {
       action: "create", entity: "order", entity_id: created.or_id, b_id: created.b_id,
       summary: `Rang up order #${created.or_id} — ${Number(created["or_totalCostWtax"] ?? 0).toFixed(2)}`
              + ` (${created.or_type ?? "order"}${discountPct ? `, ${discountPct}% off` : ""}`
-             + `${order.queued_at ? ", sent from offline queue" : ""})`,
+             + `${order.queued_at ? ", sent from offline queue" : ""})`
+             + (stock.short.length
+               ? ` — beyond the stock count for ${stock.short.map((s) => s.name).join(", ")}; worth a recount`
+               : ""),
       details: { total: created["or_totalCostWtax"], type: created.or_type,
                  lines: lines.length, queued_at: order.queued_at ?? null,
                  discount_pct: discountPct, service_fee: serviceFee,
-                 discount_approved_by: discountApprover },
+                 discount_approved_by: discountApprover,
+                 // A sale the stock count could not cover is kept, and named
+                 // here so the owner knows what to recount.
+                 stock_shortfall: stock.short.length ? stock.short.map((s) => s.name) : null },
     });
 
     return res.status(201).json({ success: true, data: created, items: lines });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+    if (isStockProblem(err)) {
+      return res.status(err.status).json({ success: false, error: err.message, short: err.short });
+    }
     // Two copies raced. The loser reads back the winner's sale.
     if (err.code === "23505") {
       const won = await pool.query(
@@ -1216,7 +1319,7 @@ export const voidOrder = async (req, res) => {
     await client.query("BEGIN");
     const cur = await client.query(
       `SELECT or_id, b_id, or_status, "or_totalCostWtax", or_totalcost, voided_at
-       FROM "ORDER" WHERE or_id = $1 FOR UPDATE`,
+       FROM "ORDER" WHERE or_id = $1 FOR NO KEY UPDATE`,
       [id]
     );
     if (!cur.rows.length) {
@@ -1244,21 +1347,22 @@ export const voidOrder = async (req, res) => {
       return res.status(approval.status).json({ success: false, error: approval.message });
     }
 
-    // Put the ingredients back — the food was never served.
-    const items = await client.query(
-      `SELECT "Bpro_id", pro_quantity FROM "ORDER_ITEM" WHERE order_id = $1`, [id]
-    );
-    for (const it of items.rows) {
-      await adjustStockForOrderItem(client, it.Bpro_id, it.pro_quantity, "add");
-    }
+    // Put the ingredients back — the food was never served. Exactly what this
+    // sale took when it was rung up; never a portion it did not take.
+    await returnStock(client, { order_id: id, u_id: req.user?.u_id ?? null });
 
     const { rows } = await client.query(
       `UPDATE "ORDER"
-       SET or_status='cancelled', void_reason=$2, voided_by=$3, voided_at=NOW(), approved_by=$4
+       SET or_status='cancelled', void_reason=$2, voided_by=$3, voided_at=NOW(), approved_by=$4,
+           status_changed_at=NOW()
        WHERE or_id=$1 RETURNING *`,
       [id, reason, req.user?.u_id ?? null, approval.approver?.u_id ?? null]
     );
     await client.query("COMMIT");
+
+    // The kitchen stops cooking it and the floor's boards drop it — now.
+    emitSocketEvent("order:updated", rows[0], { room: getKitchenSocketRoom(rows[0].b_id) });
+    emitOrderEvent("order:updated", rows[0]);
 
     const value = Number(order["or_totalCostWtax"] ?? order.or_totalcost ?? 0);
     logActivity(req, {

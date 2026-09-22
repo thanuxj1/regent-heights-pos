@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { FaSearch, FaFilter, FaPlus, FaPen, FaTrash } from "react-icons/fa";
 import Sidebar from "../../components/super-admin/Sidebar";
 import Header from "../../components/super-admin/Header";
-import { getCompanies, createCompany, updateCompany, deleteCompany, getCurrentUser, setAuthToken, logout } from "../../services/api";
+import { getCompanies, createCompany, updateCompany, deleteCompany, getCompanyImpact, getCurrentUser, setAuthToken, logout } from "../../services/api";
 import { useNavigate, useLocation } from "react-router-dom";
 import ToggleSwitch from "../../components/super-admin/ToggleSwitch";
 import Spinner from "../../components/super-admin/Spinner";
@@ -41,6 +41,8 @@ const HotelManagement = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [modalError, setModalError] = useState("");
   const [deleteError, setDeleteError] = useState("");
+  // What the delete would take with it, fetched as the dialog opens.
+  const [deleteImpact, setDeleteImpact] = useState(null);
   const [successMessage, setSuccessMessage] = useState("");
   const [togglingId, setTogglingId] = useState(null);
   const { toasts, removeToast, toast } = useToast();
@@ -108,7 +110,12 @@ const HotelManagement = () => {
   const openDeleteModal = (company) => {
     setCompanyToDelete(company);
     setDeleteError("");
+    setDeleteImpact(null);
     setIsDeleteModalOpen(true);
+    // "All company data" is a phrase; "12 rooms, 47 stays" is a decision.
+    getCompanyImpact(company.com_id)
+      .then(setDeleteImpact)
+      .catch(() => setDeleteImpact(null));
   };
 
   useEffect(() => {
@@ -604,10 +611,60 @@ const HotelManagement = () => {
               </div>
             )}
 
-            <p style={{ margin: "0 0 32px", fontSize: 14, color: "#4B5563", lineHeight: 1.5 }}>
-              Are you sure you want to delete <b>{companyToDelete?.com_name || "this company"}</b>?<br/>
-              This action cannot be undone and will permanently remove all company data.
+            <p style={{ margin: "0 0 12px", fontSize: 14, color: "#4B5563", lineHeight: 1.5 }}>
+              Delete <b>{companyToDelete?.com_name || "this company"}</b> and everything under it.
+              This cannot be undone.
             </p>
+
+            {/* Exactly what goes. Nobody should have to guess. */}
+            {deleteImpact && (
+              <div style={{
+                margin: "0 0 16px", padding: "12px 14px", borderRadius: 8,
+                background: "#FEF2F2", border: "1px solid #FEE2E2",
+              }}>
+                {(() => {
+                  const lines = [
+                    [deleteImpact.properties, "property", "properties"],
+                    [deleteImpact.staff, "staff account", "staff accounts"],
+                    [deleteImpact.rooms, "room", "rooms"],
+                    [deleteImpact.menu_items, "menu item", "menu items"],
+                    [deleteImpact.ingredients, "ingredient", "ingredients"],
+                    [deleteImpact.stays, "stay", "stays"],
+                    [deleteImpact.tickets, "ticket", "tickets"],
+                    [deleteImpact.payments, "payment", "payments"],
+                    [deleteImpact.purchase_orders, "purchase order", "purchase orders"],
+                    [deleteImpact.audit_entries, "activity entry", "activity entries"],
+                  ].filter(([n]) => Number(n) > 0);
+                  if (!lines.length) {
+                    return (
+                      <div style={{ fontSize: 13, color: "#B91C1C" }}>
+                        Nothing belongs to this company yet — it is empty.
+                      </div>
+                    );
+                  }
+                  return (
+                    <>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#B91C1C", marginBottom: 6 }}>
+                        This also deletes
+                      </div>
+                      <div style={{ fontSize: 13, color: "#7F1D1D", lineHeight: 1.7 }}>
+                        {lines.map(([n, one, many], i) => (
+                          <span key={one}>
+                            {i > 0 ? " · " : ""}<b>{n}</b> {Number(n) === 1 ? one : many}
+                          </span>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#B91C1C", marginTop: 8 }}>
+                        To keep the records and only stop it being used, close this and switch
+                        the company off instead.
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div style={{ height: 8 }} />
 
             <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>
               <button

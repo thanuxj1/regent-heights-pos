@@ -3,6 +3,7 @@ import Header from "../../components/branch-admin/Header";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
 import { getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense } from "../../services/api";
+import { dayKey, todayKey } from "../../utils/dates";
 
 const CATEGORIES = [
   { key:"utilities",    label:"Utilities",       icon:"💡" },
@@ -16,12 +17,25 @@ const CATEGORIES = [
   { key:"other",        label:"Other",           icon:"📋" },
 ];
 const CAT_MAP = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
+// Money out that is not typed in here, but is money out all the same.
+const EXTRA_CAT = {
+  supplier_payments: { label:"Paid to suppliers", icon:"🚛" },
+  agent_commission:  { label:"Agent commission",  icon:"🤝" },
+};
 
 function fmt(v) { return Number(v||0).toLocaleString("en-LK", { minimumFractionDigits:2, maximumFractionDigits:2 }); }
-function todayStr() { return new Date().toISOString().slice(0,10); }
+// The hotel's calendar day. `toISOString` is the UTC day, which is yesterday until 05:30.
+const todayStr = todayKey;
+// 12,500 -> "12.5k". Rounding to the nearest thousand made LKR 800 read as "1k".
+function compact(v) {
+  const n = Number(v || 0);
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(Math.round(n));
+}
 function thisYear() { return new Date().getFullYear(); }
 
-const BLANK_EXPENSE = { exp_category:"utilities", exp_amount:"", exp_description:"", exp_date: todayStr() };
+const blankExpense = () => ({ exp_category:"utilities", exp_amount:"", exp_description:"", exp_date: todayStr() });
 
 export default function Accounting() {
   const { user } = useAuth();
@@ -33,10 +47,11 @@ export default function Accounting() {
   const [loading, setLoading] = useState(true);
 
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState(BLANK_EXPENSE);
+  const [form, setForm] = useState(blankExpense);
   const [editingId, setEditingId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   const [filterCat, setFilterCat] = useState("all");
   const [filterFrom, setFilterFrom] = useState("");
@@ -52,44 +67,62 @@ export default function Accounting() {
       if (filterCat !== "all") params.category = filterCat;
       if (filterFrom) params.from = filterFrom;
       if (filterTo)   params.to   = filterTo;
-      const [exp, sum] = await Promise.all([
+      // Loaded side by side, not all-or-nothing: when the totals failed, the
+      // list failed with them and a bill that had been saved looked lost.
+      const [exp, sum] = await Promise.allSettled([
         getExpenses(params),
         getExpenseSummary({ b_id: branchId, year }),
       ]);
-      setExpenses(Array.isArray(exp) ? exp : []);
-      setSummary(sum && typeof sum === "object" ? sum : {});
-    } catch { } finally { setLoading(false); }
+      if (exp.status === "fulfilled") setExpenses(Array.isArray(exp.value) ? exp.value : []);
+      if (sum.status === "fulfilled") setSummary(sum.value && typeof sum.value === "object" ? sum.value : {});
+      const failed = [exp, sum].find((r) => r.status === "rejected");
+      setLoadError(failed
+        ? (failed.reason?.response?.data?.message || "Some figures could not be loaded — try again.")
+        : "");
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [branchId, filterCat, filterFrom, filterTo]);
 
   const totalExpenses = Number(summary.totalExpenses || 0);
+  // Paid against purchase orders on the Suppliers page — money out all the same.
+  const supplierPayments = Number(summary.supplierPayments || 0);
+  // Agent commission is owed whether or not it has been paid yet, so it is counted
+  // as a cost, as the Reports page does. It was left out here, so the two pages
+  // showed different profits for the same year.
+  const commissionTotal = Number(summary.commissionTotal || 0);
+  const moneyOut      = totalExpenses + supplierPayments + commissionTotal;
   const totalRevenue  = Number(summary.totalRevenue  || 0);
-  const netProfit     = totalRevenue - totalExpenses;
+  const netProfit     = totalRevenue - moneyOut;
   const commPending   = Number(summary.commissionPending || 0);
 
   const byCategory = useMemo(() => {
-    return (summary.byCategory || []).map(r => ({
+    const rows = [...(summary.byCategory || [])];
+    if (supplierPayments > 0) rows.push({ exp_category:"supplier_payments", total: supplierPayments });
+    if (commissionTotal > 0)  rows.push({ exp_category:"agent_commission",  total: commissionTotal });
+    rows.sort((a, b) => Number(b.total) - Number(a.total));
+    return rows.map(r => ({
       ...r,
-      cat: CAT_MAP[r.exp_category] || { label: r.exp_category, icon:"📋" },
-      pct: totalExpenses > 0 ? (Number(r.total) / totalExpenses * 100).toFixed(1) : 0,
+      cat: CAT_MAP[r.exp_category] || EXTRA_CAT[r.exp_category] || { label: r.exp_category, icon:"📋" },
+      pct: moneyOut > 0 ? (Number(r.total) / moneyOut * 100).toFixed(1) : 0,
     }));
-  }, [summary, totalExpenses]);
+  }, [summary, moneyOut, supplierPayments, commissionTotal]);
 
-  const monthlyData = useMemo(() => {
-    const map = {};
-    (summary.monthly || []).forEach(r => {
-      if (!map[r.month]) map[r.month] = { month:r.month, total:0 };
-      map[r.month].total += Number(r.total);
-    });
-    return Object.values(map).sort((a,b) => a.month < b.month ? -1 : 1).slice(-6);
-  }, [summary]);
+  // Money out per month — expenses, supplier payments and commission together, so
+  // the bars add up to the "Money out" figure above them.
+  const monthlyData = useMemo(
+    () => (summary.monthlyTotals || []).map(m => ({ month: m.month, total: Number(m.out) })).slice(-6),
+    [summary],
+  );
 
-  const openNew = () => { setForm(BLANK_EXPENSE); setEditingId(null); setError(""); setShowModal(true); };
-  const openEdit = (e) => { setForm({ exp_category:e.exp_category, exp_amount:e.exp_amount, exp_description:e.exp_description||"", exp_date:e.exp_date?.slice(0,10) }); setEditingId(e.exp_id); setError(""); setShowModal(true); };
+  const openNew = () => { setForm(blankExpense()); setEditingId(null); setError(""); setShowModal(true); };
+  const openEdit = (e) => { setForm({ exp_category:e.exp_category, exp_amount:e.exp_amount, exp_description:e.exp_description||"", exp_date:dayKey(e.exp_date) }); setEditingId(e.exp_id); setError(""); setShowModal(true); };
 
   const handleSubmit = async (ev) => {
-    ev.preventDefault(); setSubmitting(true); setError("");
+    ev.preventDefault(); setError("");
+    if (!(Number(form.exp_amount) > 0)) { setError("Enter the amount spent."); return; }
+    if (!form.exp_date) { setError("Choose the date of the expense."); return; }
+    setSubmitting(true);
     try {
       const payload = { ...form, b_id: branchId, exp_amount: Number(form.exp_amount) };
       if (editingId) await updateExpense(editingId, payload);
@@ -118,11 +151,17 @@ export default function Accounting() {
         <Header title="Accounting & Expenses" />
         <main style={{ flex:1, padding:"24px", overflowY:"auto" }}>
 
+          {loadError && (
+            <div style={{ background:"#FEF2F2", border:"1px solid #FECACA", color:"#B91C1C", padding:"10px 14px", borderRadius:8, marginBottom:16, fontSize:13 }}>
+              {loadError}
+            </div>
+          )}
+
           {/* Stats Row */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:16, marginBottom:24 }}>
             {[
               { label:`Revenue (${year})`,  value:`LKR ${fmt(totalRevenue)}`,  color:"#065F46", bg:"#D1FAE5", border:"#A7F3D0" },
-              { label:`Expenses (${year})`, value:`LKR ${fmt(totalExpenses)}`, color:"#9A3412", bg:"#FEF2F2", border:"#FECACA" },
+              { label:`Money out (${year})`, value:`LKR ${fmt(moneyOut)}`, color:"#9A3412", bg:"#FEF2F2", border:"#FECACA" },
               { label:"Net Profit",         value:`LKR ${fmt(netProfit)}`,     color: netProfit>=0?"#1565C0":"#DC2626", bg:"#EFF6FF", border:"#BFDBFE" },
               { label:"Commission Pending", value:`LKR ${fmt(commPending)}`,   color:"#92400E", bg:"#FEF9C3", border:"#FDE68A" },
             ].map(s => (
@@ -168,7 +207,7 @@ export default function Accounting() {
 
                 {/* Monthly Trend */}
                 <div>
-                  <div style={{ fontWeight:700, fontSize:15, color:"#1E293B", marginBottom:16 }}>Monthly Expense Trend</div>
+                  <div style={{ fontWeight:700, fontSize:15, color:"#1E293B", marginBottom:16 }}>Money Out by Month</div>
                   {monthlyData.length === 0 ? (
                     <div style={{ color:"#94A3B8", padding:20, textAlign:"center" }}>No monthly data</div>
                   ) : (
@@ -178,8 +217,8 @@ export default function Accounting() {
                         const pct = max > 0 ? (m.total/max*100) : 0;
                         return (
                           <div key={m.month} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
-                            <div style={{ fontSize:10, fontWeight:700, color:"#64748B" }}>LKR {Math.round(m.total/1000)}k</div>
-                            <div style={{ width:"100%", background:`linear-gradient(to top, #EF4444, #F87171)`, borderRadius:"4px 4px 0 0", height:`${pct}%`, minHeight:4 }} />
+                            <div style={{ fontSize:10, fontWeight:700, color:"#64748B" }}>LKR {compact(m.total)}</div>
+                            <div title={`LKR ${fmt(m.total)}`} style={{ width:"100%", background:`linear-gradient(to top, #EF4444, #F87171)`, borderRadius:"4px 4px 0 0", height:`${Math.max(4, Math.round(pct))}px` }} />
                             <div style={{ fontSize:10, color:"#94A3B8" }}>{m.month.slice(5)}</div>
                           </div>
                         );
@@ -193,7 +232,8 @@ export default function Accounting() {
                     {[
                       ["Total Revenue", fmt(totalRevenue), "#065F46"],
                       ["Total Expenses", `(${fmt(totalExpenses)})`, "#DC2626"],
-                      ["Commission Pending", `(${fmt(commPending)})`, "#92400E"],
+                      ["Paid to suppliers", `(${fmt(supplierPayments)})`, "#DC2626"],
+                      ["Agent commission", `(${fmt(commissionTotal)})`, "#92400E"],
                       ["Net Profit", fmt(netProfit), netProfit>=0?"#1565C0":"#DC2626"],
                     ].map(([k,v,c], i, arr) => (
                       <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom: i<arr.length-1?"1px solid #E2E8F0":"2px solid #CBD5E1", fontWeight: i===arr.length-1?700:400, color:"#1E293B", fontSize:13 }}>
@@ -245,9 +285,15 @@ export default function Accounting() {
                           const cat = CAT_MAP[e.exp_category] || { icon:"📋", label: e.exp_category };
                           return (
                             <tr key={e.exp_id} style={{ borderTop:"1px solid #F1F5F9" }}>
-                              <td style={{ padding:"12px 16px", color:"#475569" }}>{e.exp_date?.slice(0,10)}</td>
+                              <td style={{ padding:"12px 16px", color:"#475569" }}>{dayKey(e.exp_date)}</td>
                               <td style={{ padding:"12px 16px" }}>
                                 <span style={{ background:"#F1F5F9", padding:"3px 10px", borderRadius:20, fontSize:12 }}>{cat.icon} {cat.label}</span>
+                                {e.cash_movement_id && (
+                                  <span title="Paid out of the till's cash drawer"
+                                    style={{ marginLeft:6, background:"#FEF3C7", color:"#92400E", padding:"2px 8px", borderRadius:20, fontSize:11, fontWeight:600 }}>
+                                    Paid from till
+                                  </span>
+                                )}
                               </td>
                               <td style={{ padding:"12px 16px", fontWeight:700, color:"#DC2626" }}>LKR {fmt(e.exp_amount)}</td>
                               <td style={{ padding:"12px 16px", color:"#64748B", maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.exp_description||"—"}</td>
@@ -288,31 +334,42 @@ export default function Accounting() {
                   <div style={{ fontSize:32 }}>📈</div>
                 </div>
                 <div style={{ background:"#FEF9C3", border:"1px solid #FDE68A", borderRadius:10, padding:"14px 20px", marginBottom:20, fontSize:13, color:"#92400E" }}>
-                  Income is pulled automatically from completed/paid orders. Use the <strong>Expenses</strong> tab to track outgoings.
+                  Room charges and restaurant sales are counted automatically. Use the <strong>Expenses</strong> tab to track outgoings — cash paid out of the till for a bill lands there by itself.
                 </div>
-                {monthlyData.length > 0 && (
+                {(summary.monthlyTotals || []).length === 0 ? (
+                  <div style={{ textAlign:"center", padding:"36px 0", color:"#94A3B8" }}>Nothing recorded this year yet.</div>
+                ) : (
                   <div style={{ border:"1px solid #E2E8F0", borderRadius:10, overflow:"hidden" }}>
                     <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                       <thead>
                         <tr style={{ background:"#F8FAFC" }}>
-                          {["Month","Expense","Revenue (auto)","Net"].map(h => (
-                            <th key={h} style={{ padding:"10px 16px", textAlign:"left", fontSize:11, fontWeight:700, color:"#64748B", textTransform:"uppercase" }}>{h}</th>
+                          {["Month","Hotel","Restaurant","Revenue","Money out","Net"].map(h => (
+                            <th key={h} style={{ padding:"10px 16px", textAlign: h==="Month" ? "left" : "right", fontSize:11, fontWeight:700, color:"#64748B", textTransform:"uppercase" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {(summary.monthly ? [...new Set((summary.monthly||[]).map(r=>r.month))].sort().reverse().slice(0,12).map(m => {
-                          const expTotal = (summary.monthly||[]).filter(r=>r.month===m).reduce((s,r)=>s+Number(r.total),0);
-                          return { month:m, exp:expTotal };
-                        }) : []).map(row => (
-                          <tr key={row.month} style={{ borderTop:"1px solid #F1F5F9" }}>
-                            <td style={{ padding:"12px 16px", fontWeight:600, color:"#1E293B" }}>{row.month}</td>
-                            <td style={{ padding:"12px 16px", color:"#DC2626" }}>LKR {fmt(row.exp)}</td>
-                            <td style={{ padding:"12px 16px", color:"#065F46" }}>—</td>
-                            <td style={{ padding:"12px 16px", color:"#1565C0", fontWeight:600 }}>—</td>
+                        {[...summary.monthlyTotals].reverse().map(m => (
+                          <tr key={m.month} style={{ borderTop:"1px solid #F1F5F9" }}>
+                            <td style={{ padding:"12px 16px", fontWeight:600, color:"#1E293B" }}>{m.month}</td>
+                            <td style={{ padding:"12px 16px", textAlign:"right", color:"#475569" }}>LKR {fmt(m.hotel)}</td>
+                            <td style={{ padding:"12px 16px", textAlign:"right", color:"#475569" }}>LKR {fmt(m.restaurant)}</td>
+                            <td style={{ padding:"12px 16px", textAlign:"right", color:"#065F46", fontWeight:600 }}>LKR {fmt(m.revenue)}</td>
+                            <td style={{ padding:"12px 16px", textAlign:"right", color:"#DC2626" }}>LKR {fmt(m.out)}</td>
+                            <td style={{ padding:"12px 16px", textAlign:"right", fontWeight:700, color: m.net >= 0 ? "#1565C0" : "#DC2626" }}>LKR {fmt(m.net)}</td>
                           </tr>
                         ))}
                       </tbody>
+                      <tfoot>
+                        <tr style={{ background:"#F8FAFC", borderTop:"2px solid #E2E8F0", fontWeight:700 }}>
+                          <td style={{ padding:"12px 16px" }}>Total {year}</td>
+                          <td style={{ padding:"12px 16px", textAlign:"right" }}>LKR {fmt(summary.revenue?.hotel)}</td>
+                          <td style={{ padding:"12px 16px", textAlign:"right" }}>LKR {fmt(summary.revenue?.restaurant)}</td>
+                          <td style={{ padding:"12px 16px", textAlign:"right", color:"#065F46" }}>LKR {fmt(totalRevenue)}</td>
+                          <td style={{ padding:"12px 16px", textAlign:"right", color:"#DC2626" }}>LKR {fmt(moneyOut)}</td>
+                          <td style={{ padding:"12px 16px", textAlign:"right", color: netProfit >= 0 ? "#1565C0" : "#DC2626" }}>LKR {fmt(netProfit)}</td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 )}

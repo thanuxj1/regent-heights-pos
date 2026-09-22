@@ -9,6 +9,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), ".env") });
 import express from "express";
 import cors from "cors";
+import { checkConfig, corsOrigin, describeCorsOrigin } from "./config/env.js";
 import { createServer } from "http";
 import { initializeSocket } from "./utils/socket.js";
 
@@ -47,7 +48,7 @@ import branchProductRoutes from "./routes/branchProductRoutes.js";
 import recipeRoutes from "./routes/recipeRouter.js";
 
 // Raw Materials & Inventory
-import rawMaterialRoutes from "./routes/rawmaterialRoutes.js";
+import rawMaterialRoutes from "./routes/rawMaterialRoutes.js";
 import wasteRoutes from "./routes/wasteRoutes.js";
 
 // Suppliers & Purchasing
@@ -86,9 +87,12 @@ const app = express();
 // ─────────────────────────────────────────────
 // GLOBAL MIDDLEWARE
 // ─────────────────────────────────────────────
+// Before anything else asks the database or signs a token.
+checkConfig();
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "*",
+    origin: corsOrigin,
     credentials: true,
     // Without this the browser asks permission before every single call — an
     // OPTIONS round trip in front of each GET, doubling the requests the till
@@ -113,6 +117,30 @@ app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 // ─────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ message: "Server is running!" });
+});
+
+// A pulse for whoever is watching the tills: is the server up, and can it still
+// reach the database? It needs no sign-in — it says nothing but up or down and
+// how long the check took, which is what a monitor needs and no more.
+app.get("/api/health", async (req, res) => {
+  const started = Date.now();
+  try {
+    const { default: pool } = await import("./config/database.js");
+    await pool.query("SELECT 1");
+    res.json({
+      ok: true,
+      database: "up",
+      database_ms: Date.now() - started,
+      uptime_s: Math.round(process.uptime()),
+    });
+  } catch {
+    res.status(503).json({
+      ok: false,
+      database: "down",
+      database_ms: Date.now() - started,
+      uptime_s: Math.round(process.uptime()),
+    });
+  }
 });
 
 // ─────────────────────────────────────────────
@@ -222,7 +250,8 @@ const httpServer = createServer(app);
 initializeSocket(httpServer);
 
 httpServer.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || "development"})`);
+  console.log(`[cors] browser callers allowed: ${describeCorsOrigin()}`);
 
   // Open the database connections now rather than making the first cashier of
   // the day wait for them. A warm request is ~94ms; five arriving on a cold
@@ -234,6 +263,25 @@ httpServer.listen(PORT, async () => {
 
   // Housekeeping, not request work: trims the activity log on a daily timer.
   scheduleActivityPrune();
+
+  // One Super Admin is one forgotten password away from nobody being able to
+  // administer the platform: an Administrator cannot see that account, let
+  // alone reset it. Said at boot because the person who can fix it in one
+  // command is the person reading this line.
+  try {
+    const { default: pool } = await import("./config/database.js");
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM "User" WHERE role_id = 6 AND u_status = TRUE`);
+    if (rows[0].n < 2) {
+      if (rows[0].n === 0) {
+        console.warn("[access] No Super Admin can sign in.");
+      } else {
+        console.warn("[access] Only one Super Admin can sign in. Lose that password and only");
+        console.warn("         the server console can let anyone back in.");
+      }
+      console.warn("         Make another: node scripts/create-super-admin.js <email>");
+    }
+  } catch { /* never hold up the server for advice */ }
 });
 
 

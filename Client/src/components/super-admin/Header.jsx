@@ -17,7 +17,9 @@ const Header = ({ title = "System Admin DashBoard" }) => {
     user && (user.u_fname || user.u_lname)
       ? `${user.u_fname ?? ""} ${user.u_lname ?? ""}`.trim()
       : user?.u_email ?? "super Admin";
-  const email = user?.u_email ?? "superadmin@gmail.com";
+  // Whoever is signed in, or nothing. An invented address on screen is worse
+  // than a blank line: it looks like an account somebody could write to.
+  const email = user?.u_email ?? "";
 
   return (
     <div style={{

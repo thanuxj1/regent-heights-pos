@@ -9,6 +9,7 @@ import {
   createCompany,
   updateCompany,
   deleteCompany,
+  getCompanyImpact,
 } from "../controllers/companyController.js";
 
 const router = express.Router();
@@ -22,6 +23,7 @@ router.get("/", getCompanies);
 router.get("/:id", getCompanyById);
 router.post("/", createCompany);
 router.put("/:id", updateCompany);
+router.get("/:id/impact", getCompanyImpact);
 router.delete("/:id", deleteCompany);
 
 export default router;

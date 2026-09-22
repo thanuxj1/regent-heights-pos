@@ -38,6 +38,20 @@ const btn = (kind) => ({
 });
 const row = { display: "flex", justifyContent: "space-between", padding: "7px 0", fontSize: 14 };
 
+// What a pay-out from the till can be for. All but the last become an expense
+// in the owner's accounts; a supplier's invoice is recorded against its
+// purchase order on the Suppliers page instead, so it is not counted twice.
+const PAYOUT_CATEGORIES = [
+  ["utilities", "A bill — electricity, water, gas, phone"],
+  ["raw_materials", "Food or ingredients bought for cash"],
+  ["maintenance", "Repairs and maintenance"],
+  ["delivery", "Delivery or transport"],
+  ["marketing", "Marketing"],
+  ["salary", "Wages paid in cash"],
+  ["other", "Something else"],
+  ["supplier", "A supplier's invoice (also record it on the Suppliers page)"],
+];
+
 export default function CashDrawerModal({ branchId, onClose, onChanged }) {
   const [state, setState] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -54,16 +68,49 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
   const [mvKind, setMvKind] = useState("pay_out");
   const [mvAmount, setMvAmount] = useState("");
   const [mvReason, setMvReason] = useState("");
+  const [mvCategory, setMvCategory] = useState("");
 
-  const load = async () => {
+  // The drawer opens only with its PIN. Once it is right it is kept here, for
+  // this visit only, and sent with every drawer action.
+  const [unlockPin, setUnlockPin] = useState("");
+  const [pinEntry, setPinEntry] = useState("");
+
+  const load = async (p = unlockPin) => {
     setError("");
     try {
-      const s = await getCashSession(branchId);
+      const s = await getCashSession(branchId, p || undefined);
+      if (s.locked) {
+        setView(s.pin_set === false ? "nopin" : "pin");
+        return;
+      }
       setState(s);
       setView(s.open ? "shift" : "open");
     } catch (e) {
       setError(e?.response?.data?.message || "Could not read the drawer");
-      setView("open");
+      // A PIN that stopped working (the manager changed it) goes back to the lock.
+      setView([403, 423, 429].includes(e?.response?.status) ? "pin" : "open");
+    }
+  };
+
+  const unlock = async (e) => {
+    e?.preventDefault?.();
+    if (pinEntry.length < 4 || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const s = await getCashSession(branchId, pinEntry);
+      if (s.locked) {
+        setView(s.pin_set === false ? "nopin" : "pin");
+        return;
+      }
+      setUnlockPin(pinEntry);
+      setState(s);
+      setView(s.open ? "shift" : "open");
+    } catch (err) {
+      setError(err?.response?.data?.message || "Could not check that PIN");
+    } finally {
+      setPinEntry("");
+      setBusy(false);
     }
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [branchId]);
@@ -74,7 +121,7 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
   const doOpen = async () => {
     setBusy(true); setError("");
     try {
-      await openCashSession({ b_id: branchId, opening_float: Number(float || 0) });
+      await openCashSession({ b_id: branchId, opening_float: Number(float || 0) }, unlockPin);
       setFloat("");
       await load();
       onChanged?.();
@@ -88,8 +135,9 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
       await addCashMovement({
         b_id: branchId, kind: mvKind,
         amount: Number(mvAmount || 0), reason: mvReason.trim(),
-      });
-      setMvAmount(""); setMvReason("");
+        ...(mvKind === "pay_out" ? { category: mvCategory } : {}),
+      }, unlockPin);
+      setMvAmount(""); setMvReason(""); setMvCategory("");
       await load();
       onChanged?.();
     } catch (e) { fail(e, "Could not record that"); }
@@ -104,7 +152,7 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
         counted_cash: Number(counted || 0),
         notes: notes.trim() || undefined,
         ...(pin ? { approval_pin: pin } : {}),
-      });
+      }, unlockPin);
       setResult(r);
       setView("result");
       onChanged?.();
@@ -127,6 +175,44 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
     <div style={box} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={card}>
         {view === "loading" && <div style={{ color: "#64748B" }}>Reading the drawer…</div>}
+
+        {/* ── Locked: the drawer opens only with its PIN ───────────── */}
+        {view === "pin" && (
+          <form onSubmit={unlock}>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#0F172A" }}>
+              Drawer PIN
+            </h2>
+            <p style={{ color: "#64748B", fontSize: 14, marginTop: 6 }}>
+              The cash drawer opens only with its PIN. Ask the manager if you do not have it.
+            </p>
+            <input style={{ ...input, marginTop: 14, textAlign: "center", fontSize: 24, letterSpacing: 8 }}
+              type="password" inputMode="numeric" autoComplete="off" autoFocus maxLength={8}
+              value={pinEntry} onChange={(e) => setPinEntry(e.target.value.replace(/\D/g, "").slice(0, 8))}
+              placeholder="••••" />
+            {error && <div style={{ color: "#B91C1C", fontSize: 13, marginTop: 10 }}>{error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button type="button" style={btn("ghost")} onClick={onClose}>Back to the till</button>
+              <button type="submit" style={btn()} disabled={busy || pinEntry.length < 4}>
+                {busy ? "Checking…" : "Open the drawer"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {view === "nopin" && (
+          <>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#0F172A" }}>
+              The drawer is locked
+            </h2>
+            <p style={{ color: "#64748B", fontSize: 14, marginTop: 6 }}>
+              No drawer PIN has been set yet. The manager sets one on the Hotel Profile page;
+              until then the drawer stays closed. Sales still go through as normal.
+            </p>
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button style={btn()} onClick={onClose}>Back to the till</button>
+            </div>
+          </>
+        )}
 
         {/* ── No shift open ───────────────────────────────────────────────── */}
         {view === "open" && (
@@ -168,6 +254,13 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
               <div style={row}><span>Opening float</span><strong>{money(state.session.opening_float)}</strong></div>
               <div style={row}><span>Cash sales <span style={{ color: "#94A3B8" }}>({t.cash_orders})</span></span>
                 <strong>{money(t.cash_sales)}</strong></div>
+              {t.hotel_cash_payments > 0 && (
+                <div style={row}><span>Room payments taken <span style={{ color: "#94A3B8" }}>({t.hotel_cash_payments})</span></span>
+                  <strong>{money(t.hotel_cash_in)}</strong></div>
+              )}
+              {t.hotel_cash_refunds > 0 && (
+                <div style={row}><span>Room refunds handed back</span><strong>−{money(t.hotel_cash_refunds)}</strong></div>
+              )}
               {t.pay_in > 0 && <div style={row}><span>Put in</span><strong>{money(t.pay_in)}</strong></div>}
               {t.pay_out > 0 && <div style={row}><span>Paid out</span><strong>−{money(t.pay_out)}</strong></div>}
               {t.drops > 0 && <div style={row}><span>Dropped to the safe</span><strong>−{money(t.drops)}</strong></div>}
@@ -212,8 +305,18 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
                 <input style={input} value={mvReason} onChange={(e) => setMvReason(e.target.value)}
                   placeholder="What for?" />
               </div>
+              {/* Money spent from the till on a bill is an expense: saying what it
+                  was for puts it in the owner's accounts as well as the drawer. */}
+              {mvKind === "pay_out" && (
+                <select style={{ ...input, marginTop: 8 }} value={mvCategory}
+                  onChange={(e) => setMvCategory(e.target.value)}>
+                  <option value="">What was it spent on?</option>
+                  {PAYOUT_CATEGORIES.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+              )}
               <button style={{ ...btn("ghost"), marginTop: 8, width: "100%", flex: "none" }}
-                disabled={busy || !mvAmount || !mvReason.trim()} onClick={doMovement}>
+                disabled={busy || !mvAmount || !mvReason.trim() || (mvKind === "pay_out" && !mvCategory)}
+                onClick={doMovement}>
                 Record it
               </button>
             </div>

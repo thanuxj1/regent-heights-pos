@@ -5,8 +5,8 @@
  *
  *   logo.png       — the Hotel POS product logo. Staff-facing chrome only
  *                    (sidebars, headers). Imported from src/assets.
- *   DOCUMENT_LOGO  — the property's own logo, e.g. Regent Heights Luxury
- *                    Suites. Goes on anything a guest or the owner sees:
+ *   DOCUMENT_LOGO  — the property's own logo, whatever hotel this is running
+ *                    for. Goes on anything a guest or the owner sees:
  *                    confirmations, folios, receipts, reports.
  *
  * The document logo lives in public/ rather than src/assets on purpose. A

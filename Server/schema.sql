@@ -154,6 +154,9 @@ CREATE TABLE IF NOT EXISTS "Raw_Material" (
     unit         VARCHAR(20)  NOT NULL,
     stock_qty    NUMERIC(10,3) NOT NULL DEFAULT 0,
     record_level NUMERIC(10,3) NOT NULL DEFAULT 0,
+    yield_unit   VARCHAR(20),
+    yield_amount NUMERIC(10,3),
+    item_category VARCHAR(50) DEFAULT 'ingredient',
     "Com_id"     INTEGER REFERENCES "Company"(com_id),
     b_id         INTEGER REFERENCES "Branch"("B_id")
 );
@@ -206,7 +209,7 @@ CREATE TABLE IF NOT EXISTS supplier_payment (
     payment_date DATE          NOT NULL,
     method       VARCHAR(30)   CHECK (method IN ('cash','card','bank_transfer','cheque','online')),
     sup_id       INTEGER       NOT NULL REFERENCES "SUPPLIER"(sup_id),
-    po_id        INTEGER       NOT NULL REFERENCES purchase_order(po_id)
+    po_id        INTEGER       REFERENCES purchase_order(po_id)
 );
 
 -- ─── TABLE_ASSIGNMENT ────────────────────────────────────────

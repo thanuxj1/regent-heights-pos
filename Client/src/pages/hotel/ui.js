@@ -1,4 +1,5 @@
 export { readImageFile } from "../../utils/readImageFile";
+import { dayKey } from "../../utils/dates";
 
 // Shared presentation helpers for the hotel screens.
 
@@ -15,7 +16,10 @@ export const numOr = (v, dflt = 0) => {
   return Number.isFinite(n) ? n : dflt;
 };
 
-export const ymd = (d) => new Date(d).toISOString().slice(0, 10);
+// The calendar day, as the hotel reads it. The UTC day (toISOString) is yesterday
+// between midnight and 05:30 in Sri Lanka, so "today" — and the default check-in
+// date of a new booking — was a day behind.
+export const ymd = (d) => dayKey(d);
 export const today = () => ymd(new Date());
 export const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 

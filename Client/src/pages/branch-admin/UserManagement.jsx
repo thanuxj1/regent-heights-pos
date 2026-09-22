@@ -57,10 +57,14 @@ const UserManagement = () => {
       setLoading(true);
       setError("");
 
-      const [usersData, rolesData, branchesData] = await Promise.all([
-        getUsers(),
-        getRoles(),
-        getBranches(),
+      // 15-second timeout — Neon serverless can drop idle connections
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Request timed out. Please check your connection and try again.")), 15000)
+      );
+
+      const [usersData, rolesData, branchesData] = await Promise.race([
+        Promise.all([getUsers(), getRoles(), getBranches()]),
+        timeout,
       ]);
 
       setUsers(usersData || []);
@@ -71,7 +75,7 @@ const UserManagement = () => {
       const defaultRole = allowedRoles?.[0]?.role_id ? String(allowedRoles[0].role_id) : "";
       setNewUser((prev) => ({ ...prev, role_id: prev.role_id || defaultRole }));
     } catch (err) {
-      setError(err?.response?.data?.message || "Unable to load user management data.");
+      setError(err?.response?.data?.message || err?.message || "Unable to load user management data.");
     } finally {
       setLoading(false);
     }
@@ -83,15 +87,6 @@ const UserManagement = () => {
       return acc;
     }, {});
   }, [roles]);
-
-  const branchMapByUser = useMemo(() => {
-    return branches.reduce((acc, branch) => {
-      if (branch.U_id) {
-        acc[String(branch.U_id)] = branch.B_name;
-      }
-      return acc;
-    }, {});
-  }, [branches]);
 
   const accessibleRoleIds = useMemo(() => {
     return new Set(accessibleRoles.map((role) => String(role.role_id)));
@@ -108,7 +103,7 @@ const UserManagement = () => {
       const fullName = `${user.u_fname || ""} ${user.u_lname || ""}`.trim().toLowerCase();
       const email = (user.u_email || "").toLowerCase();
       const roleName = (roleMap[String(user.role_id)] || "Unknown").toLowerCase();
-      const branchName = (branchMapByUser[String(user.u_id)] || "-").toLowerCase();
+      const branchName = (user.branch_name || "-").toLowerCase();
 
       const matchesSearch =
         !normalizedSearch ||
@@ -121,9 +116,9 @@ const UserManagement = () => {
 
       return matchesSearch && matchesRole;
     });
-  }, [users, searchTerm, roleFilter, roleMap, branchMapByUser, accessibleRoleIds]);
+  }, [users, searchTerm, roleFilter, roleMap, accessibleRoleIds]);
 
-  const visibleUsers = useMemo(() => filteredUsers.slice(0, 5), [filteredUsers]);
+  const visibleUsers = filteredUsers;
 
   // Counted by role id, not by role name — names change, ids do not.
   // These describe the staff list below them: administrator accounts are not in
@@ -340,11 +335,32 @@ const UserManagement = () => {
             </div>
 
             {loading ? (
-              <p style={{ textAlign: "center", color: "#607094", margin: "22px 0" }}>Loading users...</p>
+              <div style={{ textAlign: "center", padding: "32px 0" }}>
+                <p style={{ color: "#607094", margin: 0 }}>Loading users...</p>
+              </div>
             ) : error ? (
-              <p style={{ textAlign: "center", color: "#cf3e3e", margin: "22px 0" }}>{error}</p>
+              <div style={{ textAlign: "center", padding: "32px 0" }}>
+                <p style={{ color: "#cf3e3e", margin: "0 0 12px" }}>{error}</p>
+                <button
+                  type="button"
+                  onClick={fetchData}
+                  style={{
+                    border: "none",
+                    background: "#0b61b5",
+                    color: "#fff",
+                    height: "34px",
+                    padding: "0 18px",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
             ) : (
-              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <thead>
                     <tr>
@@ -361,7 +377,8 @@ const UserManagement = () => {
                       const fullName = `${user.u_fname || ""} ${user.u_lname || ""}`.trim() || "Unknown User";
                       const initials = `${(user.u_fname || "U").charAt(0)}${(user.u_lname || "S").charAt(0)}`.toUpperCase();
                       const roleName = roleMap[String(user.role_id)] || "Unknown";
-                      const branchName = branchMapByUser[String(user.u_id)] || "-";
+                      const branchName = user.branch_name || "-";
+                      const isActive = user.u_status !== false;
 
                       return (
                         <tr key={user.u_id}>
@@ -397,13 +414,13 @@ const UserManagement = () => {
                               style={{
                                 padding: "4px 10px",
                                 borderRadius: "999px",
-                                background: "#dff6e4",
-                                color: "#20a048",
+                                background: isActive ? "#dff6e4" : "#eceff5",
+                                color: isActive ? "#20a048" : "#6f7f9e",
                                 fontSize: "12px",
                                 fontWeight: 700,
                               }}
                             >
-                              Available
+                              {isActive ? "Active" : "Inactive"}
                             </span>
                           </Td>
 

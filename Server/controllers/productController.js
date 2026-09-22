@@ -14,6 +14,18 @@ function isPositiveInt(value) {
   return Number.isInteger(n) && n > 0;
 }
 
+/**
+ * A yes/no a form may send as a boolean, a string or a number.
+ *
+ * Boolean("false") is true, so a client sending the word rather than the value
+ * would have turned every made-to-order dish back into a counted one — and it
+ * would have looked like the toggle simply refusing to stay off.
+ */
+function asBool(value) {
+  if (typeof value === "string") return !/^(false|0|no|off|)$/i.test(value.trim());
+  return Boolean(value);
+}
+
 function isNonNegativeNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0;
@@ -129,14 +141,16 @@ export async function createProduct(req, res, next) {
     }
 
     const resolvedCatId = cat_id != null && isPositiveInt(cat_id) ? Number(cat_id) : null;
-    const finalAddOns = add_ons ? JSON.stringify(add_ons) : '{"Cheese": true, "Bacon": true}';
+    // No invented extras. Cheese and Bacon were written onto every product
+    // ever created here, on a field nothing reads.
+    const finalAddOns = add_ons ? JSON.stringify(add_ons) : '{}';
     const finalStations = stations ? JSON.stringify(stations) : '{"Kitchen": true, "Bar": true}';
     const finalImage = pro_image && pro_image.trim() ? pro_image.trim() : '';
     const finalDiscountPct = discount_pct !== undefined ? Number(discount_pct) : 0;
     const finalCostPrice = cost_price !== undefined ? Number(cost_price) : 0;
-    const finalTaxGroup = tax_group !== undefined ? Number(tax_group) : 5;
+    const finalTaxGroup = tax_group !== undefined ? Number(tax_group) : 0;
     const finalLowStock = low_stock !== undefined ? Number(low_stock) : 10;
-    const finalTrackInventory = track_inventory !== undefined ? Boolean(track_inventory) : true;
+    const finalTrackInventory = track_inventory !== undefined ? asBool(track_inventory) : true;
 
     const result = await pool.query(
       `INSERT INTO "public"."Product"
@@ -233,7 +247,7 @@ export async function updateProduct(req, res, next) {
     const finalCostPrice = cost_price !== undefined ? Number(cost_price) : undefined;
     const finalTaxGroup = tax_group !== undefined ? Number(tax_group) : undefined;
     const finalLowStock = low_stock !== undefined ? Number(low_stock) : undefined;
-    const finalTrackInventory = track_inventory !== undefined ? Boolean(track_inventory) : undefined;
+    const finalTrackInventory = track_inventory !== undefined ? asBool(track_inventory) : undefined;
 
     const result = await pool.query(
       `UPDATE "public"."Product" SET

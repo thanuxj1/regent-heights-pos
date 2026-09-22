@@ -7,6 +7,7 @@ import {
   getRooms, updateRoom, getBranchProducts, createRoomServiceOrder,
 } from "../../services/api";
 import { connectSocket } from "../../services/socket";
+import { stockOf } from "../../utils/stockLabel";
 import { money, dmy, today, btn, input, label, modalWrap, modalBox, errorBox, card } from "./ui";
 
 // Palette follows the reference rack: green free, amber reserved, indigo in-house, grey blocked.
@@ -390,11 +391,17 @@ function RoomServiceModal({ room, branchId, onClose, onSent }) {
     return list.slice(0, 60);
   }, [products, search]);
 
-  const add = (p) => setCart(c => {
-    const hit = c.find(x => x.Bpro_id === p.Bpro_id);
-    if (hit) return c.map(x => x.Bpro_id === p.Bpro_id ? { ...x, qty: x.qty + 1 } : x);
-    return [...c, { Bpro_id: p.Bpro_id, name: nameOf(p), price: priceOf(p), qty: 1 }];
-  });
+  // What the kitchen can still make: for a dish, the portions its ingredients
+  // allow; for something cooked to order, no number at all.
+  const leftOf = (p) => stockOf(p);
+  const add = (p) => {
+    setErr("");
+    setCart(c => {
+      const hit = c.find(x => x.Bpro_id === p.Bpro_id);
+      if (hit) return c.map(x => x.Bpro_id === p.Bpro_id ? { ...x, qty: x.qty + 1 } : x);
+      return [...c, { Bpro_id: p.Bpro_id, name: nameOf(p), price: priceOf(p), qty: 1 }];
+    });
+  };
   const setQty = (id, q) => setCart(c =>
     q <= 0 ? c.filter(x => x.Bpro_id !== id) : c.map(x => x.Bpro_id === id ? { ...x, qty: q } : x));
 
@@ -460,13 +467,18 @@ function RoomServiceModal({ room, branchId, onClose, onSent }) {
               </div>
             ) : shown.map(p => (
               <button key={p.Bpro_id} onClick={() => add(p)}
-                style={{ ...card, padding: 10, cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
+                title={leftOf(p).soldOut ? "The stock count says none — it can still be sent; the manager will see the count go below zero." : undefined}
+                style={{ ...card, padding: 10, cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+                         ...(leftOf(p).soldOut ? { borderColor: "#FCD34D", background: "#FFFBEB" } : {}) }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "#1E293B",
                               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {nameOf(p)}
                 </div>
                 <div style={{ fontSize: 12, color: "#1565C0", fontWeight: 700, marginTop: 3 }}>
                   {money(priceOf(p))}
+                </div>
+                <div style={{ fontSize: 11, marginTop: 2, color: leftOf(p).soldOut ? "#B45309" : "#64748B" }}>
+                  {leftOf(p).label}
                 </div>
               </button>
             ))}

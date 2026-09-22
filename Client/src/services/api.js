@@ -1,9 +1,14 @@
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+import { API_URL } from "../config";
+
+const BASE_URL = API_URL;
 
 export const api = axios.create({
   baseURL: BASE_URL,
+  // Neon serverless DB can take up to ~15s to wake from suspension.
+  // Without a timeout, Axios hangs forever and the UI shows infinite spinners.
+  timeout: 20000,
 });
 
 // restore token from localStorage (if present)
@@ -90,6 +95,12 @@ export const updateCompany = async (id, companyData) => {
   return response.data;
 };
 
+/** What deleting a company would take with it — asked before it is offered. */
+export const getCompanyImpact = async (id) => {
+  const response = await api.get(`/companies/${id}/impact`);
+  return response.data;
+};
+
 export const deleteCompany = async (id) => {
   const response = await api.delete(`/companies/${id}`);
   return response.data;
@@ -138,6 +149,15 @@ export const getOrders = async (params = {}) => {
   return response.data?.data || [];
 };
 
+/**
+ * What the kitchen is working on now at the signed-in person's property:
+ * orders waiting and cooking, and those just marked ready, with their dishes.
+ */
+export const getKitchenBoard = async (params = {}) => {
+  const response = await api.get("/orders/board", { params });
+  return response.data || { data: [] };
+};
+
 export const getOrderItems = async (params = {}) => {
   const response = await api.get("/order-items", { params });
   return response.data?.data || [];
@@ -157,8 +177,6 @@ export const getProductById = async (productId) => {
   const response = await api.get(`/products/${productId}`);
   return response.data;
 };
-
-
 
 
 export const getCategories = async () => {
@@ -345,7 +363,9 @@ export const setupBranchWithManager = async (combinedData) => {
     // 1. Create the Branch first (no longer requires U_id)
     const newBranch = await createBranch({
       ...combinedData.branch,
-      com_id: combinedData.com_id ?? 1,
+      // Whoever is setting the property up belongs to a company; guessing "1"
+      // here would hand the property to a different one.
+      com_id: combinedData.com_id,
     });
 
     const branchId = newBranch.B_id ?? newBranch.b_id ?? null;
@@ -410,6 +430,11 @@ export const getSuppliers = async (params = {}) => {
   return res.data?.data ?? res.data ?? [];
 };
 
+export const createSupplier = async (payload) => {
+  const res = await api.post("/suppliers", payload);
+  return res.data;
+};
+
 export const getPurchaseOrders = async (params = {}) => {
   const res = await api.get("/purchase-orders", { params });
   return res.data?.data ?? res.data ?? [];
@@ -443,6 +468,49 @@ export const getSupplierPayments = async (params = {}) => {
 export const getPaymentsByOrder = async (poId) => {
   const res = await api.get(`/supplier-payments/order/${poId}`);
   return res.data || [];
+};
+
+export const getPurchaseOrdersBySupplier = async (supId) => {
+  const res = await api.get(`/purchase-orders/supplier/${supId}`);
+  return Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+};
+
+export const getPaymentsBySupplier = async (supId) => {
+  const res = await api.get(`/supplier-payments/supplier/${supId}`);
+  return Array.isArray(res.data) ? res.data : [];
+};
+
+/** Goods have arrived. `payment` ({ amount, method }) is optional — leave it out to pay later. */
+export const receivePurchaseOrder = async (poId, payment) => {
+  const res = await api.patch(`/purchase-orders/${poId}/status`, {
+    status: "received",
+    ...(payment ? { payment } : {}),
+  });
+  return res.data;
+};
+
+/** A payment against a received order: the whole balance, or part of it. */
+export const recordSupplierPayment = async (payload) => {
+  const res = await api.post("/supplier-payments", payload);
+  return res.data;
+};
+
+/** The manager's count of an ingredient on the shelf, with the reason. */
+export const countRawMaterial = async (rmId, { counted, note }) => {
+  const res = await api.post(`/raw-materials/${rmId}/count`, { counted, note });
+  return res.data;
+};
+
+/** The manager's count of a counted menu item (bottled water, cake), with the reason. */
+// Bring more of a counted item down from the main store to a branch's shelf.
+export const restockBranchProduct = async (bproId, qty) => {
+  const res = await api.post(`/branch_products/${bproId}/restock`, { qty });
+  return res.data;
+};
+
+export const countBranchProduct = async (bproId, { counted, note }) => {
+  const res = await api.post(`/branch_products/${bproId}/count`, { counted, note });
+  return res.data;
 };
 
 // Payments helper
@@ -602,6 +670,28 @@ export const deleteRoomType = async (id) => {
   await api.delete(`/hotel/room-types/${id}`);
 };
 
+// The property's own list of room facilities
+export const getRoomFacilities = async (params = {}) => {
+  const res = await api.get("/hotel/room-facilities", { params });
+  return res.data ?? [];
+};
+export const addRoomFacility = async (name, params = {}) => {
+  // Short on purpose: this is one small write behind a button, and a wait longer
+  // than this is better reported than sat through. The timer is ours rather than
+  // the request's own, so it holds however the connection misbehaves.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const res = await api.post("/hotel/room-facilities", { name, ...params }, { signal: ctl.signal });
+    return res.data;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+export const removeRoomFacility = async (id) => {
+  await api.delete(`/hotel/room-facilities/${id}`);
+};
+
 // Rooms
 export const getRooms = async (params = {}) => {
   const res = await api.get("/hotel/rooms", { params });
@@ -629,19 +719,8 @@ export const updateStayPolicy = async (payload) => {
   return res.data;
 };
 
-// Meal plans
-export const getMealPlans = async (params = {}) => {
-  const res = await api.get("/hotel/meal-plans", { params });
-  return res.data ?? [];
-};
-export const createMealPlan = async (payload) => {
-  const res = await api.post("/hotel/meal-plans", payload);
-  return res.data;
-};
-export const updateMealPlan = async (id, payload) => {
-  const res = await api.put(`/hotel/meal-plans/${id}`, payload);
-  return res.data;
-};
+
+// Meal plan API functions removed — meal plan module has been retired.
 
 // Guests
 export const getGuests = async (params = {}) => {
@@ -735,6 +814,11 @@ export const createRoomServiceOrder = async (payload) => {
   const res = await api.post("/hotel/room-service", payload);
   return res.data;
 };
+// An order already sent to the kitchen, put on a guest's bill — the same order, not a new one.
+export const chargeOrderToRoom = async (payload) => {
+  const res = await api.post("/hotel/room-service/charge-order", payload);
+  return res.data;
+};
 
 // ─── Owner reports ────────────────────────────────────────────────────────────
 export const getReportSummary = async (params = {}) => {
@@ -747,145 +831,6 @@ export const getReportTransactions = async (params = {}) => {
 };
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// import axios from "axios";
-
-// const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-
-// const api = axios.create({
-//   baseURL: BASE_URL,
-// });
-
-// export const getBranches = async () => {
-//   const response = await api.get("/branches");
-//   return response.data;
-// };
-
-// export const getUsers = async () => {
-//   const response = await axios.get(`${BASE_URL}/users`);
-//   return response.data;
-// };
-
-// export const getRoles = async () => {
-//   const response = await axios.get(`${BASE_URL}/roles`);
-//   return response.data;
-// };
-
-// export const getUserById = async (userId) => {
-//   const response = await axios.get(`${BASE_URL}/users/${userId}`);
-//   return response.data;
-// };
-
-// export const updateUser = async (id, payload) => {
-//   const response = await axios.put(`${BASE_URL}/users/${id}`, payload);
-//   return response.data;
-// };
-
-// export const getBranchById = async (branchId) => {
-//   const response = await axios.get(`${BASE_URL}/branches/${branchId}`);
-//   return response.data;
-// };
-
-// export const deleteBranchById = async (branchId) => {
-//   await axios.delete(`${BASE_URL}/branches/${branchId}`);
-// };
-
-// // 1. Create User
-// export const createUser = async (userData) => {
-//   const res = await axios.post(`${BASE_URL}/users`, userData);
-//   return res.data; // This returns { u_id, ... }
-// };
-
-// export const deleteUserById = async (userId) => {
-//   await axios.delete(`${BASE_URL}/users/${userId}`);
-// };
-
-// // 2. Create Branch
-// export const createBranch = async (branchData) => {
-//   const res = await axios.post(`${BASE_URL}/branches`, branchData);
-//   return res.data;
-// };
-
-// /**
-//  * LOGIC: ORCHESTRATOR
-//  * This function handles the two-step logic required by your backend
-//  */
-// export const setupBranchWithManager = async (combinedData) => {
-//   try {
-//     // Step A: Create the User first
-//     const newUser = await createUser(combinedData.manager);
-    
-//     // Step B: Use the returned u_id to create the Branch
-//     const branchPayload = {
-//       ...combinedData.branch,
-//       U_id: newUser.u_id, // Linking the ID from step A
-//       com_id: 1 // Assuming a default com_id or pass it from your Auth context
-//     };
-
-//     const newBranch = await createBranch(branchPayload);
-    
-//     return { user: newUser, branch: newBranch };
-//   } catch (error) {
-//     // If step A succeeds but step B fails, you might want to handle user deletion 
-//     // or notify the admin. For now, we throw the error to the UI.
-//     throw error;
-//   }
-// };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ─── Activity log ─────────────────────────────────────────────────────────────
 export const getActivity = async (params = {}) => {
   const res = await api.get("/activity", { params });
   return res.data ?? { entries: [], next_cursor: null };
@@ -900,18 +845,22 @@ export const getActivitySummary = async (params = {}) => {
  * count. `getCashSession` is what the POS asks on load to know whether to
  * prompt for a float.
  */
-export const getCashSession = async (b_id) => {
-  const res = await api.get("/cash/session", { params: { b_id } });
+// The drawer opens only with its PIN, sent as a header so it never lands in a
+// URL. Without it, getCashSession says only whether a drawer is open.
+const withDrawerPin = (pin) => (pin ? { headers: { "X-Drawer-Pin": pin } } : {});
+
+export const getCashSession = async (b_id, pin) => {
+  const res = await api.get("/cash/session", { params: { b_id }, ...withDrawerPin(pin) });
   return res.data;
 };
 
-export const openCashSession = async (payload) => {
-  const res = await api.post("/cash/session/open", payload);
+export const openCashSession = async (payload, pin) => {
+  const res = await api.post("/cash/session/open", payload, withDrawerPin(pin));
   return res.data;
 };
 
-export const addCashMovement = async (payload) => {
-  const res = await api.post("/cash/session/movement", payload);
+export const addCashMovement = async (payload, pin) => {
+  const res = await api.post("/cash/session/movement", payload, withDrawerPin(pin));
   return res.data;
 };
 
@@ -919,8 +868,8 @@ export const addCashMovement = async (payload) => {
  * Close the shift. `counted_cash` is required — the expected figure comes back
  * in the response, never before, so the count is a real count.
  */
-export const closeCashSession = async (payload) => {
-  const res = await api.post("/cash/session/close", payload);
+export const closeCashSession = async (payload, pin) => {
+  const res = await api.post("/cash/session/close", payload, withDrawerPin(pin));
   return res.data;
 };
 
@@ -933,3 +882,7 @@ export const getCashSessionById = async (id) => {
   const res = await api.get(`/cash/sessions/${id}`);
   return res.data;
 };
+
+/** The drawer PIN — the manager's to set, change and look up. */
+export const getDrawerPin = async () => (await api.get("/cash/pin")).data;
+export const setDrawerPin = async (pin) => (await api.put("/cash/pin", { pin })).data;

@@ -128,27 +128,29 @@ export async function createSupplier(req, res, next) {
 
     const { sup_name, sup_email, sup_contact, sup_address } = body;
 
-    // ── Required fields ──
-    if (!sup_name || !sup_email || !sup_contact) {
+    // ── Required fields ── (email is optional: many local suppliers have none)
+    if (!sup_name || !sup_contact) {
       res.status(400);
-      throw new Error("sup_name, sup_email and sup_contact are required");
+      throw new Error("sup_name and sup_contact are required");
     }
 
     // ── Name validation (shared helper) ──
     validateSupplierName(sup_name);
 
-    // ── Email type guard ──
-    if (typeof sup_email !== "string") {
-      res.status(400);
-      throw new Error("sup_email must be a string");
-    }
-    if (!validateEmail(sup_email)) {
-      res.status(400);
-      throw new Error("sup_email is not a valid email address");
-    }
-    if (sup_email.length > 150) {
-      res.status(400);
-      throw new Error("sup_email cannot exceed 150 characters");
+    // ── Email, when given ──
+    if (sup_email) {
+      if (typeof sup_email !== "string") {
+        res.status(400);
+        throw new Error("sup_email must be a string");
+      }
+      if (!validateEmail(sup_email)) {
+        res.status(400);
+        throw new Error("sup_email is not a valid email address");
+      }
+      if (sup_email.length > 150) {
+        res.status(400);
+        throw new Error("sup_email cannot exceed 150 characters");
+      }
     }
 
     // ── Contact type guard ──
@@ -195,11 +197,13 @@ export async function createSupplier(req, res, next) {
     }
 
     // ── Duplicate email check ──
-    const dupEmailParams = resolvedComId ? [sup_email, resolvedComId] : [sup_email];
-    const dupEmail = await pool.query(dupEmailQuery, dupEmailParams);
-    if (dupEmail.rows.length > 0) {
-      res.status(409);
-      throw new Error("A supplier with this email already exists");
+    if (sup_email) {
+      const dupEmailParams = resolvedComId ? [sup_email, resolvedComId] : [sup_email];
+      const dupEmail = await pool.query(dupEmailQuery, dupEmailParams);
+      if (dupEmail.rows.length > 0) {
+        res.status(409);
+        throw new Error("A supplier with this email already exists");
+      }
     }
 
     // ── Duplicate name check ──
@@ -222,7 +226,7 @@ export async function createSupplier(req, res, next) {
       `INSERT INTO "SUPPLIER" (sup_name, sup_email, sup_contact, sup_address, "Com_id")
        VALUES ($1, $2, $3, $4, $5)
        RETURNING sup_id, sup_name, sup_email, sup_contact, sup_address`,
-      [sup_name, sup_email.toLowerCase(), sup_contact, sup_address || null, resolvedComId],
+      [sup_name, sup_email ? sup_email.toLowerCase() : null, sup_contact, sup_address || null, resolvedComId],
     );
 
     res.status(201).json(result.rows[0]);

@@ -1,3 +1,4 @@
+import { API_URL, IMAGE_BASE_URL } from "../../config";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -20,18 +21,20 @@ import { useAuth } from "../../context/AuthContext";
 import ToastMessage from "../../components/branch-admin/ToastMessage";
 import { connectSocket } from "../../services/socket";
 import { withRetry, isTransient } from "../../utils/retryRequest";
+import { stockOf } from "../../utils/stockLabel";
 import Header from "../../components/branch-admin/Header";
 import {
   getWaiterProfile,
   getBranchProducts,
   createWaiterOrder,
   createOrderItem,
+  deleteWaiterOrder,
   getCategories,
-  getOrders,
+  getKitchenBoard,
+  getWaiterTables,
 } from "../../services/api";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-const IMAGE_BASE_URL = API_BASE_URL.replace(/\/api\/?$/i, "");
+const API_BASE_URL = API_URL;
 
 const resolveProductImage = (value) => {
   if (!value) return "";
@@ -65,6 +68,11 @@ const WaiterPos = () => {
   
   const [branchName, setBranchName] = useState("Loading...");
   const [branchId, setBranchId] = useState(null);
+  // Which table this order belongs to. The ticket used to carry none at all, so
+  // the till listed it as "Table: —" and the only way to find out whose bill it
+  // was, was to ask the floor.
+  const [tables, setTables] = useState([]);
+  const [tableId, setTableId] = useState("");
   const [roleName, setRoleName] = useState("Waiter");
   const [cartCollapsed, setCartCollapsed] = useState(false);
   const [products, setProducts] = useState([]);
@@ -85,21 +93,37 @@ const WaiterPos = () => {
   const [activeView, setActiveView] = useState("menu"); // "menu" | "kitchen"
   const [kitchenOrders, setKitchenOrders] = useState([]);
   const [kitchenLoading, setKitchenLoading] = useState(false);
+  // The board shows the whole kitchen; "Mine" narrows it to this waiter's orders.
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [boardUpdatedAt, setBoardUpdatedAt] = useState(null);
+  const [boardError, setBoardError] = useState("");
+  const [socketLive, setSocketLive] = useState(false);
 
   const showToast = (message, type = "success") => {
     setToast({ show: true, message, type });
   };
 
+  // What the kitchen is working on at this property: every order waiting or
+  // cooking, and the ones just marked ready — whoever placed them. The tab used
+  // to list only this waiter's own orders, so a table rung up at the till or a
+  // room-service ticket never showed, and it looked dead while the kitchen was
+  // busy.
   const loadKitchenOrders = async (silent = false) => {
     if (!user?.u_id) return;
     if (!silent) setKitchenLoading(true);
     try {
-      const data = await getOrders({ u_id: user.u_id });
-      const relevant = (Array.isArray(data) ? data : []).filter((o) =>
-        ["pending", "preparing", "completed"].includes(o.or_status)
+      const board = await getKitchenBoard();
+      setKitchenOrders(Array.isArray(board?.data) ? board.data : []);
+      setBoardUpdatedAt(new Date());
+      setBoardError("");
+    } catch (err) {
+      // What is on screen stays; it is only marked as possibly out of date.
+      setBoardError(
+        isTransient(err)
+          ? "Can't reach the server — showing the last status we had."
+          : "Could not refresh the kitchen status.",
       );
-      setKitchenOrders(relevant.sort((a, b) => b.or_id - a.or_id));
-    } catch (_) { /* silent */ } finally {
+    } finally {
       if (!silent) setKitchenLoading(false);
     }
   };
@@ -109,9 +133,18 @@ const WaiterPos = () => {
     if (activeView === "kitchen") loadKitchenOrders(false);
   }, [activeView, user?.u_id]);
 
-  // Socket: kitchen ready toasts + live kitchen status refresh
+  // Live: the board reloads the moment an order is placed, gets its dishes, is
+  // moved by the kitchen, or is cancelled or removed. Events are batched — one
+  // sale raises several. A slow poll backs the connection up and a reconnect
+  // reloads at once, so a dropped connection costs seconds, not the shift.
   useEffect(() => {
+    if (!user?.u_id) return undefined;
     const socket = connectSocket();
+    let timer = null;
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => loadKitchenOrders(true), 250);
+    };
 
     const handleReady = (order) => {
       const orderId = order?.or_id ?? order?.orderId;
@@ -122,18 +155,40 @@ const WaiterPos = () => {
         { id, message: `Order ${label} is ready to serve!` },
       ]);
       setTimeout(() => setReadyToasts((prev) => prev.filter((t) => t.id !== id)), 7000);
-      loadKitchenOrders(true);
+      refresh();
     };
+    const handleConnect = () => {
+      setSocketLive(true);
+      refresh();
+    };
+    const handleDisconnect = () => setSocketLive(false);
+    const boardEvents = ["order:new", "order:updated", "order:items", "order:deleted"];
 
-    const handleUpdated = () => loadKitchenOrders(true);
-
+    setSocketLive(socket.connected);
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
     socket.on("order:ready", handleReady);
-    socket.on("order:updated", handleUpdated);
+    boardEvents.forEach((name) => socket.on(name, refresh));
+
+    // Straight away too, so the Ready count on the tab is right before the tab
+    // is opened.
+    loadKitchenOrders(true);
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") loadKitchenOrders(true);
+    }, 20000);
+
     return () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
       socket.off("order:ready", handleReady);
-      socket.off("order:updated", handleUpdated);
+      boardEvents.forEach((name) => socket.off(name, refresh));
     };
   }, [user?.u_id]);
+
+  const boardOrders = onlyMine ? kitchenOrders.filter((o) => o.mine) : kitchenOrders;
+  const readyCount = kitchenOrders.filter((o) => o.or_status === "completed").length;
 
   const loadData = async () => {
     setLoading(true);
@@ -202,6 +257,24 @@ const WaiterPos = () => {
     loadData();
   }, [user?.u_id]);
 
+  // The property's tables, for the picker above the Send button.
+  useEffect(() => {
+    if (!user?.u_id) return undefined;
+    let alive = true;
+    getWaiterTables()
+      .then((rows) => {
+        if (alive) setTables(Array.isArray(rows) ? rows : (rows?.data ?? []));
+      })
+      .catch(() => {
+        // An empty picker still sends the order as counter service. Not knowing
+        // the tables must never stand between the kitchen and the food.
+        if (alive) setTables([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [user?.u_id]);
+
   const filteredProducts = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
 
@@ -233,7 +306,6 @@ const WaiterPos = () => {
   const total = taxableBase + taxAmount;
 
   const addToCart = (product) => {
-    const stockCount = Number(product.pro_quantity ?? 0);
     const basePrice = Number(product.pro_price ?? 0);
     const discPct = Number(product.discount_pct ?? 0);
     const effectivePrice = discPct > 0
@@ -242,20 +314,11 @@ const WaiterPos = () => {
     setCart((currentCart) => {
       const existing = currentCart.find((item) => item.Bpro_id === product.Bpro_id);
       if (existing) {
-        if (existing.qty >= stockCount) {
-          showToast(`Cannot add more. Only ${stockCount} items available in stock.`, "error");
-          return currentCart;
-        }
         return currentCart.map((item) =>
           item.Bpro_id === product.Bpro_id
             ? { ...item, qty: item.qty + 1 }
             : item
         );
-      }
-
-      if (stockCount <= 0) {
-        showToast("This item is out of stock.", "error");
-        return currentCart;
       }
 
       return [
@@ -274,18 +337,11 @@ const WaiterPos = () => {
   };
 
   const updateQuantity = (Bpro_id, delta) => {
-    const product = products.find((p) => p.Bpro_id === Bpro_id);
-    const stockCount = Number(product?.pro_quantity ?? 0);
-
     setCart((currentCart) =>
       currentCart
         .map((item) => {
           if (item.Bpro_id === Bpro_id) {
             const nextQty = item.qty + delta;
-            if (delta > 0 && nextQty > stockCount) {
-              showToast(`Cannot add more. Only ${stockCount} items available in stock.`, "error");
-              return item;
-            }
             return { ...item, qty: nextQty };
           }
           return item;
@@ -309,6 +365,10 @@ const WaiterPos = () => {
         or_tax: Number(effectiveTaxRate.toFixed(4)),
         or_totalcost: Number(taxableBase.toFixed(2)),
         or_totalCostWtax: Number(total.toFixed(2)),
+        or_type: "dine-in",
+        // The table travels with the ticket: the kitchen knows where the food
+        // goes, and the till knows whose bill it is settling.
+        ...(tableId ? { table_id: Number(tableId) } : {}),
       };
 
       const orderRes = await createWaiterOrder(orderPayload);
@@ -320,8 +380,11 @@ const WaiterPos = () => {
         throw new Error("Created order ID is missing");
       }
 
-      // Add order items
-      await Promise.all(
+      // Add the lines. If the kitchen cannot make one of them, the whole order
+      // is taken back rather than leaving half a ticket on the kitchen's screen
+      // — deleting it returns whatever the other lines took from stock. Every
+      // request is allowed to finish first, so none lands after the delete.
+      const results = await Promise.allSettled(
         cart.map((item) =>
           createOrderItem({
             Bpro_id: item.Bpro_id,
@@ -331,6 +394,11 @@ const WaiterPos = () => {
           })
         )
       );
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed) {
+        await deleteWaiterOrder(orderId).catch(() => {});
+        throw failed.reason;
+      }
 
       setCart([]);
       showToast("Order placed successfully!", "success");
@@ -475,9 +543,12 @@ const WaiterPos = () => {
               }`}
             >
               <FaUtensils className="h-3.5 w-3.5" /> Kitchen Status
-              {kitchenOrders.filter((o) => o.or_status === "completed").length > 0 && (
-                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white">
-                  {kitchenOrders.filter((o) => o.or_status === "completed").length}
+              {readyCount > 0 && (
+                <span
+                  title="Ready to serve"
+                  className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white"
+                >
+                  {readyCount}
                 </span>
               )}
             </button>
@@ -512,13 +583,40 @@ const WaiterPos = () => {
               </div>
               </div>
           ) : (
-            <div className="flex flex-1 items-center justify-between gap-3">
-              <span className="hidden text-sm text-slate-500 sm:inline">Live kitchen status for your orders</span>
+            <div className="flex flex-1 flex-wrap items-center justify-end gap-3">
+              <span
+                className="mr-auto hidden items-center gap-2 text-sm text-slate-500 sm:inline-flex"
+                title={socketLive
+                  ? "Changes appear the moment the kitchen makes them"
+                  : "Reconnecting — checking every 20 seconds meanwhile"}
+              >
+                <span className={`h-2 w-2 rounded-full ${socketLive ? "bg-[#55C24A]" : "bg-amber-400"}`} />
+                {socketLive ? "Live" : "Reconnecting…"}
+                {boardUpdatedAt && (
+                  <span className="text-slate-400">
+                    · updated {boardUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                )}
+              </span>
+              <div className="flex rounded-xl bg-slate-100 p-1 text-xs font-semibold">
+                <button
+                  onClick={() => setOnlyMine(false)}
+                  className={`rounded-lg px-3 py-1.5 ${!onlyMine ? "bg-white text-[#0A5BAE] shadow-sm" : "text-slate-500"}`}
+                >
+                  All orders
+                </button>
+                <button
+                  onClick={() => setOnlyMine(true)}
+                  className={`rounded-lg px-3 py-1.5 ${onlyMine ? "bg-white text-[#0A5BAE] shadow-sm" : "text-slate-500"}`}
+                >
+                  Mine
+                </button>
+              </div>
               <button
                 onClick={() => loadKitchenOrders(false)}
-                className="ml-auto flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200"
+                className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200"
               >
-                <FaSearch className="h-3 w-3" /> Refresh
+                Refresh
               </button>
             </div>
           )}
@@ -546,9 +644,9 @@ const WaiterPos = () => {
                   const effectivePrice = discPct > 0
                     ? parseFloat((basePrice * (1 - discPct / 100)).toFixed(2))
                     : basePrice;
-                  const stockCount = Number(p.pro_quantity ?? 0);
-                  const soldOut = stockCount <= 0;
-                  const lowStock = stockCount > 0 && stockCount <= 5;
+                  const stock = stockOf(p);
+                  const soldOut = stock.soldOut;
+                  const lowStock = stock.low;
                   const photo = resolveProductImage(p.pro_image);
 
                   // Same guess as the till: icon and tint from the item's own
@@ -568,11 +666,13 @@ const WaiterPos = () => {
                   return (
                     <div
                       key={p.Bpro_id}
-                      onClick={() => (soldOut ? undefined : addToCart(p))}
-                      title={soldOut ? `${p.pro_name} — out of stock` : `Add ${p.pro_name}`}
+                      onClick={() => addToCart(p)}
+                      title={soldOut
+                        ? `${p.pro_name} — the stock count says none. You can still order it; the manager will see the count go below zero.`
+                        : `Add ${p.pro_name}`}
                       className={`group relative flex flex-col rounded-xl border bg-white p-2 transition duration-200 ${
                         soldOut
-                          ? "cursor-not-allowed border-slate-200 opacity-60"
+                          ? "cursor-pointer border-amber-300 bg-amber-50/40"
                           : "cursor-pointer border-slate-100 shadow-[0_1px_3px_rgba(15,23,42,0.06)] hover:-translate-y-1 hover:border-sky-200 hover:shadow-[0_14px_30px_rgba(15,23,42,0.12)]"
                       }`}
                     >
@@ -581,7 +681,7 @@ const WaiterPos = () => {
                           <img
                             src={photo}
                             alt=""
-                            className={`h-full w-full object-cover transition duration-300 ${soldOut ? "grayscale" : "group-hover:scale-105"}`}
+                            className={`h-full w-full object-cover transition duration-300 group-hover:scale-105`}
                             onError={(e) => { e.currentTarget.style.display = "none"; }}
                           />
                         ) : (
@@ -590,7 +690,7 @@ const WaiterPos = () => {
                           </span>
                         )}
 
-                        {discPct > 0 && !soldOut && (
+                        {discPct > 0 && (
                           <span className="absolute left-1 top-1 rounded bg-rose-500 px-1 py-px text-[9px] font-bold text-white shadow-sm">
                             -{discPct}%
                           </span>
@@ -599,13 +699,13 @@ const WaiterPos = () => {
                         <span
                           className={`absolute right-1 top-1 rounded-full px-1.5 py-px text-[9px] font-semibold shadow-sm ${
                             soldOut
-                              ? "bg-slate-600 text-white"
+                              ? "bg-amber-500 text-white"
                               : lowStock
                                 ? "bg-amber-400 text-amber-950"
                                 : "bg-white/90 text-slate-600"
                           }`}
                         >
-                          {soldOut ? "Sold out" : `${stockCount} left`}
+                          {stock.label}
                         </span>
 
                         {!soldOut && (
@@ -651,26 +751,51 @@ const WaiterPos = () => {
         ) : (
           /* ── Kitchen Status View ── */
           <div className="flex-1 overflow-y-auto p-6">
-            {kitchenLoading ? (
+            {boardError && (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">
+                {boardError}
+              </div>
+            )}
+            {kitchenLoading && kitchenOrders.length === 0 ? (
               <div className="flex h-48 items-center justify-center">
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-[#0A5BAE]" />
               </div>
-            ) : kitchenOrders.length === 0 ? (
-              <div className="flex h-[400px] flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-white/50">
+            ) : boardOrders.length === 0 ? (
+              <div className="flex h-[400px] flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-white/50 px-6 text-center">
                 <div className="mb-4 rounded-full bg-slate-100 p-6 text-slate-300">
                   <FaUtensils className="h-12 w-12" />
                 </div>
-                <p className="text-lg font-bold text-slate-500">No active orders</p>
-                <p className="mt-1 text-sm text-slate-400">Place an order from the Menu tab.</p>
+                <p className="text-lg font-bold text-slate-500">
+                  {onlyMine && kitchenOrders.length > 0
+                    ? "None of your orders are in the kitchen"
+                    : "Nothing in the kitchen right now"}
+                </p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Orders appear here the moment they are placed — from this screen, the till or the front desk.
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {kitchenOrders.map((order) => {
+                {boardOrders.map((order) => {
                   const statusConfig = {
                     pending:   { label: "Waiting",   bg: "bg-amber-50",   border: "border-amber-200",  badge: "bg-amber-100 text-amber-700",   dot: "bg-amber-400" },
                     preparing: { label: "Preparing", bg: "bg-orange-50",  border: "border-orange-200", badge: "bg-orange-100 text-orange-700", dot: "bg-orange-400" },
                     completed: { label: "Ready! 🍽️", bg: "bg-emerald-50", border: "border-emerald-300",badge: "bg-emerald-100 text-emerald-700",dot: "bg-emerald-500" },
                   }[order.or_status] ?? { label: order.or_status, bg: "bg-slate-50", border: "border-slate-200", badge: "bg-slate-100 text-slate-600", dot: "bg-slate-400" };
+                  const where = order.table_number || order.table_id
+                    ? `Table ${order.table_number ?? order.table_id}`
+                    : order.room_number
+                      ? `Room ${order.room_number}`
+                      : order.or_type === "dine-in"
+                        ? "Dine-in"
+                        : "Takeaway";
+                  const items = Array.isArray(order.items) ? order.items : [];
+                  const minutes = order.minutes_in_status;
+                  const since =
+                    minutes == null ? ""
+                    : order.or_status === "completed" ? (minutes < 1 ? "Ready just now" : `Ready ${minutes} min ago`)
+                    : order.or_status === "preparing" ? (minutes < 1 ? "Started just now" : `Cooking for ${minutes} min`)
+                    : "";
 
                   return (
                     <div
@@ -679,19 +804,21 @@ const WaiterPos = () => {
                     >
                       {/* Order header */}
                       <div className="mb-3 flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-base font-black text-slate-800">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2 text-base font-black text-slate-800">
                             Order #{String(order.or_id).padStart(5, "0")}
+                            {order.mine && (
+                              <span className="rounded-full bg-[#0A5BAE]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#0A5BAE]">
+                                Yours
+                              </span>
+                            )}
                           </div>
-                          <div className="mt-0.5 text-xs text-slate-500">
-                            {order.table_id
-                              ? `Table ${order.table_id}`
-                              : order.or_type === "dine-in"
-                                ? "Dine-in"
-                                : "Takeaway"} · {order.or_time?.slice(0, 5) || "--:--"}
+                          <div className="mt-0.5 truncate text-xs text-slate-500">
+                            {where} · {order.or_time?.slice(0, 5) || "--:--"}
+                            {!order.mine && order.placed_by ? ` · ${order.placed_by}` : ""}
                           </div>
                         </div>
-                        <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${statusConfig.badge}`}>
+                        <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${statusConfig.badge}`}>
                           <span className={`h-1.5 w-1.5 rounded-full ${statusConfig.dot}`} />
                           {statusConfig.label}
                         </span>
@@ -708,9 +835,28 @@ const WaiterPos = () => {
                         />
                       </div>
 
-                      {/* Total */}
-                      <div className="text-right text-sm font-semibold text-slate-600">
-                        LKR {Number(order["or_totalCostWtax"] ?? order.or_totalcost ?? 0).toFixed(2)}
+                      {/* What is on it */}
+                      {items.length > 0 && (
+                        <ul className="mb-3 space-y-0.5 text-sm text-slate-700">
+                          {items.slice(0, 6).map((item, i) => (
+                            <li key={i} className="flex gap-2">
+                              <span className="font-bold text-slate-500">{item.qty}×</span>
+                              <span className="truncate">{item.name}</span>
+                            </li>
+                          ))}
+                          {items.length > 6 && (
+                            <li className="text-xs text-slate-400">and {items.length - 6} more</li>
+                          )}
+                        </ul>
+                      )}
+
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                        <span>{since}</span>
+                        {order.mine && (
+                          <span className="text-sm font-semibold text-slate-600">
+                            LKR {Number(order.total ?? 0).toFixed(2)}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -833,6 +979,25 @@ const WaiterPos = () => {
                 {cart.length} / {cart.reduce((s, i) => s + i.qty, 0)}
               </span>
             </div>
+
+            {/* Which table this is for. Without it the till gets a ticket it
+                cannot put a name to. */}
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold text-slate-500">Table</span>
+              <select
+                value={tableId}
+                onChange={(event) => setTableId(event.target.value)}
+                className="h-9 min-w-36 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 outline-none transition-colors focus:border-[#0A5BAE] focus:bg-white"
+              >
+                <option value="">No table (counter)</option>
+                {tables.map((t) => (
+                  <option key={t.table_id} value={t.table_id}>
+                    Table {t.table_number}
+                    {t.table_status && t.table_status !== "available" ? ` · ${t.table_status}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex items-end justify-between py-5">
@@ -850,7 +1015,13 @@ const WaiterPos = () => {
             className="flex w-full items-center justify-center gap-3 rounded-2xl bg-[#55C24A] px-6 py-4 text-base font-bold text-white shadow-[0_8px_24px_rgba(85,194,74,0.25)] transition-all hover:bg-[#49b03f] hover:shadow-[0_12px_32px_rgba(85,194,74,0.35)] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
           >
             <FaShoppingCart className="h-5 w-5" />
-            {submitting ? "Placing Order..." : "Send to Kitchen"}
+            {submitting
+              ? "Placing Order..."
+              : `Send to Kitchen${
+                  tableId
+                    ? ` · Table ${tables.find((t) => String(t.table_id) === String(tableId))?.table_number ?? tableId}`
+                    : ""
+                }`}
           </button>
         </div>
       </aside>

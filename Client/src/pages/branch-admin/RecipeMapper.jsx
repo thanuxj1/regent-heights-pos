@@ -1,3 +1,4 @@
+import { API_URL, IMAGE_BASE_URL } from "../../config";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaSearch } from "react-icons/fa";
@@ -12,8 +13,7 @@ import {
 } from "../../services/api";
 
 const PAGE_SIZE = 6;
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-const IMAGE_BASE_URL = API_BASE_URL.replace(/\/api\/?$/i, "");
+const API_BASE_URL = API_URL;
 
 const resolveProductImage = (value) => {
   if (!value) return "";
@@ -141,7 +141,6 @@ const RecipeMapper = () => {
     display: "flex",
     flexDirection: "column",
   };
-
 
   return (
     <>
@@ -309,20 +308,6 @@ const RecipeMapper = () => {
                           {categoryName}
                         </span>
 
-                        <span
-                          style={{
-                            position: "absolute",
-                            top: "10px",
-                            right: "10px",
-                            background: "rgba(15, 23, 42, 0.75)",
-                            color: "#fff",
-                            padding: "2px 8px",
-                            borderRadius: "12px",
-                            fontSize: "11px",
-                          }}
-                        >
-                          15m
-                        </span>
 
                         <span
                           style={{

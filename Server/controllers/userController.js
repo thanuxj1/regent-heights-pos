@@ -2,6 +2,18 @@ import bcrypt from "bcryptjs";
 import pool from "../config/database.js";
 import { ROLES, invalidateUserStatus } from "../middleware/authMiddleware.js";
 import { logActivity } from "../utils/activityLog.js";
+import { textField, emailField, phoneField, invalid } from "../utils/validate.js";
+
+const MIN_PASSWORD = 8;
+
+// A login is only as good as what is typed into it: "a" as a password and "nope" as
+// an email were both accepted, and the email is what the person signs in with.
+function passwordField(v) {
+  const s = String(v ?? "");
+  if (s.length < MIN_PASSWORD) invalid(`Password must be at least ${MIN_PASSWORD} characters.`);
+  if (s.length > 72) invalid("Password is too long — 72 characters is the most that can be stored safely.");
+  return s;
+}
 
 // Helper to hash password when provided
 async function hashPassword(password) {
@@ -170,10 +182,13 @@ export async function createUser(req, res, next) {
     ensureBranchAdminHasBranch(req, res);
     const { u_fname, u_lname, u_email, u_pw, u_connumber, role_id, u_status, u_image } = req.body;
 
-    if (!u_fname || !u_lname || !u_email || !u_pw) {
-      res.status(400);
-      throw new Error("u_fname, u_lname, u_email and u_pw are required");
-    }
+    const firstName = textField(u_fname, "First name", 100, { required: true });
+    const lastName = textField(u_lname, "Last name", 100, { required: true });
+    const email = emailField(u_email);
+    if (!email) invalid("Email is required.");
+    if (!u_pw) invalid("Password is required.");
+    passwordField(u_pw);
+    const phone = phoneField(u_connumber, "Contact", 50);
 
     await ensureRoleAssignable(role_id, res, req);
 
@@ -224,8 +239,8 @@ export async function createUser(req, res, next) {
 
     // Check for existing email
     const existing = await pool.query(
-      'SELECT u_id FROM "User" WHERE u_email = $1',
-      [u_email]
+      'SELECT u_id FROM "User" WHERE LOWER(u_email) = LOWER($1)',
+      [email]
     );
     if (existing.rows.length > 0) {
       res.status(400);
@@ -241,11 +256,11 @@ export async function createUser(req, res, next) {
     `;
 
     const params = [
-      u_fname,
-      u_lname,
-      u_email,
+      firstName,
+      lastName,
+      email,
       hashedPassword,
-      u_connumber || null,
+      phone,
       role_id || null,
       u_status ?? true,
       u_image || null,
@@ -286,7 +301,7 @@ export async function updateUser(req, res, next) {
     }
 
     const existingUser = await pool.query(
-      `SELECT u_id, role_id, u_status, u_email, "B_id", "com_id" FROM "User" WHERE u_id = $1 ${branchFilter}`,
+      `SELECT u_id, u_fname, u_lname, role_id, u_status, u_email, u_connumber, "B_id", "com_id" FROM "User" WHERE u_id = $1 ${branchFilter}`,
       existingParams
     );
     if (existingUser.rows.length === 0) {
@@ -356,8 +371,29 @@ export async function updateUser(req, res, next) {
       }
     }
 
+    // What was sent replaces what was there — including a phone number that has been
+    // cleared. What was not sent stays.
+    const has = (v) => v !== undefined;
+    if (Number(id) === Number(req.user?.u_id) && has(u_status) && !u_status) {
+      invalid("You cannot deactivate the account you are signed in with.");
+    }
+    const prevRow = existingUser.rows[0];
+    const firstName = has(u_fname) ? textField(u_fname, "First name", 100, { required: true }) : prevRow.u_fname;
+    const lastName = has(u_lname) ? textField(u_lname, "Last name", 100, { required: true }) : prevRow.u_lname;
+    let email = prevRow.u_email;
+    if (has(u_email)) {
+      email = emailField(u_email);
+      if (!email) invalid("Email is required.");
+      if (email.toLowerCase() !== String(prevRow.u_email).toLowerCase()) {
+        const clash = await pool.query('SELECT 1 FROM "User" WHERE LOWER(u_email) = LOWER($1) AND u_id <> $2', [email, id]);
+        if (clash.rows.length) invalid("Email already in use");
+      }
+    }
+    const phone = has(u_connumber) ? phoneField(u_connumber, "Contact", 50) : prevRow.u_connumber;
+
     let hashedPassword = null;
     if (u_pw) {
+      passwordField(u_pw);
       hashedPassword = await hashPassword(u_pw);
     }
 
@@ -368,7 +404,7 @@ export async function updateUser(req, res, next) {
         u_lname = COALESCE($2, u_lname),
         u_email = COALESCE($3, u_email),
         u_pw = COALESCE($4, u_pw),
-        u_connumber = COALESCE($5, u_connumber),
+        u_connumber = $5,
         role_id = COALESCE($6, role_id),
         u_status = COALESCE($7, u_status),
         u_image = COALESCE($11, u_image),
@@ -379,11 +415,11 @@ export async function updateUser(req, res, next) {
     `;
 
     const params = [
-      u_fname ?? null,
-      u_lname ?? null,
-      u_email ?? null,
+      firstName,
+      lastName,
+      email,
       hashedPassword,
-      u_connumber ?? null,
+      phone,
       role_id ?? null,
       u_status ?? null,
       B_id,
@@ -409,7 +445,7 @@ export async function updateUser(req, res, next) {
       changed.push(Boolean(u_status) ? "reactivated the account" : "deactivated the account");
     }
     if (u_pw) changed.push("reset the password");
-    if (u_email !== undefined && u_email !== prev.u_email) changed.push("changed the email");
+    if (email !== prev.u_email) changed.push("changed the email");
 
     logActivity(req, {
       action: "update", entity: "user", entity_id: saved.u_id, b_id: saved.b_id,
@@ -431,6 +467,7 @@ export async function deleteUser(req, res, next) {
   try {
     ensureBranchAdminHasBranch(req, res);
     const { id } = req.params;
+    if (Number(id) === Number(req.user?.u_id)) invalid("You cannot delete the account you are signed in with.");
     const scopedBranchId = getScopedBranchId(req);
     const params = [id];
     let branchFilter = "";
@@ -464,6 +501,14 @@ export async function deleteUser(req, res, next) {
 
     res.status(204).send();
   } catch (err) {
+    // Orders, cash sessions and table assignments belong to whoever handled them.
+    // Removing that person would orphan the till history, so the database says no —
+    // and "refers to a record that no longer exists" told the owner nothing.
+    if (err?.code === "23503") {
+      return next(Object.assign(new Error(
+        "This person has orders or till records on file, so they cannot be deleted. Untick \"Account is active\" on their profile instead — they will no longer be able to sign in, and the records stay.",
+      ), { status: 409 }));
+    }
     next(err);
   }
 }

@@ -4,8 +4,8 @@ import {
 } from "../middleware/authMiddleware.js";
 import {
   getRoomTypes, getRoomTypeById, createRoomType, updateRoomType, deleteRoomType,
+  getRoomFacilities, createRoomFacility, deleteRoomFacility,
   getRooms, createRoom, updateRoom, deleteRoom,
-  getMealPlans, createMealPlan, updateMealPlan, deleteMealPlan,
 } from "../controllers/roomController.js";
 import {
   getGuests, createGuest, updateGuest,
@@ -14,7 +14,7 @@ import {
   getDashboard, getConfirmation, getStayPolicy, updateStayPolicy,
 } from "../controllers/bookingController.js";
 import {
-  getRoomGrid, getGuestHistory, getGuestDirectory, createRoomServiceOrder,
+  getRoomGrid, getGuestHistory, getGuestDirectory, createRoomServiceOrder, chargeOrderToRoom,
 } from "../controllers/frontDeskController.js";
 
 const router = Router();
@@ -39,6 +39,11 @@ router.post("/room-types",       requireBranchAdminOrAdmin, createRoomType);
 router.put("/room-types/:id",    requireBranchAdminOrAdmin, updateRoomType);
 router.delete("/room-types/:id", requireBranchAdminOrAdmin, deleteRoomType);
 
+// The facilities a room type can be ticked with: the property's own list.
+router.get("/room-facilities",        getRoomFacilities);
+router.post("/room-facilities",       requireBranchAdminOrAdmin, createRoomFacility);
+router.delete("/room-facilities/:id", requireBranchAdminOrAdmin, deleteRoomFacility);
+
 router.get("/rooms",        getRooms);
 router.post("/rooms",       requireBranchAdminOrAdmin, createRoom);
 router.put("/rooms/:id",    updateRoom);        // housekeeping status is front-desk work
@@ -48,10 +53,7 @@ router.delete("/rooms/:id", requireBranchAdminOrAdmin, deleteRoom);
 router.get("/policy",       getStayPolicy);
 router.put("/policy",       requireBranchAdminOrAdmin, updateStayPolicy);
 
-router.get("/meal-plans",        getMealPlans);
-router.post("/meal-plans",       requireBranchAdminOrAdmin, createMealPlan);
-router.put("/meal-plans/:id",    requireBranchAdminOrAdmin, updateMealPlan);
-router.delete("/meal-plans/:id", requireBranchAdminOrAdmin, deleteMealPlan);
+// Meal plan routes removed — meal plan module has been retired.
 
 // ─── Guests ──────────────────────────────────────────────────────────────────
 router.get("/guest-directory",    getGuestDirectory);
@@ -65,6 +67,8 @@ router.get("/dashboard",    getDashboard);
 router.get("/availability", getAvailability);
 router.get("/room-grid",    getRoomGrid);
 router.post("/room-service", createRoomServiceOrder);
+// Put an order the kitchen already has on a guest's bill (no second order, no second stock).
+router.post("/room-service/charge-order", chargeOrderToRoom);
 
 // ─── Bookings ────────────────────────────────────────────────────────────────
 router.get("/bookings",                    getBookings);

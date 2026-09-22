@@ -25,6 +25,8 @@ export default function TransactionDetailsModal({ item, onClose }) {
     if (!item) return;
     setFetchError('');
     const load = async () => {
+      // A hotel payment has no order or purchase behind it to fetch; the ledger row is the record.
+      if (item.type === 'hotel') { setDetails(null); return; }
       setLoading(true);
       try {
         const idToken = Number(item.invoiceNo);
@@ -85,7 +87,9 @@ export default function TransactionDetailsModal({ item, onClose }) {
         <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100 bg-slate-50">
           <div>
             <h3 className="text-base font-bold text-slate-900">
-              {item.type === 'sale' ? 'Sales Transaction Receipt' : 'Purchase Expense Ledger'}
+              {item.type === 'sale' ? 'Sales Transaction Receipt'
+                : item.type === 'hotel' ? (item.direction === 'out' ? 'Hotel Refund' : 'Hotel Payment Receipt')
+                : 'Purchase Expense Ledger'}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">Reference: {item.txId}</p>
           </div>
@@ -117,8 +121,8 @@ export default function TransactionDetailsModal({ item, onClose }) {
 
           <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-4 text-xs">
             <div>
-              <span className="block text-slate-400 font-medium uppercase tracking-wider">Invoice / PO Number</span>
-              <span className="text-sm font-semibold text-slate-800 mt-0.5 block">#{item.invoiceNo}</span>
+              <span className="block text-slate-400 font-medium uppercase tracking-wider">{item.type === 'hotel' ? 'Booking Reference' : 'Invoice / PO Number'}</span>
+              <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.type === 'hotel' ? '' : '#'}{item.invoiceNo}</span>
             </div>
             <div>
               <span className="block text-slate-400 font-medium uppercase tracking-wider">Transaction Timestamp</span>
@@ -132,7 +136,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
             </div>
             <div>
               <span className="block text-slate-400 font-medium uppercase tracking-wider">Total Value Gross</span>
-              <span className={`text-sm font-bold font-mono mt-0.5 block ${item.type === 'sale' ? 'text-emerald-600' : 'text-rose-600'}`}>
+              <span className={`text-sm font-bold font-mono mt-0.5 block ${item.type === 'sale' || (item.type === 'hotel' && item.direction !== 'out') ? 'text-emerald-600' : 'text-rose-600'}`}>
                 LKR {formatAmount(item.amount)}
               </span>
             </div>
@@ -145,6 +149,24 @@ export default function TransactionDetailsModal({ item, onClose }) {
             </div>
           ) : (
             <>
+              {item.type === 'hotel' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Guest</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Received by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.cashierLabel || '-'}</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-slate-500">
+                    {item.direction === 'out' ? 'Money returned to the guest' : 'Money received from the guest'} for hotel booking {item.invoiceNo}.
+                    Open the booking for the full bill.
+                  </p>
+                </div>
+              )}
               {item.type === 'sale' && details?.items && (
                 <div className="space-y-2">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Line Items Detail Breakout</h4>

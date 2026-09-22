@@ -1,3 +1,4 @@
+import { recordPurchase } from "../utils/inventory.js";
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
 
@@ -25,6 +26,8 @@ function sanitizeBody(body, allowedFields) {
 }
 
 const VALID_STATUSES = ["pending", "received"];
+// Same list the supplier_payment table's CHECK allows.
+const PAY_METHODS = ["cash", "card", "bank_transfer", "cheque", "online"];
 
 // ─── GET /api/purchase-orders ─────────────────────────────────────────────────
 // ─── GET /api/purchase-orders ─────────────────────────────────────────────────
@@ -478,21 +481,12 @@ export async function updatePurchaseOrder(req, res, next) {
 //        RETURNING po_id, sup_id, b_id, status, order_date, received_date`,
 //       [status, id],
 //     );
-
-//     res.json(result.rows[0]);
-//   } catch (err) {
-//     next(err);
-//   }
-// }
-
-
-
 export async function updatePurchaseOrderStatus(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "po_id");
 
-    const body = sanitizeBody(req.body, ["status"]);
-    const { status } = body;
+    const body = sanitizeBody(req.body, ["status", "payment"]);
+    const { status, payment } = body;
 
     if (!status) {
       res.status(400);
@@ -506,7 +500,7 @@ export async function updatePurchaseOrderStatus(req, res, next) {
 
     // ── Existence & Scoping check ──
     let existQuery = `
-      SELECT po.po_id, po.status, po.b_id
+      SELECT po.po_id, po.status, po.b_id, po.sup_id
       FROM purchase_order po
       JOIN "Branch" b ON b."B_id" = po.b_id
       WHERE po.po_id = $1
@@ -552,37 +546,92 @@ export async function updatePurchaseOrderStatus(req, res, next) {
       }
     }
 
+    // Paying on receipt is optional. A supplier who gives credit is paid later
+    // from the Suppliers page, in as many parts as it takes. When it is paid
+    // now, the payment is written in the same transaction as the goods — the
+    // screen used to send it as a second request that never checked whether
+    // the first had worked.
+    let pay = null;
+    if (payment && status === "received") {
+      const amount = Number(payment.amount);
+      const method = String(payment.method || "").toLowerCase().trim();
+      const total = Number((await pool.query(
+        `SELECT COALESCE(SUM(price), 0) AS t FROM purchase_item WHERE po_id = $1`, [id],
+      )).rows[0].t);
+      if (!(amount > 0)) {
+        res.status(400);
+        throw new Error("A payment needs an amount above zero");
+      }
+      if (amount > total + 0.005) {
+        res.status(409);
+        throw new Error(`That is more than the order is worth (${total.toFixed(2)})`);
+      }
+      if (!PAY_METHODS.includes(method)) {
+        res.status(400);
+        throw new Error(`Payment method must be one of: ${PAY_METHODS.join(", ")}`);
+      }
+      pay = { amount, method };
+    }
+
     // Perform the status update and stock adjustments in a single transaction
     const client = await pool.connect();
     try {
+      let paid = null;
       await client.query("BEGIN");
 
       // If the target status is 'received', add each purchase_item.qty to the corresponding Raw_Material.stock_qty
       if (status === "received") {
+        // Ordered by material so a sale drawing on the same rows at the same
+        // moment queues behind this instead of deadlocking with it.
         const items = await client.query(
-          `SELECT rm_id, qty FROM purchase_item WHERE po_id = $1`,
+          `SELECT rm_id, pro_id, qty FROM purchase_item WHERE po_id = $1 ORDER BY COALESCE(rm_id, 0), COALESCE(pro_id, 0)`,
           [id],
         );
 
-        // Update each raw material stock
         for (const it of items.rows) {
-          const adjQty = Number(it.qty) || 0;
-          if (adjQty === 0) continue;
+          if (!(Number(it.qty) > 0)) continue;
 
-          const updateRes = await client.query(
-            `UPDATE "Raw_Material"
-             SET stock_qty = COALESCE(stock_qty, 0) + $1
-             WHERE rm_id = $2
-             RETURNING rm_id`,
-            [adjQty, it.rm_id],
-          );
-
-          if (updateRes.rows.length === 0) {
-            // Raw material missing or out-of-scope — abort
-            await client.query("ROLLBACK");
-            res.status(404);
-            throw new Error(`Raw material with id ${it.rm_id} not found`);
+          if (it.pro_id) {
+            // Resale product — add received qty directly to Product stock
+            const updateRes = await client.query(
+              `UPDATE "Product"
+               SET pro_qty = COALESCE(pro_qty, 0) + $1::numeric
+               WHERE pro_id = $2
+               RETURNING pro_id`,
+              [it.qty, it.pro_id],
+            );
+            if (updateRes.rows.length === 0) {
+              res.status(404);
+              throw new Error(`Product with id ${it.pro_id} not found`);
+            }
+          } else {
+            // Kitchen ingredient — add to Raw Material stock (existing behaviour)
+            const updateRes = await client.query(
+              `UPDATE "Raw_Material"
+               SET stock_qty = COALESCE(stock_qty, 0) + $1::numeric
+               WHERE rm_id = $2
+               RETURNING rm_id`,
+              [it.qty, it.rm_id],
+            );
+            if (updateRes.rows.length === 0) {
+              res.status(404);
+              throw new Error(`Raw material with id ${it.rm_id} not found`);
+            }
+            await recordPurchase(client, {
+              b_id: existing.rows[0].b_id, po_id: id, rm_id: it.rm_id, qty: it.qty,
+              u_id: req.user?.u_id ?? null,
+            });
           }
+        }
+
+        if (pay) {
+          const p = await client.query(
+            `INSERT INTO supplier_payment (sup_id, po_id, amount, method, payment_date)
+             VALUES ($1, $2, $3, $4, CURRENT_DATE)
+             RETURNING pay_id, sup_id, po_id, amount, method, payment_date`,
+            [existing.rows[0].sup_id, id, pay.amount, pay.method],
+          );
+          paid = p.rows[0];
         }
       }
 
@@ -598,7 +647,7 @@ export async function updatePurchaseOrderStatus(req, res, next) {
       );
 
       await client.query("COMMIT");
-      res.json(result.rows[0]);
+      res.json({ ...result.rows[0], payment: paid });
     } catch (txErr) {
       await client.query("ROLLBACK");
       throw txErr;
@@ -609,8 +658,6 @@ export async function updatePurchaseOrderStatus(req, res, next) {
     next(err);
   }
 }
-
-
 
 
 // ─── DELETE /api/purchase-orders/:id ─────────────────────────────────────────

@@ -64,6 +64,11 @@ const statusPalette = {
 
 
 
+// Two things worth remembering between visits: whether tickets print by
+// themselves, and which orders have already been put on paper.
+const AUTO_PRINT_KEY = "kitchen.autoPrintKot";
+const printedKey = (branchId) => `kitchen.printedKot:${branchId ?? "all"}`;
+
 const KitchenManagement = () => {
 	const { user } = useAuth();
 	const [orders, setOrders] = useState([]);
@@ -78,6 +83,21 @@ const KitchenManagement = () => {
 	// Track statuses confirmed by local user actions so a socket-triggered
 	// silent refresh cannot revert them before the DB propagates.
 	const confirmedStatuses = useRef({});
+
+	// Tickets print themselves as orders arrive. This screen stands by the pass
+	// and is the one with the printer, so this is where it belongs: nobody
+	// should have to watch a list and press Print.
+	const [autoPrint, setAutoPrint] = useState(() => {
+		try {
+			return localStorage.getItem(AUTO_PRINT_KEY) !== "off";
+		} catch {
+			return true;
+		}
+	});
+	// Orders already on paper, remembered across reloads so refreshing the
+	// screen does not reprint the whole board.
+	const printedRef = useRef(new Set());
+	const seededRef = useRef(false);
 
 	useEffect(() => {
 		let isMounted = true;
@@ -328,6 +348,11 @@ const KitchenManagement = () => {
 
 					<div className="flex flex-col gap-2">
 						{renderOrderItems(order.or_id)}
+						{order.kitchen_note && (
+							<div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[13px] font-semibold text-amber-800">
+								{order.kitchen_note}
+							</div>
+						)}
 					</div>
 
 					<div className="flex flex-wrap items-center gap-2">
@@ -453,8 +478,8 @@ const KitchenManagement = () => {
 
 	// The kitchen prints its own copy of the same ticket the till prints — the
 	// paper on the pass has to match the paper at the counter.
-	const handlePrintKot = (order) => {
-		const items = (itemsByOrderId[order.or_id] || []).map((item) => {
+	const ticketFor = (order) =>
+		(itemsByOrderId[order.or_id] || []).map((item) => {
 			const product = branchProductMap[item.Bpro_id] || {};
 			return {
 				name: product.pro_name || `Item ${item.Bpro_id}`,
@@ -463,12 +488,69 @@ const KitchenManagement = () => {
 			};
 		});
 
-		printKot(order, items, {
+	const handlePrintKot = (order) => {
+		printKot(order, ticketFor(order), {
 			branchName: branchName || "",
-			// Anything printed here is a second copy: the till printed the first.
+			// Anything printed by hand is a second copy: the ticket printed
+			// itself when the order came in.
 			reprint: true,
 		});
 	};
+
+	// An order that arrives puts itself on paper, once.
+	//
+	// The first pass after the screen opens only takes note of what is already
+	// on the board — reloading the page must not reprint the lunch rush. After
+	// that, every order that arrives with something to cook prints one ticket.
+	useEffect(() => {
+		if (loading) return;
+		const branchId = user?.b_id ?? user?.B_id ?? null;
+		const printed = printedRef.current;
+		const firstPass = !seededRef.current;
+
+		if (firstPass) {
+			try {
+				const saved = JSON.parse(localStorage.getItem(printedKey(branchId)) || "[]");
+				for (const id of saved) printed.add(Number(id));
+			} catch {
+				// A lost list costs one extra ticket, nothing worse.
+			}
+		}
+
+		const waiting = orders.filter(
+			(order) =>
+				order.or_status === "pending" && (itemsByOrderId[order.or_id] || []).length > 0,
+		);
+		const fresh = waiting.filter((order) => !printed.has(Number(order.or_id)));
+		for (const order of fresh) printed.add(Number(order.or_id));
+		if (fresh.length) {
+			try {
+				localStorage.setItem(printedKey(branchId), JSON.stringify([...printed].slice(-300)));
+			} catch {
+				// Not being able to remember only means a repeat after a reload.
+			}
+		}
+
+		seededRef.current = true;
+		if (firstPass || !autoPrint || !fresh.length) return;
+
+		// One at a time. Two print dialogs at once is one too many.
+		fresh.reduce(
+			(wait, order) =>
+				wait.then(
+					() =>
+						new Promise((resolve) => {
+							printKot(order, ticketFor(order), {
+								branchName: branchName || "",
+								reprint: false,
+							});
+							window.setTimeout(resolve, 1200);
+						}),
+				),
+			Promise.resolve(),
+		);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [loading, orders, itemsByOrderId, branchProductMap, branchName, autoPrint, user]);
 
 	// The property name is printed on every ticket.
 	useEffect(() => {
@@ -534,7 +616,35 @@ const KitchenManagement = () => {
 							</p>
 						</div>
 
-						<div className="flex items-center gap-2" />
+						<div className="flex items-center gap-2">
+							<button
+								type="button"
+								onClick={() => {
+									const next = !autoPrint;
+									setAutoPrint(next);
+									try {
+										localStorage.setItem(AUTO_PRINT_KEY, next ? "on" : "off");
+									} catch {
+										// The screen still works; it just forgets by tomorrow.
+									}
+								}}
+								title={
+									autoPrint
+										? "Every new order prints a ticket as it arrives"
+										: "Tickets print only when you press Print on an order"
+								}
+								className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+									autoPrint
+										? "border-emerald-200 bg-emerald-50 text-emerald-700"
+										: "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+								}`}
+							>
+								<span
+									className={`h-2 w-2 rounded-full ${autoPrint ? "bg-emerald-500" : "bg-slate-300"}`}
+								/>
+								Auto-print tickets: {autoPrint ? "on" : "off"}
+							</button>
+						</div>
 					</div>
 
 					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">

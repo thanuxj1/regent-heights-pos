@@ -5,6 +5,7 @@ import Sidebar from "./Sidebar";
 import Header from "./Header";
 import StatCard from "./StatCard";
 import { useAuth } from "../../context/AuthContext";
+import { todayKey } from "../../utils/dates";
 import {
 	getOrders,
 	getUsers,
@@ -41,7 +42,7 @@ const Dashboard = () => {
 			setIsLoading(true);
 			setError("");
 
-			const today = new Date().toISOString().split("T")[0];
+			const today = todayKey();
 			const orderParams = { status: "completed", date: today };
 			if (user?.b_id) {
 				orderParams.b_id = user.b_id;
@@ -426,7 +427,11 @@ const Dashboard = () => {
 										</div>
 									</div>
 									<div className="text-sm font-semibold text-red-600">
-										{lowStockItem ? `LKR {Number(lowStockItem.stock_qty ?? 0)} left` : "--"}
+										{/* A quantity of an ingredient, not a sum of money: flour is short by
+										    kilos, and the missing $ meant the card printed its own source code. */}
+										{lowStockItem
+											? `${Number(lowStockItem.stock_qty ?? 0)} ${lowStockItem.unit ?? ""} left`.replace(/\s+/g, " ")
+											: "--"}
 									</div>
 								</div>
 							</div>
@@ -472,18 +477,7 @@ const Dashboard = () => {
 					<div className="mt-8 bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
 						<div className="mb-4">
 							<h4 className="text-sm font-bold text-slate-900">Today&apos;s Cashiers</h4>
-							<p className="text-xs text-slate-500">Work distribution</p>
-						</div>
-
-						<div className="flex flex-wrap gap-3 mb-5">
-							{["Bar", "Restaurant", "Spa", "Reception"].map((area) => (
-								<div
-									key={area}
-									className="px-3 py-1 rounded-full border border-slate-200 text-xs font-semibold text-slate-500"
-								>
-									{area}
-								</div>
-							))}
+							<p className="text-xs text-slate-500">Share of today&apos;s takings</p>
 						</div>
 
 						<div className="overflow-x-auto">
@@ -492,14 +486,13 @@ const Dashboard = () => {
 									<tr className="text-slate-400 text-[11px] text-left border-b">
 										<th className="py-2">#</th>
 										<th className="py-2">NAME</th>
-										<th className="py-2">AREA</th>
 										<th className="py-2">SALES (%)</th>
 									</tr>
 								</thead>
 								<tbody>
 									{cashierStats.length === 0 && !isLoading && (
 										<tr>
-											<td colSpan="4" className="py-4 text-slate-500">
+											<td colSpan="3" className="py-4 text-slate-500">
 												No cashier data available.
 											</td>
 										</tr>
@@ -508,7 +501,7 @@ const Dashboard = () => {
 										if (!cashier) {
 											return (
 												<tr key={`cashier-skeleton-${index}`} className="border-b">
-													<td colSpan="4" className="py-4">
+													<td colSpan="3" className="py-4">
 														<div className="h-4 bg-slate-100 rounded animate-pulse" />
 													</td>
 												</tr>
@@ -523,14 +516,10 @@ const Dashboard = () => {
 											: percent >= 40
 												? "text-amber-500"
 												: "text-red-500";
-										const areas = ["Bar", "Restaurant", "Spa", "Reception"];
-										const area = areas[index % areas.length];
-
 										return (
 											<tr key={cashier.id} className="border-b last:border-b-0">
 												<td className="py-3 text-slate-600">#{String(cashier.id).padStart(2, "0")}</td>
 												<td className="py-3 text-slate-700 font-semibold">{cashier.name}</td>
-												<td className="py-3 text-slate-500">{area}</td>
 												<td className={`py-3 font-semibold ${percentClass}`}>{percent}%</td>
 											</tr>
 										);

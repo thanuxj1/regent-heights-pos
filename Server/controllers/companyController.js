@@ -1,4 +1,6 @@
 import pool from "../config/database.js";
+import { logActivity } from "../utils/activityLog.js";
+import { companyImpact, deleteCompanyCascade } from "../utils/companyCascade.js";
 
 // Trim and cap name length to match typical DB column constraints
 function sanitizeName(value) {
@@ -108,30 +110,86 @@ export async function updateCompany(req, res, next) {
   }
 }
 
-export async function deleteCompany(req, res, next) {
+/**
+ * GET /api/companies/:id/impact — what would go with it.
+ *
+ * Shown before the Delete button does anything, because "permanently remove all
+ * company data" is a sentence, and "12 rooms, 47 stays, 1,308 tickets" is a
+ * decision.
+ */
+export async function getCompanyImpact(req, res, next) {
+  const client = await pool.connect();
   try {
-    const { id } = req.params;
-
-    const result = await pool.query(
-      'DELETE FROM "Company" WHERE "com_id" = $1 RETURNING "com_id"',
-      [id],
-    );
-
-    if (result.rows.length === 0) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400);
+      throw new Error("Invalid company id");
+    }
+    const found = await client.query('SELECT com_name FROM "Company" WHERE com_id = $1', [id]);
+    if (!found.rows.length) {
       res.status(404);
       throw new Error("Company not found");
     }
-
-    res.status(204).send();
+    res.json({ com_id: id, com_name: found.rows[0].com_name, ...(await companyImpact(client, id)) });
   } catch (err) {
-    if (err?.code === "23503") {
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * DELETE /api/companies/:id — the company and everything that was ever its.
+ *
+ * It used to be a bare DELETE, which every foreign key in the database refused:
+ * the Super Admin, the only role allowed to remove a customer, was told
+ * "referenced by existing records" and left with no way through. The whole
+ * tenant goes now, in one transaction — see utils/companyCascade.js — or
+ * nothing does. Deactivating instead keeps every record and is one toggle away
+ * on the same screen.
+ */
+export async function deleteCompany(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
       res.status(400);
-      return next(
-        new Error(
-          "Cannot delete company: it is referenced by existing records",
-        ),
-      );
+      throw new Error("Invalid company id");
+    }
+
+    const found = await client.query('SELECT com_name FROM "Company" WHERE com_id = $1', [id]);
+    if (!found.rows.length) {
+      res.status(404);
+      throw new Error("Company not found");
+    }
+    const name = found.rows[0].com_name;
+
+    await client.query("BEGIN");
+    const impact = await companyImpact(client, id);
+    const removed = await deleteCompanyCascade(client, id);
+    await client.query("COMMIT");
+
+    // The company's own audit rows went with it, so this one is written against
+    // no branch — it is the platform's record, not the property's.
+    logActivity(req, {
+      action: "delete", entity: "company", entity_id: id, b_id: null,
+      summary: `Deleted the company "${name}" and everything under it`
+        + ` — ${impact.properties} propert${impact.properties === 1 ? "y" : "ies"},`
+        + ` ${impact.staff} staff, ${impact.tickets} tickets, ${impact.stays} stays`,
+      details: { impact, removed },
+    });
+
+    res.json({ com_id: id, com_name: name, removed });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err?.code === "23503") {
+      res.status(409);
+      return next(new Error(
+        "Something still refers to this company that the removal did not cover."
+        + " Nothing was deleted — please report which company this was."));
     }
     next(err);
+  } finally {
+    client.release();
   }
 }

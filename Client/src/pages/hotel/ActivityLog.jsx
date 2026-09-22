@@ -23,7 +23,7 @@ const ENTITY_LABEL = {
   auth: "Account", booking: "Booking", room: "Room", room_type: "Room Type",
   expense: "Expense", product: "Product", order: "Order", user: "Staff", guest: "Guest",
   payment: "Payment", folio_item: "Room Bill", category: "Menu Category",
-  meal_plan: "Meal Plan", commission_agent: "Agent", policy: "Policy",
+  commission_agent: "Agent", policy: "Policy",
   hotel_profile: "Property", login_location: "Sign-in Location",
 };
 

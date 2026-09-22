@@ -1,6 +1,9 @@
+import { EXPENSE_CATEGORIES } from "./expenseController.js";
+import { hotelToday } from "../utils/hotelTime.js";
 import pool from "../config/database.js";
 import { writeBranchId, branchClause } from "../utils/scope.js";
 import { logActivity } from "../utils/activityLog.js";
+import { readDrawerPin, writeDrawerPin, validPin } from "../utils/drawerPin.js";
 import { requireApproval } from "../utils/approval.js";
 import { moneyField, textField } from "../utils/validate.js";
 import {
@@ -34,6 +37,18 @@ export async function getCurrentSession(req, res, next) {
   try {
     const b_id = writeBranchId(req, req.query.b_id);
     const session = await openSessionFor(req.user.u_id, b_id);
+
+    // Without the drawer PIN the till learns only whether a drawer is open —
+    // enough to label its button — and never a figure.
+    if (!res.locals.drawerUnlocked) {
+      return res.json({
+        open: Boolean(session),
+        locked: true,
+        pin_set: res.locals.drawerPinSet !== false,
+        variance_limit: VARIANCE_LIMIT,
+      });
+    }
+
     if (!session) {
       return res.json({ open: false, variance_limit: VARIANCE_LIMIT });
     }
@@ -143,20 +158,53 @@ export async function addMovement(req, res, next) {
       }
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO "CASH_MOVEMENT" (session_id, kind, amount, reason, created_by)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [session.session_id, kind, amount, reason, req.user.u_id],
-    );
+    // A pay-out says what it was for. A bill — electricity, a plumber, the
+    // vegetable seller at the door — is an expense, and is written to the
+    // owner's accounts in the same transaction, so the drawer and the books
+    // agree. Paying a supplier's purchase order is recorded against that order
+    // on the Suppliers page instead ("supplier"), so it is not counted twice.
+    const category = kind === "pay_out" ? String(req.body.category || "").trim() || null : null;
+    if (category && category !== "supplier" && !EXPENSE_CATEGORIES.includes(category)) {
+      res.status(400);
+      return next(new Error("Pick what the money was spent on."));
+    }
+
+    const client = await pool.connect();
+    let rows;
+    let expenseId = null;
+    try {
+      await client.query("BEGIN");
+      ({ rows } = await client.query(
+        `INSERT INTO "CASH_MOVEMENT" (session_id, kind, amount, reason, created_by, category)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [session.session_id, kind, amount, reason, req.user.u_id, category],
+      ));
+      if (category && category !== "supplier") {
+        const e = await client.query(
+          `INSERT INTO "EXPENSE"
+             (b_id, exp_category, exp_amount, exp_description, exp_date, created_by, cash_movement_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING exp_id`,
+          [b_id, category, amount, `${reason} (paid from the till)`, hotelToday(),
+           req.user.u_id, rows[0].movement_id],
+        );
+        expenseId = e.rows[0].exp_id;
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
 
     const verb = kind === "pay_in" ? "Put" : kind === "drop" ? "Dropped" : "Took";
     logActivity(req, {
       action: "update", entity: "cash_session", entity_id: session.session_id, b_id,
       summary: `${verb} ${amount.toFixed(2)} ${kind === "pay_in" ? "into" : "out of"} the till — ${reason}`,
-      details: { kind, amount, reason },
+      details: { kind, amount, reason, category, expense_id: expenseId },
     });
 
-    res.status(201).json(rows[0]);
+    res.status(201).json({ ...rows[0], expense_id: expenseId });
   } catch (err) { next(err); }
 }
 
@@ -315,5 +363,51 @@ export async function getSession(req, res, next) {
         ? Number(session.expected_cash)
         : expectedCash(session.opening_float, totals),
     });
+  } catch (err) { next(err); }
+}
+
+/**
+ * GET /api/cash/pin — the manager looks up the drawer PIN, to tell a cashier.
+ * Manager-only (see routes/cashRoutes.js). `readable` is false only when a PIN
+ * is saved but can no longer be decrypted, which means: set a new one.
+ */
+export async function getDrawerPinSetting(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    const s = await readDrawerPin(b_id);
+    res.json({
+      set: s.set,
+      pin: s.pin,
+      readable: !s.set || s.pin !== null,
+      updated_at: s.updated_at,
+      updated_by: s.updated_by,
+    });
+  } catch (err) { next(err); }
+}
+
+/**
+ * PUT /api/cash/pin — the manager sets or changes the drawer PIN. The PIN
+ * itself never goes into the activity log; only that it was set, and by whom.
+ */
+export async function setDrawerPinSetting(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.body?.b_id);
+    if (!b_id || b_id < 0) {
+      res.status(400);
+      return next(new Error("No property to set the drawer PIN for."));
+    }
+    const pin = String(req.body?.pin ?? "").trim();
+    if (!validPin(pin)) {
+      res.status(400);
+      return next(new Error("The drawer PIN is 4 to 8 digits."));
+    }
+    const before = await readDrawerPin(b_id);
+    await writeDrawerPin(b_id, pin, req.user.u_id);
+    logActivity(req, {
+      action: "update", entity: "cash_drawer", entity_id: b_id, b_id,
+      summary: before.set ? "Changed the cash drawer PIN" : "Set the cash drawer PIN",
+    });
+    const now = await readDrawerPin(b_id);
+    res.json({ set: true, updated_at: now.updated_at, updated_by: now.updated_by });
   } catch (err) { next(err); }
 }

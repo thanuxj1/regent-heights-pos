@@ -141,6 +141,32 @@ When adding an endpoint, ask: *if I hand this a token from another company, does
 it return their rows?* `/api/orders` was missed in the first sweep and was found
 later returning 7 orders across two companies.
 
+### Live updates are scoped the same way
+
+The same question has to be asked of every socket event, and the answer used to
+be wrong. Kitchen screens all sat in one room called `kitchen-updates` — one
+room for the whole platform — so every hotel's kitchen was sent every other
+hotel's orders, whole rows at a time. Adding a dish to a ticket went further
+still: it was emitted with no room at all, which is every screen connected to
+the server.
+
+Rooms are per property now (`Server/utils/socket.js`):
+
+| Room | Who is in it |
+|---|---|
+| `branch:<b_id>` | that property's staff — floor, till, kitchen, managers |
+| `kitchen:<b_id>` | that property's kitchen screens |
+| `company:<com_id>` | a company-level admin |
+| `cashier-updates:<u_id>` | one person, for "your order is ready" |
+| `branch-updates` | platform staff only (Super Admin) |
+
+`branch-updates` carries every property's records, so hotel administrators are
+no longer seated in it — they were being sent other companies' properties as
+those were created and edited.
+
+Round 24 (`r24-kitchen-board`) holds this down: it connects a second company's
+kitchen and manager as sockets and fails if either hears one event about ours.
+
 ---
 
 ## 4. Who can do what
@@ -237,6 +263,29 @@ bcrypt, 10 rounds, hashed on every write path. The old fallback that compared th
 submitted password directly against the stored column (auto-migrating on match)
 has been **removed** — it meant a plaintext password inserted straight into the
 database would silently work.
+
+### One browser, one sign-in
+
+The session lives in `localStorage`, which every tab of a browser shares. The
+tabs used to disagree about it: one could show a waiter's screen while its
+requests and live updates went out as whoever had signed in most recently in
+another tab. `AuthProvider` now reads the token and the person together, refuses
+a token that has expired before trusting either, and follows a sign-in or
+sign-out made in another tab. The socket reconnects when the person changes, so
+it is never left sitting in the previous person's rooms.
+
+To work as two people at once — a testing habit, not a real one — use two
+browser profiles or a private window. Two tabs of one browser are one session by
+design, and the till needs that: the session must survive a reload, or an
+offline queue could be flushed by someone other than the person who took the
+sales.
+
+A screen that turns someone away sends them to their **own** screen, never back
+through the login page. The two used to send each other back and forth —
+"Maximum update depth exceeded", then the browser throttling navigation —
+whenever a role's home screen would not admit that role, which is exactly what
+role 2 did. Each role's home is in `Client/src/utils/roleHome.js`; round 24
+fails if any of them names a route that does not admit its own role.
 
 ---
 
@@ -374,7 +423,49 @@ The threat is not a cashier inventing sales — a fake order makes the drawer
 
 Before this, the hotel side logged everything with an IP and the restaurant till
 logged **nothing at all**, and a cashier (or a waiter) could delete a paid order
-outright. Three changes:
+outright. Four changes:
+
+### A settled sale's lines are frozen
+
+The same trick works one line at a time: leave the sale standing, lift a dish off
+it, and that dish's stock comes back while the total stays where it was. It was
+possible until 2026-09-16, because `guardOrderStatus` in `orderItemController`
+exempted the cashier **by name** from the rule against editing a completed order.
+
+The exemption was there for the till's own settle, which marked an order
+completed and then deleted and rewrote every one of its lines. The till now
+reconciles lines *before* it settles, and only the ones that actually changed, so
+nothing needs the exemption and nobody edits a sale that has been paid for.
+Round 26 checks both halves: settling leaves exactly one `sale` entry per line,
+and deleting a line from a paid sale is refused with the stock unmoved.
+
+### A ticket is billed once
+
+`PUT /api/orders/:id` carried the same exemption in a different guard: a cashier
+was allowed to re-save an order that was already completed. That is not a
+cosmetic permission, it is a second sale. Measured on a 900 ticket:
+
+```
+first billing:  settle 200, payment 201
+second billing: settle 200 ACCEPTED, payment 201 ACCEPTED
+                → the order carried 2 payments worth 1,800
+```
+
+Two things were conflated. `completed` means *the kitchen has finished cooking*,
+and the customer pays afterwards — so the till genuinely has to be able to settle
+a ticket that is already completed. What says a ticket has been **billed** is the
+tender recorded on it, not its status. The guard keys on the tender now: a
+completed ticket with no tender can be settled, because that *is* the billing; one
+that already carries a tender is refused with 409; and `POST /api/payments`
+refuses anything that would take the takings past what the ticket is worth. The
+till's own list stopped offering settled tickets at all — it used to show every
+dine-in order the property had ever taken, each with a "Bill & Pay" button on it.
+
+```
+second billing: settle 409 — already billed
+                payment 409 — already paid in full, 900.00 taken
+                → one payment of 900 on a 900 ticket
+```
 
 ### Sales are voided, never deleted
 
@@ -391,6 +482,15 @@ them log out and back in would mean sharing a manager password, so instead the
 manager types a PIN on the cashier's screen. It is bcrypt-hashed like a password,
 every candidate is compared so the timing reveals nothing, and **who approved is
 recorded on the order**. A manager doing it themselves needs no second signature.
+
+### The drawer opens only with a PIN
+
+Being signed in to the till was enough to open the cash drawer. Now every drawer
+action also needs the property's drawer PIN (`utils/drawerPin.js`), which only
+the manager can set, change or read. Five wrong guesses lock that person out for
+15 minutes and are logged. The PIN is stored AES-256-GCM-encrypted so the manager
+can look it up, and it travels in a header, never a URL. Failures are 403, 423 or
+429 — never 401, which the till treats as signed out.
 
 ### Sign-in is fenced to the property — carefully
 
@@ -480,7 +580,32 @@ so a booking never clashes with itself.
 
 ---
 
-## 11. Known gaps
+## 11. Money out: supplier payments and the owner's books
+
+**Supplier payments had no login at all.** `routes/supplierPaymentRoutes.js`
+mounted its handlers without `requireAuth`, and the controller had no tenant
+filter. Anyone who could reach the server could list every company's payments —
+supplier names and phone numbers included — and create, change or delete them.
+Found on 2026-09-15 by an anonymous `POST` that returned 201. Now: owner-only
+(`requireBranchAdminOrAdmin`), every query scoped to the caller's property
+through the purchase order, and the overpayment check made under a row lock so
+two payments at once cannot both squeeze under the total.
+
+**Expenses could be read and deleted by any signed-in user.** A waiter could read
+the salary lines and delete the owner's electricity bill. Now owner-only. Cash
+paid out of the till still reaches the books — through the drawer
+(`POST /api/cash/session/movement` with a category), not through this route.
+
+**Stock is part of the money.** Only `utils/inventory.js` takes stock for a
+sale, and a reversal replays the recorded movement — never a recomputation,
+never twice. Room service took no stock at all, and accepted a negative
+quantity that would have *added* stock. See `docs/stock-at-sale.md`.
+
+Changing a stock figure by hand is manager-only and always on the ledger with
+who and why (`POST /api/raw-materials/:id/count`, `POST /api/branch_products/:id/count`).
+The Edit form used to overwrite ingredient stock with no record at all.
+
+## 12. Known gaps
 
 Deliberate, or not yet done. Not hidden.
 
@@ -504,7 +629,7 @@ Deliberate, or not yet done. Not hidden.
 
 ---
 
-## 12. Re-testing after a change
+## 13. Re-testing after a change
 
 The checks below were all run against a live server with hand-minted JWTs. Two
 things that matter more than the tests themselves:
@@ -526,6 +651,26 @@ Worth re-running after touching auth, scope or validation:
 - 11 failed sign-ins on one address — expect 429 on the 11th
 - a correct password five times — expect the limiter never to fire
 - an unknown email vs. a real one — expect the same response time
+- an anonymous request to `/api/supplier-payments` — expect 401
+- a sale of more than the count allows — expect 201, the count below zero, and
+  a "beyond the stock count" line in the activity log
+- a stock count from a cashier, waiter or kitchen login — expect 403; from the
+  owner with no reason — expect 400
+- a drawer action with no PIN, then a wrong one, then five wrong ones — expect
+  403, 403 with the tries left, then 429; `GET /api/cash/pin` as a cashier — 403
+- `GET /api/orders/board` with another company's token — expect none of your
+  orders in the answer; with no token at all — 401
+- two sockets, one from each company, while the kitchen moves an order along —
+  expect the stranger to hear nothing whatsoever
+- "ready" and "cancel" sent on one order at the same moment — expect exactly one
+  to succeed, and the stock ledger to agree with whichever won
+- every role's home in `roleHome.js` against the routes in `App.jsx` — expect
+  each to admit its own role; a mismatch is an endless redirect, not a 403
 
 Clean up afterwards: delete test bookings, guests, payments and folio lines, reset
 `ROOM.hk_status`, and remove probe rows from `ACTIVITY_LOG`.
+
+Bound that clean-up to the run's own rows. A suite that ended with
+`DELETE FROM "ACTIVITY_LOG" WHERE entity='order'` erased the hotel's real record
+of who rang up what, every time it ran — the audit trail is the one thing a test
+must never tidy away.

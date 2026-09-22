@@ -1,88 +1,36 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FaArrowLeft, FaChevronDown, FaCheck, FaMinus, FaPlus, FaTimes, FaUpload } from "react-icons/fa";
+import { FaArrowLeft, FaUpload } from "react-icons/fa";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
-import { deleteProduct, getCategories, getProductById, updateProduct } from "../../services/api";
+import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct } from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
 
-const cardStyle = {
-	border: "1px solid #D9E4F2",
-	borderRadius: "14px",
-	background: "#FFFFFF",
-	boxShadow: "0 1px 0 rgba(15, 23, 42, 0.02)",
-	padding: "14px",
-};
+const fieldLabel = { fontSize: 12, fontWeight: 600, color: "#64748B" };
 
-const inputStyle = {
-	width: "100%",
-	height: "32px",
-	borderRadius: "10px",
-	border: "1px solid #D6E2EF",
-	background: "#F8FBFE",
-	outline: "none",
-	padding: "0 12px",
-	fontSize: "14px",
-	boxSizing: "border-box",
-};
-
-const sectionTitleStyle = {
-	fontSize: "18px",
-	fontWeight: "700",
-	color: "#111827",
-	margin: "0 0 10px",
-};
-
-const labelStyle = {
+const fieldInput = {
 	display: "block",
-	fontSize: "13px",
-	fontWeight: "700",
-	color: "#2F3A4C",
-	marginBottom: "5px",
+	width: "100%",
+	marginTop: 4,
+	padding: "9px 12px",
+	border: "1px solid #E2E8F0",
+	borderRadius: 8,
+	fontSize: 14,
+	boxSizing: "border-box",
+	background: "#fff",
+	outline: "none",
 };
 
-const toggleTrackStyle = {
-	width: "34px",
-	height: "16px",
-	borderRadius: "999px",
-	position: "relative",
-	background: "#D1D5DB",
+// The same two choice cards the "Create New Product" form uses.
+const stockChoiceStyle = (active) => ({
+	textAlign: "left",
+	padding: "12px 14px",
+	borderRadius: 10,
 	cursor: "pointer",
-	transition: "background 0.2s ease",
-};
-
-const toggleKnobStyle = {
-	width: "12px",
-	height: "12px",
-	borderRadius: "50%",
-	background: "#FFFFFF",
-	position: "absolute",
-	top: "2px",
-	left: "2px",
-	boxShadow: "0 1px 2px rgba(0,0,0,0.18)",
-	transition: "transform 0.2s ease",
-};
-
-const badgeStyle = {
-	display: "inline-flex",
-	alignItems: "center",
-	gap: "6px",
-	borderRadius: "10px",
-	padding: "4px 10px",
-	fontSize: "12px",
-	fontWeight: "700",
-	background: "#E8F7EC",
-	color: "#15803D",
-};
-
-const toShortName = (name) => {
-	if (!name) return "";
-	return name
-		.split(/\s+/)
-		.filter(Boolean)
-		.slice(0, 2)
-		.map((part) => part.slice(0, 1).toUpperCase() + part.slice(1, 4).toLowerCase())
-		.join(" ");
-};
+	border: active ? "1.5px solid #1565C0" : "1px solid #E2E8F0",
+	background: active ? "#EFF6FF" : "#fff",
+	fontFamily: "inherit",
+});
 
 const isImageSrc = (value) =>
 	typeof value === "string" && (
@@ -119,15 +67,14 @@ const ProductDetails = () => {
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState("");
 	const [success, setSuccess] = useState("");
-	const [newAddOn, setNewAddOn] = useState("");
-	const [newStation, setNewStation] = useState("");
 	const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
 	const [categories, setCategories] = useState([]);
 	const [product, setProduct] = useState(null);
+	const [branchQty, setBranchQty] = useState(null);
+	const { user } = useAuth();
 
 	const [form, setForm] = useState({
 		pro_name: "",
-		short_name: "",
 		category: "General",
 		pro_qty: "",
 		pro_price: "",
@@ -135,11 +82,9 @@ const ProductDetails = () => {
 		pro_image: "",
 		description: "",
 		discount_pct: "0",
-		tax_group: "5",
+		tax_group: "0",
 		track_inventory: true,
 		low_stock: "10",
-		add_ons: { Cheese: true, Bacon: true },
-		stations: { Kitchen: true, Bar: true },
 	});
 
 	useEffect(() => {
@@ -148,29 +93,29 @@ const ProductDetails = () => {
 			try {
 				setLoading(true);
 				setError("");
-				const [productData, categoryData] = await Promise.all([
+				const [productData, categoryData, branchRows] = await Promise.all([
 					getProductById(productId),
 					getCategories().catch(() => []),
+					getBranchProducts(user?.b_id).catch(() => []),
 				]);
 				if (!mounted) return;
 
 				setProduct(productData);
+				const mine = (Array.isArray(branchRows) ? branchRows : []).filter((r) => Number(r.pro_id) === Number(productId));
+				setBranchQty(mine.length ? mine.reduce((sum, r) => sum + Number(r.pro_quantity ?? r.pro_qty ?? 0), 0) : null);
 				setCategories(Array.isArray(categoryData) ? categoryData : []);
 				setForm({
 					pro_name: productData?.pro_name || "",
-					short_name: toShortName(productData?.pro_name || ""),
 					category: productData?.cat_name || categoryData.find(c => c.cat_id === productData?.cat_id)?.cat_name || "General",
-					pro_qty: String(productData?.pro_qty ?? ""),
+					pro_qty: productData?.pro_qty == null ? "" : String(Number(productData.pro_qty)),
 					pro_price: String(productData?.pro_price ?? ""),
 					cost_price: String(productData?.cost_price ?? productData?.pro_price ?? ""),
 					pro_image: productData?.pro_image || "",
 					description: productData?.description || "",
 					discount_pct: String(productData?.discount_pct ?? "0"),
-					tax_group: String(productData?.tax_group ?? "5"),
+					tax_group: String(productData?.tax_group ?? "0"),
 					track_inventory: productData?.track_inventory !== undefined ? Boolean(productData.track_inventory) : true,
 					low_stock: String(productData?.low_stock ?? "10"),
-					add_ons: productData?.add_ons || { Cheese: true, Bacon: true },
-					stations: productData?.stations || { Kitchen: true, Bar: true },
 				});
 			} catch (err) {
 				if (mounted) setError(err?.response?.data?.message || "Failed to load product details");
@@ -200,7 +145,6 @@ const ProductDetails = () => {
 		setForm((prev) => ({
 			...prev,
 			[field]: value,
-			...(field === "pro_name" ? { short_name: toShortName(value) } : {}),
 		}));
 	};
 
@@ -214,31 +158,16 @@ const ProductDetails = () => {
 		reader.readAsDataURL(file);
 	};
 
-	const toggleModifier = (group, key) => {
-		setForm((prev) => ({
-			...prev,
-			[group]: { ...prev[group], [key]: !prev[group][key] },
-		}));
-	};
-
-	const handleAddAddOn = () => {
-		if (!newAddOn.trim()) return;
-		const key = newAddOn.trim();
-		setForm((prev) => ({ ...prev, add_ons: { ...prev.add_ons, [key]: true } }));
-		setNewAddOn("");
-	};
-
-	const handleAddStation = () => {
-		if (!newStation.trim()) return;
-		const key = newStation.trim();
-		setForm((prev) => ({ ...prev, stations: { ...prev.stations, [key]: true } }));
-		setNewStation("");
-	};
-
 	const handleSave = async () => {
 		if (!productId) { setError("Missing product id"); return; }
-		if (!form.pro_name.trim() || form.pro_qty === "" || form.pro_price === "") {
-			setError("Product name, quantity, and sales price are required");
+		if (!form.pro_name.trim()) { setError("Enter a product name"); return; }
+		if (form.pro_price === "" || !(Number(form.pro_price) >= 0)) { setError("Enter the selling price"); return; }
+		if (form.track_inventory && (form.pro_qty === "" || !(Number(form.pro_qty) >= 0))) {
+			setError("Enter how many are on the rack now");
+			return;
+		}
+		if (!(Number(form.discount_pct || 0) >= 0 && Number(form.discount_pct || 0) <= 100)) {
+			setError("Discount must be between 0 and 100");
 			return;
 		}
 
@@ -250,16 +179,16 @@ const ProductDetails = () => {
 
 			const updated = await updateProduct(productId, {
 				pro_name: form.pro_name.trim(),
-				pro_qty: Number(form.pro_qty),
+				// Nothing is counted, so nothing is stored: a leftover figure here would
+		// be a number that means nothing the day the toggle goes back on.
+		pro_qty: form.track_inventory ? Number(form.pro_qty) : 0,
 				pro_price: Number(form.pro_price),
 				cost_price: Number(form.cost_price) || 0,
 				pro_image: form.pro_image.trim(),
 				cat_id,
-				add_ons: form.add_ons,
-				stations: form.stations,
 				description: form.description.trim() || null,
 				discount_pct: Number(form.discount_pct) || 0,
-				tax_group: Number(form.tax_group) || 5,
+				tax_group: Number(form.tax_group) || 0,
 				low_stock: Number(form.low_stock) || 10,
 				track_inventory: form.track_inventory,
 			});
@@ -305,256 +234,156 @@ const ProductDetails = () => {
 		<div style={{ display: "flex", background: "#F3F4F6", minHeight: "100vh" }}>
 			<Sidebar />
 			<div style={{ flex: 1, marginLeft: "var(--sidebar-w, 240px)" }}>
-				<Header title="Product Management" role="Branch Admin" email="branchadmin@gmail.com" showAddUserIcon />
-				<div style={{ padding: "18px 20px 24px" }}>
+				<Header title="Product Management" role="Branch Admin" showAddUserIcon />
+				<div style={{ padding: "18px 20px 32px", maxWidth: 680, margin: "0 auto" }}>
 					<button
 						type="button"
 						onClick={() => navigate("/branch-admin/products")}
-						style={{ display: "inline-flex", alignItems: "center", gap: "8px", border: "none", background: "transparent", color: "#6B7280", fontSize: "14px", fontWeight: "600", cursor: "pointer", marginBottom: "10px" }}
+						style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: "#6B7280", fontSize: 14, fontWeight: 600, cursor: "pointer", marginBottom: 10, padding: 0 }}
 					>
 						<FaArrowLeft />
-						<span>View details</span>
+						<span>Back to products</span>
 					</button>
 
-					<div style={{ display: "grid", gridTemplateColumns: "1.06fr 0.94fr", gap: "24px", alignItems: "start" }}>
-						<div>
-							<h1 style={{ margin: "0 0 14px", fontSize: "24px", fontWeight: "800", color: "#0F172A" }}>
-								{isEditPage ? "Edit Product" : "Product Details"}
-							</h1>
+					{loading ? (
+						<div style={{ color: "#475569", fontSize: 14 }}>Loading product details...</div>
+					) : error && !product ? (
+						<div style={{ color: "#B91C1C", fontSize: 14 }}>{error}</div>
+					) : (
+						<div style={{ background: "#fff", borderRadius: 16, padding: 26, boxShadow: "0 20px 60px rgba(0,0,0,0.06)", border: "1px solid #E9EEF5" }}>
+							<h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#0F172A" }}>Edit Product</h1>
+							<div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 18 }}>Update global product details.</div>
 
-							{loading ? (
-								<div style={{ color: "#475569", fontSize: "14px" }}>Loading product details...</div>
-							) : error && !product ? (
-								<div style={{ color: "#B91C1C", fontSize: "14px", marginBottom: "10px" }}>{error}</div>
-							) : (
-								<>
-									{error && <div style={{ color: "#B91C1C", fontSize: "13px", marginBottom: "8px" }}>{error}</div>}
+							{error && (
+								<div style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+									{error}
+								</div>
+							)}
 
-									{/* Basic Info */}
-									<div style={{ ...cardStyle, marginBottom: "14px" }}>
-										<div style={{ marginBottom: "10px" }}>
-											<label style={labelStyle}>Product Name</label>
-											<input style={inputStyle} value={form.pro_name} onChange={handleFieldChange("pro_name")} />
-										</div>
+							<div style={{ display: "grid", gap: 14 }}>
+								<label style={fieldLabel}>Product Name *
+									<input style={fieldInput} value={form.pro_name} onChange={handleFieldChange("pro_name")} placeholder="e.g. Chicken Fried Rice" />
+								</label>
 
-										<div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: "12px", marginBottom: "10px" }}>
-											<div>
-												<label style={labelStyle}>Category</label>
-												<div style={{ position: "relative" }}>
-													<select
-														value={form.category}
-														onChange={handleFieldChange("category")}
-														style={{ ...inputStyle, appearance: "none", WebkitAppearance: "none", MozAppearance: "none", paddingRight: "30px" }}
-													>
-														<option value="General">General</option>
-														{categories.map((c) => (
-															<option key={c.cat_id} value={c.cat_name}>{c.cat_name}</option>
-														))}
-													</select>
-													<FaChevronDown size={10} color="#475569" style={{ position: "absolute", right: "14px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-												</div>
+								<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+									<label style={fieldLabel}>Selling Price *
+										<input type="number" min="0" step="0.01" style={fieldInput} value={form.pro_price} onChange={handleFieldChange("pro_price")} />
+									</label>
+									<label style={fieldLabel}>Cost Price
+										<input type="number" min="0" step="0.01" style={fieldInput} value={form.cost_price} onChange={handleFieldChange("cost_price")} />
+									</label>
+									<label style={fieldLabel}>Discount %
+										<input type="number" min="0" max="100" step="0.5" style={fieldInput} value={form.discount_pct} onChange={handleFieldChange("discount_pct")} />
+									</label>
+								</div>
+								{discountedPrice && (
+									<div style={{ fontSize: 13, color: "#15803D", fontWeight: 700, marginTop: -6 }}>
+										Customers pay LKR {discountedPrice}
+										<span style={{ color: "#9CA3AF", fontWeight: 400, marginLeft: 6, textDecoration: "line-through" }}>LKR {Number(form.pro_price).toFixed(2)}</span>
+									</div>
+								)}
+
+								<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+									<label style={fieldLabel}>Category
+										<select style={fieldInput} value={form.category} onChange={handleFieldChange("category")}>
+											<option value="General">Default</option>
+											{categories.map((c) => (
+												<option key={c.cat_id} value={c.cat_name}>{c.cat_name}</option>
+											))}
+										</select>
+									</label>
+									<label style={fieldLabel}>Tax (%)
+										<input type="number" min="0" max="100" step="0.5" style={fieldInput} value={form.tax_group} onChange={handleFieldChange("tax_group")} />
+									</label>
+								</div>
+
+								<div>
+									<div style={{ ...fieldLabel, marginBottom: 6 }}>How is this stocked?</div>
+									<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+										<button type="button" style={stockChoiceStyle(form.track_inventory)} onClick={() => setForm((prev) => ({ ...prev, track_inventory: true }))}>
+											<div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>We count it</div>
+											<div style={{ fontSize: 11, color: "#64748B", marginTop: 3, lineHeight: 1.4 }}>
+												A tray of pastries, bottled drinks — it sits on the rack in a number, and that number goes down as it sells.
 											</div>
-											<div>
-												<label style={labelStyle}>Quantity</label>
-												<input type="number" min="0" style={inputStyle} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
+										</button>
+										<button type="button" style={stockChoiceStyle(!form.track_inventory)} onClick={() => setForm((prev) => ({ ...prev, track_inventory: false }))}>
+											<div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>Made to order</div>
+											<div style={{ fontSize: 11, color: "#64748B", marginTop: 3, lineHeight: 1.4 }}>
+												Cooked when the customer asks. Nothing to count in the morning; at the end of the day you see how many were made.
 											</div>
-										</div>
-
-										{/* Product Image */}
-										<div style={{ marginBottom: "10px" }}>
-											<label style={labelStyle}>Product Image</label>
-											<div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-												<div style={{ width: "72px", height: "72px", borderRadius: "12px", border: "1px solid #C9DDF3", background: "#EFF4F8", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
-													{imagePreview}
-												</div>
-												<div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
-													<input
-														placeholder="Paste image URL (https://...)"
-														style={{ ...inputStyle }}
-														value={form.pro_image.startsWith("data:") ? "" : form.pro_image}
-														onChange={(e) => setForm(prev => ({ ...prev, pro_image: e.target.value }))}
-													/>
-													<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-														<div style={{ flex: 1, height: "1px", background: "#E5E7EB" }} />
-														<span style={{ fontSize: "11px", color: "#9CA3AF" }}>or</span>
-														<div style={{ flex: 1, height: "1px", background: "#E5E7EB" }} />
-													</div>
-													<label
-														style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", height: "30px", borderRadius: "8px", border: "1px dashed #A0B4C8", background: "#F0F5FA", cursor: "pointer", fontSize: "12px", fontWeight: "600", color: "#1565C0" }}
-													>
-														<FaUpload size={10} />
-														<span>Upload from device</span>
-														<input
-															ref={fileInputRef}
-															type="file"
-															accept="image/*"
-															style={{ display: "none" }}
-															onChange={handleFileUpload}
-														/>
-													</label>
-													{form.pro_image.startsWith("data:") && (
-														<button
-															type="button"
-															onClick={() => setForm(prev => ({ ...prev, pro_image: "" }))}
-															style={{ fontSize: "11px", color: "#EF4444", background: "none", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}
-														>
-															× Remove uploaded image
-														</button>
-													)}
-												</div>
-											</div>
-										</div>
-
-										<div>
-											<label style={labelStyle}>Description</label>
-											<textarea
-												style={{ ...inputStyle, height: "64px", resize: "none", paddingTop: "8px" }}
-												value={form.description}
-												onChange={handleFieldChange("description")}
-												placeholder="Enter product description..."
-											/>
-										</div>
+										</button>
 									</div>
 
-									{/* Pricing */}
-									<h2 style={{ ...sectionTitleStyle, marginTop: "10px" }}>Pricing</h2>
-									<div style={cardStyle}>
-										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "10px" }}>
-											<div>
-												<label style={labelStyle}>Sales Price (LKR)</label>
-												<input type="number" min="0" step="0.01" style={inputStyle} value={form.pro_price} onChange={handleFieldChange("pro_price")} />
-											</div>
-											<div>
-												<label style={labelStyle}>Tax Group (%)</label>
-												<input type="number" min="0" max="100" step="0.5" style={inputStyle} value={form.tax_group} onChange={handleFieldChange("tax_group")} />
-											</div>
+									{form.track_inventory ? (
+										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+											<label style={fieldLabel}>In the storeroom
+												<input type="number" min="0" style={fieldInput} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
+												<span style={{ display: "block", marginTop: 4, fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>
+													{branchQty === null
+														? "Not on the menu yet."
+														: `${Number(branchQty)} more are on the menu, ready to sell (use Restock on the Products list to move more).`}
+												</span>
+											</label>
+											<label style={fieldLabel}>Warn me when it drops to
+												<input type="number" min="0" style={fieldInput} value={form.low_stock} onChange={handleFieldChange("low_stock")} />
+											</label>
 										</div>
+									) : (
+										<p style={{ margin: "10px 0 0", fontSize: 11, color: "#64748B", lineHeight: 1.5 }}>
+											It will always be on the till and will never read "out of stock". If you write its ingredients on the Recipes page, the till works out how many portions the store allows and takes them out as it sells.
+										</p>
+									)}
+								</div>
 
-										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "10px" }}>
-											<div>
-												<label style={labelStyle}>Cost Price (LKR)</label>
-												<input type="number" min="0" step="0.01" style={inputStyle} value={form.cost_price} onChange={handleFieldChange("cost_price")} />
-											</div>
-											<div>
-												<label style={labelStyle}>Product Code</label>
-												<input style={{ ...inputStyle, background: "#F3F4F6", color: "#6B7280" }} value={product?.pro_id ? `SKU: CHB-${String(product.pro_id).padStart(3, "0")}` : ""} readOnly />
-											</div>
+								<div>
+									<div style={{ ...fieldLabel, marginBottom: 4 }}>Image</div>
+									<div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+										<div style={{ width: 72, height: 72, borderRadius: 12, border: "1px solid #E2E8F0", background: "#F8FAFC", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+											{imagePreview}
 										</div>
-
-										<div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: "12px", alignItems: "end" }}>
-											<div>
-												<label style={labelStyle}>Discount (%)</label>
-												<input type="number" min="0" max="100" step="0.5" style={inputStyle} value={form.discount_pct} onChange={handleFieldChange("discount_pct")} />
-											</div>
-											{discountedPrice && (
-												<div style={{ fontSize: "13px", color: "#15803D", fontWeight: "700", paddingBottom: "6px" }}>
-													Effective price: <span style={{ color: "#15803D" }}>LKR {discountedPrice}</span>
-													<span style={{ color: "#9CA3AF", fontWeight: "400", marginLeft: "6px", textDecoration: "line-through" }}>LKR {Number(form.pro_price).toFixed(2)}</span>
-												</div>
+										<div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+											<input
+												placeholder="https://.../dish.jpg"
+												style={{ ...fieldInput, marginTop: 0 }}
+												value={form.pro_image.startsWith("data:") ? "" : form.pro_image}
+												onChange={(e) => setForm((prev) => ({ ...prev, pro_image: e.target.value }))}
+											/>
+											<label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, height: 34, borderRadius: 8, border: "1px dashed #A0B4C8", background: "#F0F5FA", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#1565C0" }}>
+												<FaUpload size={10} />
+												<span>Upload from device</span>
+												<input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFileUpload} />
+											</label>
+											{form.pro_image.startsWith("data:") && (
+												<button type="button" onClick={() => setForm((prev) => ({ ...prev, pro_image: "" }))} style={{ fontSize: 11, color: "#EF4444", background: "none", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
+													× Remove uploaded image
+												</button>
 											)}
 										</div>
 									</div>
-								</>
-							)}
-						</div>
-
-						{/* Right column */}
-						<div style={{ paddingTop: "34px" }}>
-							<h2 style={{ ...sectionTitleStyle, fontSize: "20px", marginBottom: "8px" }}>Modifiers</h2>
-							<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "22px" }}>
-								<div style={cardStyle}>
-									<div style={{ fontSize: "14px", fontWeight: "700", color: "#374151", marginBottom: "8px" }}>Add-Ons</div>
-									<div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-										{Object.entries(form.add_ons).map(([key, value]) => (
-											<label key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", fontSize: "14px", color: "#374151" }}>
-												<span>{key}</span>
-												<button type="button" onClick={() => toggleModifier("add_ons", key)} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}>
-													<span style={{ ...badgeStyle, background: value ? "#E8F7EC" : "#FCE8E6", color: value ? "#15803D" : "#B91C1C" }}>
-														{value ? <FaCheck size={9} /> : <FaTimes size={9} />}
-														{value ? "On" : "Off"}
-													</span>
-												</button>
-											</label>
-										))}
-									</div>
-									<div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-										<input placeholder="Add new add-on..." value={newAddOn} onChange={(e) => setNewAddOn(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddAddOn()} style={{ flex: 1, height: "26px", borderRadius: "8px", border: "1px solid #D6E2EF", padding: "0 10px", fontSize: "12px", outline: "none", background: "#F8FBFE" }} />
-										<button type="button" onClick={handleAddAddOn} style={{ height: "26px", padding: "0 12px", background: "#26B44A", color: "#fff", border: "none", borderRadius: "8px", fontSize: "12px", fontWeight: "700", cursor: "pointer" }}>+ Add</button>
-									</div>
 								</div>
 
-								<div style={cardStyle}>
-									<div style={{ fontSize: "14px", fontWeight: "700", color: "#374151", marginBottom: "8px" }}>Stations</div>
-									<div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-										{Object.entries(form.stations).map(([key, value]) => (
-											<label key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", fontSize: "14px", color: "#374151" }}>
-												<span>{key}</span>
-												<button type="button" onClick={() => toggleModifier("stations", key)} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}>
-													<span style={{ ...badgeStyle, background: value ? "#E8F7EC" : "#FCE8E6", color: value ? "#15803D" : "#B91C1C" }}>
-														{value ? <FaCheck size={9} /> : <FaTimes size={9} />}
-														{value ? "On" : "Off"}
-													</span>
-												</button>
-											</label>
-										))}
-									</div>
-									<div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-										<input placeholder="Add new station..." value={newStation} onChange={(e) => setNewStation(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddStation()} style={{ flex: 1, height: "26px", borderRadius: "8px", border: "1px solid #D6E2EF", padding: "0 10px", fontSize: "12px", outline: "none", background: "#F8FBFE" }} />
-										<button type="button" onClick={handleAddStation} style={{ height: "26px", padding: "0 12px", background: "#26B44A", color: "#fff", border: "none", borderRadius: "8px", fontSize: "12px", fontWeight: "700", cursor: "pointer" }}>+ Add</button>
-									</div>
-								</div>
+								<label style={fieldLabel}>Description
+									<textarea rows={2} style={{ ...fieldInput, resize: "vertical" }} value={form.description} onChange={handleFieldChange("description")} />
+								</label>
 							</div>
 
-							<h2 style={{ ...sectionTitleStyle, fontSize: "20px", marginTop: "22px", marginBottom: "8px" }}>Track Inventory</h2>
-							<div style={cardStyle}>
-								<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
-									<div style={{ fontSize: "14px", fontWeight: "700", color: "#374151" }}>Track Inventory</div>
-									<button type="button" onClick={() => setForm((prev) => ({ ...prev, track_inventory: !prev.track_inventory }))} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}>
-										<div style={{ ...toggleTrackStyle, background: form.track_inventory ? "#1769AA" : "#CBD5E1" }}>
-											<div style={{ ...toggleKnobStyle, transform: form.track_inventory ? "translateX(18px)" : "translateX(0)" }} />
-										</div>
-									</button>
-								</div>
-
-								<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-									<div>
-										<label style={labelStyle}>Current stock</label>
-										<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-											<button type="button" onClick={() => setForm((prev) => ({ ...prev, pro_qty: String(Math.max(0, Number(prev.pro_qty || 0) - 1)) }))} style={{ width: "24px", height: "24px", borderRadius: "6px", border: "1px solid #D1D5DB", background: "#fff", display: "grid", placeItems: "center", cursor: "pointer" }}>
-												<FaMinus size={9} color="#475569" />
-											</button>
-											<input style={inputStyle} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
-											<button type="button" onClick={() => setForm((prev) => ({ ...prev, pro_qty: String(Number(prev.pro_qty || 0) + 1) }))} style={{ width: "24px", height: "24px", borderRadius: "6px", border: "1px solid #D1D5DB", background: "#fff", display: "grid", placeItems: "center", cursor: "pointer" }}>
-												<FaPlus size={9} color="#475569" />
-											</button>
-										</div>
-									</div>
-									<div>
-										<label style={labelStyle}>Low stock alert</label>
-										<input type="number" min="0" style={inputStyle} value={form.low_stock} onChange={handleFieldChange("low_stock")} />
-									</div>
-								</div>
-							</div>
-
-							<div style={{ display: "flex", justifyContent: "flex-end", gap: "14px", marginTop: "24px" }}>
-								<button type="button" onClick={handleCancel} style={{ minWidth: "120px", height: "40px", borderRadius: "10px", border: "none", background: "#FFFFFF", color: "#1F2937", boxShadow: "0 3px 10px rgba(0,0,0,0.12)", cursor: "pointer", fontWeight: "700" }}>
+							<div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 24, paddingTop: 20, borderTop: "1px solid #E2E8F0" }}>
+								{success && <span style={{ marginRight: "auto", color: "#15803D", fontSize: 13, fontWeight: 600 }}>{success}</span>}
+								<button type="button" onClick={handleDelete} disabled={saving} style={{ padding: "10px 16px", border: "1px solid #FECACA", borderRadius: 8, fontWeight: 600, color: "#DC2626", background: "#fff", cursor: saving ? "wait" : "pointer", fontSize: 13 }}>
+									Delete
+								</button>
+								<button type="button" onClick={handleCancel} style={{ padding: "10px 20px", border: "1px solid #E2E8F0", borderRadius: 8, fontWeight: 600, color: "#475569", background: "#fff", cursor: "pointer", fontSize: 13 }}>
 									Cancel
 								</button>
-								{isEditPage && (
-									<button type="button" onClick={handleDelete} disabled={saving} style={{ minWidth: "132px", height: "40px", borderRadius: "10px", border: "none", background: "#F24C45", color: "#FFFFFF", cursor: saving ? "wait" : "pointer", fontWeight: "700" }}>
-										Delete Product
-									</button>
-								)}
-								<button type="button" onClick={handleSave} disabled={saving} style={{ minWidth: "138px", height: "40px", borderRadius: "10px", border: "none", background: saving ? "#22A84A" : "#26B44A", color: "#FFFFFF", cursor: saving ? "wait" : "pointer", fontWeight: "700" }}>
-									{saving ? "Saving..." : isEditPage ? "Update Product" : "Edit Product"}
+								<button type="button" onClick={handleSave} disabled={saving} style={{ padding: "10px 20px", border: "none", borderRadius: 8, fontWeight: 600, color: "#fff", background: "#1565C0", cursor: saving ? "wait" : "pointer", opacity: saving ? 0.7 : 1, fontSize: 13, boxShadow: "0 4px 12px rgba(21,101,192,0.2)" }}>
+									{saving ? "Saving…" : "Save Changes"}
 								</button>
 							</div>
-
-							{success && <div style={{ marginTop: "10px", color: "#15803D", fontSize: "14px", textAlign: "right" }}>{success}</div>}
 						</div>
-					</div>
+					)}
 				</div>
 			</div>
+
 
 			{isDeletePage && (
 				<div style={modalOverlayStyle}>

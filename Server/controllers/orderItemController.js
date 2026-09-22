@@ -1,6 +1,6 @@
 import pool from "../config/database.js";
-import { ROLES } from "../middleware/authMiddleware.js";
-import { emitSocketEvent, KITCHEN_SOCKET_ROOM } from "../utils/socket.js";
+import { emitSocketEvent, emitOrderEvent, getKitchenSocketRoom } from "../utils/socket.js";
+import { takeStock, returnStock, isStockProblem, noteShortfall } from "../utils/inventory.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -16,7 +16,9 @@ const MAX_UNIT_PRICE = 1_000_000;
  * Validates pro_quantity — must be a positive integer.
  */
 export function validateQuantity(pro_quantity) {
-  const qty = parseInt(pro_quantity, 10);
+  // Number(), not parseInt(): parseInt("1.5") is 1 and parseInt("3abc") is 3, so a
+  // fraction or trailing junk passed here and then failed in the database as a 500.
+  const qty = typeof pro_quantity === "string" && pro_quantity.trim() === "" ? NaN : Number(pro_quantity);
   if (isNaN(qty) || qty <= 0 || !Number.isInteger(qty)) {
     return "pro_quantity must be a positive integer";
   }
@@ -46,7 +48,7 @@ export function validateUnitPrice(unit_price) {
  */
 async function fetchOrder(order_id) {
   const { rows } = await pool.query(
-    `SELECT or_id, or_status FROM "ORDER" WHERE or_id = $1`,
+    `SELECT or_id, or_status, b_id FROM "ORDER" WHERE or_id = $1`,
     [order_id],
   );
   return rows[0] ?? null;
@@ -70,36 +72,19 @@ async function fetchBranchProduct(Bpro_id) {
  * Block mutations on orders that are already completed or cancelled.
  * Returns an error string or null if the order is still editable.
  */
-function guardOrderStatus(or_status, roleId) {
-  if (or_status === "cancelled") {
-    return `Cannot modify items on a "${or_status}" order`;
-  }
-  if (or_status === "completed" && roleId !== ROLES.CASHIER) {
+function guardOrderStatus(or_status) {
+  // A settled sale's lines are finished. The cashier used to be exempt here,
+  // because the till marked an order completed and then rewrote its lines in
+  // order to settle it — which also meant a paid sale could have items lifted
+  // off it afterwards, returning their stock while the total stood still. The
+  // till now makes its changes before it settles, so nothing needs the
+  // exemption, and nobody gets to edit a sale that has been paid for.
+  if (or_status === "cancelled" || or_status === "completed") {
     return `Cannot modify items on a "${or_status}" order`;
   }
   return null;
 }
 
-/**
- * Transaction-safe stock adjuster for order items.
- *
- * These are pre-made products — raw material ingredients are consumed at
- * prep time when the branch admin adds the product batch (via Recipe Mapper).
- * At POS sale time only the branch showcase quantity is decremented.
- * Raw materials and base product stock are NOT touched here.
- */
-export async function adjustStockForOrderItem(client, Bpro_id, quantity, operation) {
-  // Only update the branch product's showcase quantity.
-  // Recipe / raw-material deduction happens in branchProductController at prep time.
-  await client.query(
-    `UPDATE public."Branch_Product"
-       SET "pro_quantity" = GREATEST(0, "pro_quantity" ${operation === "subtract" ? "-" : "+"} $1)
-     WHERE "Bpro_id" = $2`,
-    [quantity, Bpro_id]
-  );
-
-  return []; // No raw-material warnings at sale time
-}
 
 // ─────────────────────────────────────────────
 // GET /order-items — list all order items
@@ -262,9 +247,6 @@ export const createOrderItem = async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Deduct raw material stock
-    const stockWarnings = await adjustStockForOrderItem(client, Bpro_id, qty, "subtract");
-
     const result = await client.query(
       `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id)
        VALUES ($1, $2, $3, $4, $5)
@@ -272,20 +254,37 @@ export const createOrderItem = async (req, res) => {
       [Bpro_id, qty, price, total_price, parsedOrderId],
     );
 
-    emitSocketEvent("order:created", {
-      orderId: parsedOrderId,
-      orderItem: result.rows[0],
+    // The dish is sold now, so its ingredients go now. Never refused for stock —
+    // a count that says there is none is noted for the manager instead.
+    const { short } = await takeStock(client, {
+      b_id: order.b_id,
+      order_id: parsedOrderId,
+      lines: [{ bpro_id: Number(Bpro_id), qty, order_item_id: result.rows[0].orderItem_id }],
+      u_id: req.user?.u_id ?? null,
     });
 
     await client.query("COMMIT");
+    noteShortfall(req, { b_id: order.b_id, order_id: parsedOrderId, short });
+
+    // After the commit, so a screen that reloads on the event finds the line.
+    // Only this property hears it — it used to go to every screen on the
+    // platform — and the floor's boards hear that the order changed.
+    emitSocketEvent("order:created", {
+      orderId: parsedOrderId,
+      orderItem: result.rows[0],
+      b_id: order.b_id,
+    }, { room: getKitchenSocketRoom(order.b_id) });
+    emitOrderEvent("order:items", { or_id: parsedOrderId, b_id: order.b_id });
 
     res.status(201).json({
       success: true,
       data: result.rows[0],
-      warnings: stockWarnings,
     });
   } catch (err) {
     await client.query("ROLLBACK");
+    if (isStockProblem(err)) {
+      return res.status(err.status).json({ success: false, error: err.message, short: err.short });
+    }
     if (err.code === "23503") {
       return res.status(400).json({
         success: false,
@@ -391,18 +390,15 @@ export const updateOrderItem = async (req, res) => {
     const price = parseFloat(unit_price);
     const total_price = parseFloat((price * qty).toFixed(2));
 
-    // Calculate quantity difference and adjust stock
-    if (Number(oldItem.Bpro_id) !== Number(Bpro_id)) {
-      await adjustStockForOrderItem(client, oldItem.Bpro_id, oldItem.pro_quantity, "add");
-      await adjustStockForOrderItem(client, Bpro_id, qty, "subtract");
-    } else {
-      const diff = qty - oldItem.pro_quantity;
-      if (diff > 0) {
-        await adjustStockForOrderItem(client, Bpro_id, diff, "subtract");
-      } else if (diff < 0) {
-        await adjustStockForOrderItem(client, Bpro_id, Math.abs(diff), "add");
-      }
-    }
+    // Put back exactly what this line took, then take what it needs now — one
+    // transaction, so the ledger always matches the line.
+    await returnStock(client, { order_item_id: id, u_id: req.user?.u_id ?? null });
+    const { short } = await takeStock(client, {
+      b_id: order.b_id,
+      order_id: parsedOrderId,
+      lines: [{ bpro_id: Number(Bpro_id), qty, order_item_id: id }],
+      u_id: req.user?.u_id ?? null,
+    });
 
     const result = await client.query(
       `UPDATE public."ORDER_ITEM"
@@ -413,10 +409,14 @@ export const updateOrderItem = async (req, res) => {
     );
 
     await client.query("COMMIT");
+    noteShortfall(req, { b_id: order.b_id, order_id: parsedOrderId, short });
 
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     await client.query("ROLLBACK");
+    if (isStockProblem(err)) {
+      return res.status(err.status).json({ success: false, error: err.message, short: err.short });
+    }
     if (err.code === "23503") {
       return res.status(400).json({
         success: false,
@@ -468,8 +468,8 @@ export const deleteOrderItem = async (req, res) => {
       return res.status(400).json({ success: false, error: statusError });
     }
 
-    // Restore stock levels
-    await adjustStockForOrderItem(client, item.Bpro_id, item.pro_quantity, "add");
+    // Put back exactly what this line took — nothing if it took nothing.
+    await returnStock(client, { order_item_id: id, u_id: req.user?.u_id ?? null });
 
     const result = await client.query(
       `DELETE FROM public."ORDER_ITEM" WHERE "orderItem_id" = $1 RETURNING *`,

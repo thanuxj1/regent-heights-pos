@@ -1,13 +1,16 @@
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 import { ROLES } from "../middleware/authMiddleware.js";
+import { corsOrigin, describeCorsOrigin } from "../config/env.js";
 
 let io;
 
 const BRANCH_UPDATE_ROOM = "branch-updates";
-const KITCHEN_UPDATE_ROOM = "kitchen-updates";
 
 export const getBranchSocketRoom = (b_id) => `branch:${b_id}`;
+// Each property's kitchen has a room of its own. It was one room for the whole
+// platform, so every hotel's kitchen screens heard every other hotel's orders.
+export const getKitchenSocketRoom = (b_id) => `kitchen:${b_id}`;
 export const getCompanySocketRoom = (com_id) => `company:${com_id}`;
 
 export const getCashierSocketRoom = (userId) => `cashier-updates:${userId}`;
@@ -38,7 +41,7 @@ export const initializeSocket = (httpServer) => {
 
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_URL || "*",
+      origin: corsOrigin,
       credentials: true,
     },
   });
@@ -62,12 +65,15 @@ export const initializeSocket = (httpServer) => {
     }
   });
 
-  console.log("✓ Socket.IO initialized with CORS origin:", process.env.CLIENT_URL || "*");
+  console.log("✓ Socket.IO ready — browser callers allowed:", describeCorsOrigin());
 
   io.on("connection", (socket) => {
     const roleId = Number(socket.user?.role_id);
 
-    if ([ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.BRANCH_ADMIN].includes(roleId)) {
+    // The platform-wide room carries every property's records, so only the
+    // platform's own staff sit in it. Hotel administrators used to join it too,
+    // and were sent other companies' properties as they were added or edited.
+    if (roleId === ROLES.SUPER_ADMIN) {
       socket.join(BRANCH_UPDATE_ROOM);
     }
 
@@ -99,8 +105,8 @@ export const initializeSocket = (httpServer) => {
       socket.join(getBranchSocketRoom(socket.user.b_id));
     }
 
-    if (roleId === ROLES.KITCHEN_STAFF) {
-      socket.join(KITCHEN_UPDATE_ROOM);
+    if (roleId === ROLES.KITCHEN_STAFF && socket.user?.b_id) {
+      socket.join(getKitchenSocketRoom(socket.user.b_id));
     }
 
     socket.emit("socket:ready", {
@@ -144,8 +150,9 @@ export const emitSocketEvent = (eventName, payload, options = {}) => {
   if (process.env.NODE_ENV !== "production") {
     try {
       const roomInfo = options.room ? ` to room=${options.room}` : " to all";
+      // Which event went where — not the payload, which is whole orders.
       // eslint-disable-next-line no-console
-      console.log(`Socket emit -> ${eventName}${roomInfo}`, payload);
+      console.log(`Socket emit -> ${eventName}${roomInfo}`);
     } catch (e) {
       // ignore logging errors
     }
@@ -161,7 +168,19 @@ export const emitSocketEvent = (eventName, payload, options = {}) => {
 };
 
 export const BRANCH_SOCKET_ROOM = BRANCH_UPDATE_ROOM;
-export const KITCHEN_SOCKET_ROOM = KITCHEN_UPDATE_ROOM;
+
+// A property's company, remembered for a while. Every order event asked the
+// database afresh, which in a busy service was one more query for every dish.
+const companyCache = new Map();
+async function companyOf(b_id) {
+  const hit = companyCache.get(b_id);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.com_id;
+  const { default: pool } = await import("../config/database.js");
+  const { rows } = await pool.query('SELECT com_id FROM "Branch" WHERE "B_id" = $1', [b_id]);
+  const com_id = rows[0]?.com_id ?? null;
+  companyCache.set(b_id, { com_id, at: Date.now() });
+  return com_id;
+}
 
 export const emitOrderEvent = async (eventName, order) => {
   if (!io || !order) return false;
@@ -170,10 +189,9 @@ export const emitOrderEvent = async (eventName, order) => {
     io.to(getBranchSocketRoom(b_id)).emit(eventName, order);
     // Look up company and emit to company room
     try {
-      const { default: pool } = await import("../config/database.js");
-      const { rows } = await pool.query('SELECT com_id FROM "Branch" WHERE "B_id" = $1', [b_id]);
-      if (rows[0]?.com_id) {
-        io.to(getCompanySocketRoom(rows[0].com_id)).emit(eventName, order);
+      const com_id = await companyOf(b_id);
+      if (com_id) {
+        io.to(getCompanySocketRoom(com_id)).emit(eventName, order);
       }
     } catch { /* non-critical */ }
   }

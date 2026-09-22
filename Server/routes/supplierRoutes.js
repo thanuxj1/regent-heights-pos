@@ -7,6 +7,11 @@ import {
   deleteSupplier,
 } from "../controllers/supplierController.js";
 import {
+  getSupplierLedger,
+  getSupplierHistory,
+  makeSupplierPayment
+} from "../controllers/supplierLedgerController.js";
+import {
   requireAuth,
   requireBranchAdminOrAdmin,
 } from "../middleware/authMiddleware.js";
@@ -15,6 +20,10 @@ const router = express.Router();
 
 // Apply auth + role to ALL routes at once
 router.use(requireAuth, requireBranchAdminOrAdmin);
+
+router.get("/ledger", getSupplierLedger);
+router.get("/:id/history", getSupplierHistory);
+router.post("/:id/pay", makeSupplierPayment);
 
 router.get("/",       getSuppliers);
 router.get("/:id",    getSupplierById);

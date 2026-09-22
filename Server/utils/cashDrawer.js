@@ -13,9 +13,10 @@
 // - money taken out (a supplier paid from the drawer, a run to the safe)
 // = expected cash
 //
-// Card and room-charge sales are deliberately absent: no note ever entered the
-// drawer for them, so counting them would make an honest cashier look short by
-// the value of every card sale they took.
+// Card and room-charge (billed-to-folio) sales are deliberately absent: no note
+// ever entered the drawer for them. A guest's cash advance or settlement is
+// different — that is a note handed across the desk into this same drawer — so
+// it counts, the same as a restaurant cash sale.
 
 /** Tenders that put physical money in the drawer. Everything else does not. */
 export const CASH_TENDERS = ["cash"];
@@ -28,7 +29,7 @@ export const CASH_TENDERS = ["cash"];
  * manager — it is the one action that lowers the expected figure.
  */
 export async function sessionTotals(db, session_id) {
-  const [sales, movements] = await Promise.all([
+  const [sales, movements, hotel] = await Promise.all([
     db.query(
       `SELECT
          COALESCE(SUM("or_totalCostWtax") FILTER (
@@ -52,10 +53,19 @@ export async function sessionTotals(db, session_id) {
        FROM "CASH_MOVEMENT" WHERE session_id = $1`,
       [session_id],
     ),
+    // A guest's cash advance or settlement, taken against this same drawer. A
+    // refund handed back in cash comes back out of it, the same as a void.
+    db.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE method = ANY($2::text[]) AND kind <> 'refund'), 0) AS hotel_cash_in,
+         COALESCE(SUM(amount) FILTER (WHERE method = ANY($2::text[]) AND kind = 'refund'), 0)   AS hotel_cash_refunds,
+         COUNT(*) FILTER (WHERE method = ANY($2::text[])) AS hotel_cash_payments
+       FROM "BOOKING_PAYMENT" WHERE session_id = $1`,
+      [session_id, CASH_TENDERS],
+    ),
   ]);
 
-  const s = sales.rows[0];
-  const m = movements.rows[0];
+  const [s, m, h] = [sales.rows[0], movements.rows[0], hotel.rows[0]];
   const n = (v) => Number(v || 0);
 
   return {
@@ -68,6 +78,9 @@ export async function sessionTotals(db, session_id) {
     pay_in:         +n(m.pay_in).toFixed(2),
     pay_out:        +n(m.pay_out).toFixed(2),
     drops:          +n(m.drops).toFixed(2),
+    hotel_cash_in:      +n(h.hotel_cash_in).toFixed(2),
+    hotel_cash_refunds: +n(h.hotel_cash_refunds).toFixed(2),
+    hotel_cash_payments: Number(h.hotel_cash_payments),
   };
 }
 
@@ -79,6 +92,8 @@ export function expectedCash(openingFloat, totals) {
     + totals.pay_in
     - totals.pay_out
     - totals.drops
+    + (totals.hotel_cash_in || 0)
+    - (totals.hotel_cash_refunds || 0)
   ).toFixed(2);
 }
 

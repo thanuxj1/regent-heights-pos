@@ -16,7 +16,8 @@ import { FaDownload } from "react-icons/fa";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import { useAuth } from "../../context/AuthContext";
-import { getOrders, getUsers } from "../../services/api";
+import { getOrders, getUsers, getReportTransactions } from "../../services/api";
+import { dayKey, dayOffset } from "../../utils/dates";
 import topPerformerIcon from "../../assets/images/top performer.png";
 import timeIcon from "../../assets/images/time.png";
 import salesIcon from "../../assets/images/sales.png";
@@ -39,19 +40,27 @@ const formatCurrency = (value) => {
 	return `LKR ${number.toFixed(2)}`;
 };
 
-const getDateKey = (date) => {
-	if (!date) return "";
-	if (typeof date === "string") return date.slice(0, 10);
-	return new Date(date).toISOString().slice(0, 10);
+// The hotel's calendar day — see utils/dates.js for why toISOString().slice(0, 10) was wrong.
+const getDateKey = (date) => dayKey(date);
+
+// How long an order took from being placed to being completed, in minutes.
+const minutesToComplete = (order) => {
+	if (!order?.status_changed_at || !order?.or_time || !order?.or_date) return null;
+	const start = new Date(`${dayKey(order.or_date)}T${String(order.or_time).slice(0, 8)}`);
+	const minutes = (new Date(order.status_changed_at) - start) / 60000;
+	return Number.isFinite(minutes) && minutes >= 0 && minutes <= 720 ? minutes : null;
 };
 
 const CashierPerformance = () => {
 	const { user } = useAuth();
 	const [orders, setOrders] = useState([]);
 	const [users, setUsers] = useState([]);
+	const [hotelPayments, setHotelPayments] = useState([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [timeRange, setTimeRange] = useState("30days");
+	const [page, setPage] = useState(1);
+	const PAGE_SIZE = 6;
 
 	useEffect(() => {
 		let isMounted = true;
@@ -65,16 +74,23 @@ const CashierPerformance = () => {
 				params.b_id = user.b_id;
 			}
 
-			const results = await Promise.allSettled([getOrders(params), getUsers()]);
+			// The front desk takes money too — room deposits and settlements are the same
+			// till work, so they count toward whoever received them.
+			const hotelReq = user?.b_id
+				? getReportTransactions({ b_id: user.b_id, kind: "hotel", from: dayOffset(-29), to: dayOffset(0) })
+				: Promise.resolve({ transactions: [] });
+			const results = await Promise.allSettled([getOrders(params), getUsers(), hotelReq]);
 
 			if (!isMounted) return;
 
-			const [ordersResult, usersResult] = results;
+			const [ordersResult, usersResult, hotelResult] = results;
 			const nextOrders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
 			const nextUsers = usersResult.status === "fulfilled" ? usersResult.value : [];
 
 			setOrders(Array.isArray(nextOrders) ? nextOrders : []);
 			setUsers(Array.isArray(nextUsers) ? nextUsers : []);
+			const nextHotel = hotelResult.status === "fulfilled" ? hotelResult.value?.transactions : [];
+			setHotelPayments(Array.isArray(nextHotel) ? nextHotel : []);
 
 			if (results.some((result) => result.status === "rejected")) {
 				setError("Some performance data could not be loaded.");
@@ -97,7 +113,7 @@ const CashierPerformance = () => {
 		for (let i = total - 1; i >= 0; i -= 1) {
 			const date = new Date();
 			date.setDate(date.getDate() - i);
-			const key = date.toISOString().slice(0, 10);
+			const key = dayKey(date);
 			const label = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 			days.push({ key, label });
 		}
@@ -110,9 +126,22 @@ const CashierPerformance = () => {
 		return orders.filter((order) => rangeKeys.has(getDateKey(order?.or_date)));
 	}, [orders, rangeKeys]);
 
+	// Room payments taken in this range, by the person who took them.
+	const rangeHotel = useMemo(
+		() => hotelPayments.filter((t) => t?.handled_by_id && rangeKeys.has(dayKey(t.at))),
+		[hotelPayments, rangeKeys],
+	);
+
+	// Cashiers, plus anyone else who rang up a sale or took a room payment in this range.
+	// Only role-3 accounts were counted, so an owner's or a front-desk person's takings
+	// vanished from every total.
 	const cashierUsers = useMemo(() => {
-		return users.filter((item) => Number(item?.role_id) === 3);
-	}, [users]);
+		const sellers = new Set([
+			...rangeOrders.map((order) => order?.u_id),
+			...rangeHotel.map((t) => t.handled_by_id),
+		].filter(Boolean));
+		return users.filter((item) => Number(item?.role_id) === 3 || sellers.has(item?.u_id));
+	}, [users, rangeOrders, rangeHotel]);
 
 	const cashierStats = useMemo(() => {
 		const totals = new Map();
@@ -129,16 +158,22 @@ const CashierPerformance = () => {
 		return cashierUsers.map((cashier) => {
 			const metrics = totals.get(cashier.u_id) || { revenue: 0, orders: 0 };
 			const avgOrder = metrics.orders ? metrics.revenue / metrics.orders : 0;
+			const mine = rangeHotel.filter((t) => t.handled_by_id === cashier.u_id);
+			// refunds go back out of the till
+			const hotel = mine.reduce((sum, t) => sum + (t.direction === "out" ? -1 : 1) * Number(t.amount || 0), 0);
 			return {
 				id: cashier.u_id,
 				name:
 					`${cashier.u_fname || ""} ${cashier.u_lname || ""}`.trim() || "Staff",
-				revenue: metrics.revenue,
+				sales: metrics.revenue,
+				hotel,
+				hotelCount: mine.length,
+				revenue: metrics.revenue + hotel,
 				orders: metrics.orders,
 				avgOrder,
 			};
 		});
-	}, [cashierUsers, rangeOrders]);
+	}, [cashierUsers, rangeOrders, rangeHotel]);
 
 	const sortedCashiers = useMemo(() => {
 		return [...cashierStats].sort((a, b) => b.revenue - a.revenue);
@@ -152,17 +187,37 @@ const CashierPerformance = () => {
 		return sortedCashiers.reduce((sum, cashier) => sum + cashier.orders, 0);
 	}, [sortedCashiers]);
 
+	// The average restaurant order — room payments are not orders.
 	const avgOrderValue = useMemo(() => {
 		if (!totalOrders) return 0;
-		return totalRevenue / totalOrders;
-	}, [totalRevenue, totalOrders]);
+		return sortedCashiers.reduce((sum, c) => sum + c.sales, 0) / totalOrders;
+	}, [sortedCashiers, totalOrders]);
 
 	const topCashier = sortedCashiers[0];
 
+	// Measured from the orders, not a constant: order placed to order completed.
 	const avgProcessingTime = useMemo(() => {
-		if (!rangeOrders.length) return "--";
-		return "2m 14s";
-	}, [rangeOrders.length]);
+		const times = rangeOrders.map(minutesToComplete).filter((m) => m !== null);
+		if (!times.length) return "--";
+		const seconds = Math.round((times.reduce((sum, m) => sum + m, 0) / times.length) * 60);
+		return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+	}, [rangeOrders]);
+
+	const exportCsv = () => {
+		if (!sortedCashiers.length) return;
+		const quote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+		const rows = [
+			["Rank", "Staff", "Restaurant orders", "Restaurant sales (LKR)", "Room payments", "Room payments taken (LKR)", "Total collected (LKR)", "Average order (LKR)"],
+			...sortedCashiers.map((c, i) => [i + 1, c.name, c.orders, c.sales.toFixed(2), c.hotelCount, c.hotel.toFixed(2), c.revenue.toFixed(2), c.avgOrder.toFixed(2)]),
+		];
+		const csv = rows.map((r) => r.map(quote).join(",")).join("\n");
+		const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `cashier-performance_${rangeDays[0]?.key}_to_${rangeDays[rangeDays.length - 1]?.key}.csv`;
+		a.click();
+		URL.revokeObjectURL(url);
+	};
 
 	const revenueChartData = useMemo(() => {
 		const topEntries = sortedCashiers.slice(0, 6);
@@ -175,10 +230,15 @@ const CashierPerformance = () => {
 			}),
 			datasets: [
 				{
-					label: "Primary Revenue",
-					data: topEntries.map((entry) => entry.revenue),
+					label: "Restaurant sales",
+					data: topEntries.map((entry) => entry.sales),
 					backgroundColor: "#0D5EA8",
-					borderRadius: 12,
+					barThickness: 26,
+				},
+				{
+					label: "Room payments taken",
+					data: topEntries.map((entry) => entry.hotel),
+					backgroundColor: "#22C55E",
 					barThickness: 26,
 				},
 			],
@@ -190,14 +250,19 @@ const CashierPerformance = () => {
 		maintainAspectRatio: false,
 		plugins: { legend: { display: false }, tooltip: { enabled: true } },
 		scales: {
-			x: { grid: { display: false }, ticks: { color: "#94A3B8", font: { size: 10 } } },
-			y: { display: false, grid: { display: false } },
+			x: { stacked: true, grid: { display: false }, ticks: { color: "#94A3B8", font: { size: 10 } } },
+			y: { stacked: true, display: false, grid: { display: false } },
 		},
 	};
 
+	const pageCount = Math.max(1, Math.ceil(sortedCashiers.length / PAGE_SIZE));
+	const safePage = Math.min(page, pageCount);
+	const pageStart = (safePage - 1) * PAGE_SIZE;
+	const pageRows = sortedCashiers.slice(pageStart, pageStart + PAGE_SIZE);
+
 	const statusForCashier = (cashier, index) => {
 		if (index === 0) return { label: "Top Performer", color: "bg-green-100 text-green-700" };
-		if (cashier.revenue >= avgOrderValue * cashier.orders) {
+		if (cashier.orders > 0 && cashier.sales >= avgOrderValue * cashier.orders) {
 			return { label: "High Efficiency", color: "bg-emerald-100 text-emerald-700" };
 		}
 		if (cashier.revenue >= totalRevenue * 0.2) {
@@ -216,17 +281,24 @@ const CashierPerformance = () => {
 					<div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
 						<h2 className="text-[22px] font-bold text-slate-900">Cashier Performance</h2>
 						<div className="flex items-center gap-3">
-							<button
-								type="button"
-								onClick={() => setTimeRange("30days")}
-								className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm"
-							>
+							<label className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm">
 								<span className="text-slate-400">📅</span>
-								Last 30 Days
-							</button>
+								<select
+									value={timeRange}
+									onChange={(e) => { setTimeRange(e.target.value); setPage(1); }}
+									className="bg-transparent text-xs font-semibold text-slate-600 outline-none"
+									aria-label="Date range"
+								>
+									<option value="today">Today</option>
+									<option value="weekly">Last 7 days</option>
+									<option value="30days">Last 30 days</option>
+								</select>
+							</label>
 							<button
 								type="button"
-								className="flex items-center gap-2 rounded-full bg-[#0D5EA8] px-4 py-2 text-xs font-semibold text-white shadow"
+								onClick={exportCsv}
+								disabled={!sortedCashiers.length}
+								className="flex items-center gap-2 rounded-full bg-[#0D5EA8] px-4 py-2 text-xs font-semibold text-white shadow disabled:cursor-not-allowed disabled:opacity-50"
 							>
 								<FaDownload />
 								Export Report
@@ -280,12 +352,12 @@ const CashierPerformance = () => {
 							<div className="w-10 h-10 rounded-full  flex items-center justify-center">
 								<img
 									src={salesIcon}
-									alt="Total branch sales"
+									alt="Total collected"
 									className="h-10 w-10 object-contain"
 								/>
 							</div>
 							<div>
-								<div className="text-xs font-semibold text-gray-700">Total Branch Sales</div>
+								<div className="text-xs font-semibold text-gray-700">Total Collected</div>
 								<div className="text-sm font-semibold text-slate-900">
 									{isLoading ? "..." : formatCurrency(totalRevenue)}
 								</div>
@@ -302,12 +374,14 @@ const CashierPerformance = () => {
 					<div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm mb-6">
 						<div className="flex items-center justify-between">
 							<div>
-								<h3 className="text-sm font-semibold text-slate-900">Revenue Distribution by Cashier</h3>
-								<p className="text-xs text-slate-400">Comparison of total sales generated per staff member</p>
+								<h3 className="text-sm font-semibold text-slate-900">Takings by Staff Member</h3>
+								<p className="text-xs text-slate-400">Restaurant sales and room payments taken, per staff member</p>
 							</div>
 							<div className="flex items-center gap-2 text-xs text-slate-500">
 								<span className="h-2 w-2 rounded-full bg-[#0D5EA8]" />
-								Primary Revenue
+								Restaurant sales
+								<span className="ml-3 h-2 w-2 rounded-full bg-[#22C55E]" />
+								Room payments taken
 							</div>
 						</div>
 						<div className="h-56 mt-4">
@@ -329,31 +403,31 @@ const CashierPerformance = () => {
 								<thead>
 									<tr className="text-slate-400 text-[11px] text-left border-b">
 										<th className="py-3">Cashier Name</th>
-										<th className="py-3">Total Orders</th>
-										<th className="py-3">Revenue</th>
+										<th className="py-3">Restaurant orders</th>
+										<th className="py-3">Restaurant sales</th><th className="py-3">Room payments taken</th><th className="py-3">Total</th>
 										<th className="py-3">Performance Status</th>
 									</tr>
 								</thead>
 								<tbody>
 									{sortedCashiers.length === 0 && !isLoading && (
 										<tr>
-											<td colSpan="4" className="py-4 text-slate-500">
+											<td colSpan="6" className="py-4 text-slate-500">
 												No cashier data available.
 											</td>
 										</tr>
 									)}
-									{(isLoading ? Array.from({ length: 4 }) : sortedCashiers.slice(0, 4)).map((cashier, index) => {
+									{(isLoading ? Array.from({ length: 4 }) : pageRows).map((cashier, index) => {
 										if (!cashier) {
 											return (
 												<tr key={`cashier-row-${index}`} className="border-b">
-													<td colSpan="4" className="py-4">
+													<td colSpan="6" className="py-4">
 														<div className="h-4 bg-slate-100 rounded animate-pulse" />
 													</td>
 												</tr>
 											);
 										}
 
-										const status = statusForCashier(cashier, index);
+										const status = statusForCashier(cashier, pageStart + index);
 										const initials = cashier.name
 											.split(" ")
 											.map((part) => part[0])
@@ -372,7 +446,12 @@ const CashierPerformance = () => {
 													</div>
 												</td>
 												<td className="py-3 text-slate-500">{cashier.orders}</td>
-												<td className="py-3 text-slate-500">{formatCurrency(cashier.revenue)}</td>
+												<td className="py-3 text-slate-500">{formatCurrency(cashier.sales)}</td>
+													<td className="py-3 text-slate-500">
+														{formatCurrency(cashier.hotel)}
+														{cashier.hotelCount > 0 && <span className="ml-1 text-[10px] text-slate-400">({cashier.hotelCount})</span>}
+													</td>
+													<td className="py-3 font-semibold text-slate-700">{formatCurrency(cashier.revenue)}</td>
 												<td className="py-3">
 													<span className={`px-3 py-1 rounded-full text-[11px] font-semibold ${status.color}`}>
 														{status.label}
@@ -386,17 +465,32 @@ const CashierPerformance = () => {
 						</div>
 
 						<div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-[11px] text-slate-400">
-							<div>Showing 4 of {cashierUsers.length || 0} cashiers registered</div>
-							<div className="flex items-center gap-2">
-								<button type="button" className="px-3 py-1 rounded-lg border border-slate-200 bg-white text-slate-500">
-									Previous
-								</button>
-								<button type="button" className="h-7 w-7 rounded-lg bg-[#0D5EA8] text-white">1</button>
-								<button type="button" className="h-7 w-7 rounded-lg border border-slate-200 text-slate-500">2</button>
-								<button type="button" className="px-3 py-1 rounded-lg border border-slate-200 bg-white text-slate-500">
-									Next
-								</button>
+							<div>
+							{sortedCashiers.length === 0
+									? "No orders in this period"
+									: `Showing ${pageStart + 1}–${pageStart + pageRows.length} of ${sortedCashiers.length} staff`}
 							</div>
+							{pageCount > 1 && (
+								<div className="flex items-center gap-2">
+									<button
+										type="button"
+										onClick={() => setPage(safePage - 1)}
+										disabled={safePage <= 1}
+										className="px-3 py-1 rounded-lg border border-slate-200 bg-white text-slate-500 disabled:opacity-40"
+									>
+										Previous
+									</button>
+									<span className="px-1">Page {safePage} of {pageCount}</span>
+									<button
+										type="button"
+										onClick={() => setPage(safePage + 1)}
+										disabled={safePage >= pageCount}
+										className="px-3 py-1 rounded-lg border border-slate-200 bg-white text-slate-500 disabled:opacity-40"
+									>
+										Next
+									</button>
+								</div>
+							)}
 						</div>
 					</div>
 				</div>

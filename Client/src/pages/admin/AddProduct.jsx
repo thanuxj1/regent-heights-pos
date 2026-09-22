@@ -102,7 +102,7 @@ const AddProduct = () => {
     tax_group: "5",
     track_inventory: true,
     low_stock: "10",
-    add_ons: { Cheese: true, Bacon: true },
+    add_ons: {},
     stations: { Kitchen: true, Bar: true },
   });
 
@@ -178,10 +178,15 @@ const AddProduct = () => {
 
     try {
       setSubmitting(true);
-      const com_id = user?.com_id ?? 1;
+      // No silent fallback to company 1: an item filed under somebody else's
+      // company is worse than an item that was not created.
+      const com_id = user?.com_id;
+      if (!com_id) { setError("Your account is not linked to a company, so a product cannot be filed."); setSubmitting(false); return; }
       await createProduct({
         pro_name: form.pro_name.trim(),
-        pro_qty: Number(form.pro_qty) || 0,
+        // Made to order means nothing is counted, so nothing is stored — a
+        // figure here would be a number that stands for nothing.
+        pro_qty: form.track_inventory ? Number(form.pro_qty) || 0 : 0,
         pro_price: Number(form.pro_price),
         cost_price: Number(form.cost_price) || 0,
         pro_image: form.pro_image.trim(),
@@ -272,7 +277,13 @@ const AddProduct = () => {
                   </div>
                   <div>
                     <label style={labelStyle}>Quantity</label>
-                    <input type="number" min="0" style={inputStyle} value={form.pro_qty} onChange={handleChange("pro_qty")} />
+                    {form.track_inventory ? (
+                    	<input type="number" min="0" style={inputStyle} value={form.pro_qty} onChange={handleChange("pro_qty")} />
+                    ) : (
+                    	<div title="Made to order — nothing is counted" style={{ ...inputStyle, display: "flex", alignItems: "center", color: "#94A3B8", background: "#F8FAFC" }}>
+                    		—
+                    	</div>
+                    )}
                   </div>
                 </div>
 
@@ -430,10 +441,17 @@ const AddProduct = () => {
               </div>
 
               {/* TRACK INVENTORY */}
-              <h2 style={{ ...sectionTitleStyle, fontSize: "20px", marginTop: "22px", marginBottom: "8px" }}>Track Inventory</h2>
+              <h2 style={{ ...sectionTitleStyle, fontSize: "20px", marginTop: "22px", marginBottom: "8px" }}>Stock</h2>
               <div style={cardStyle}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
-                  <div style={{ fontSize: "14px", fontWeight: "700", color: "#374151" }}>Track Inventory</div>
+                  <div>
+                  	<div style={{ fontSize: "14px", fontWeight: "700", color: "#374151" }}>Counted stock</div>
+                  	<div style={{ fontSize: "11px", color: "#6B7280", marginTop: "2px", maxWidth: "420px", lineHeight: 1.45 }}>
+                  		{form.track_inventory
+                  			? "It sits on the rack in a number — a tray of pastries, bottled drinks — and that number goes down as it sells."
+                  			: "Made to order: cooked when the customer asks. Nothing is counted and it never reads out of stock. If it has a recipe, the till takes the ingredients instead."}
+                  	</div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setForm((prev) => ({ ...prev, track_inventory: !prev.track_inventory }))}
@@ -445,7 +463,7 @@ const AddProduct = () => {
                   </button>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", opacity: form.track_inventory ? 1 : 0.45, pointerEvents: form.track_inventory ? "auto" : "none" }}>
                   <div>
                     <label style={labelStyle}>Current stock</label>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -507,7 +525,7 @@ const AddProduct = () => {
             <p style={{ margin: "0 0 20px", fontSize: "14px", color: "#6B7280" }}>The product has been created successfully.</p>
             <div style={{ display: "flex", gap: "12px" }}>
               <button
-                onClick={() => { setSuccess(false); setForm({ pro_name: "", cat_id: categories[0]?.cat_id ? String(categories[0].cat_id) : "", pro_qty: "0", pro_price: "", cost_price: "", pro_image: "", description: "", discount_pct: "0", tax_group: "5", track_inventory: true, low_stock: "10", add_ons: { Cheese: true, Bacon: true }, stations: { Kitchen: true, Bar: true } }); }}
+                onClick={() => { setSuccess(false); setForm({ pro_name: "", cat_id: categories[0]?.cat_id ? String(categories[0].cat_id) : "", pro_qty: "0", pro_price: "", cost_price: "", pro_image: "", description: "", discount_pct: "0", tax_group: "5", track_inventory: true, low_stock: "10", add_ons: {}, stations: { Kitchen: true, Bar: true } }); }}
                 style={{ flex: 1, height: "42px", border: "1px solid #E5E7EB", borderRadius: "10px", background: "#fff", color: "#374151", fontWeight: "600", cursor: "pointer" }}
               >
                 Add Another

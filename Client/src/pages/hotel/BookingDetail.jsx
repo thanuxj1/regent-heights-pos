@@ -5,7 +5,9 @@ import { useAuth } from "../../context/AuthContext";
 import {
   getBookingById, getBookingFolio, getRooms, checkInBooking, checkOutBooking,
   postFolioItem, deleteFolioItem, addBookingPayment, cancelBooking, getBookingConfirmation,
+  getGuests, getAgents,
 } from "../../services/api";
+import { BookingFormModal } from "./Bookings";
 import {
   card, input, label, btn, badge, th, td,
   modalWrap, modalBox, errorBox, money, dmy, initials, STATUS_STYLE,
@@ -40,6 +42,7 @@ export default function BookingDetail() {
   const [showPayment, setShowPayment] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
+  const [editing, setEditing] = useState(null); // { guests, agents } once loaded, while the form is open
 
   const load = useCallback(async () => {
     try {
@@ -96,6 +99,15 @@ export default function BookingDetail() {
       return run("check-out", () => checkOutBooking(id, { ...extra, settle_amount: balance, method: "cash" }));
     }
     return run("check-out", () => checkOutBooking(id, extra));
+  };
+
+  // The form needs the guest list (to fill in the guest's own details) and the agents.
+  const openEdit = async () => {
+    setError("");
+    try {
+      const [g, a] = await Promise.all([getGuests(), getAgents({ b_id: branchId })]);
+      setEditing({ guests: g, agents: a });
+    } catch (err) { setError(err?.response?.data?.message || "Could not open the booking for editing"); }
   };
 
   const openConfirmation = async () => {
@@ -203,6 +215,9 @@ export default function BookingDetail() {
 
             <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}>
               <button onClick={openConfirmation} style={btn("ghost")}>📄 Confirmation</button>
+              {["tentative", "confirmed", "checked_in"].includes(booking.status) && (
+                <button onClick={openEdit} style={btn("ghost")}>✎ Edit Booking</button>
+              )}
               {canCheckIn && (
                 <button onClick={doCheckIn} disabled={busy === "check-in"} style={btn("success")}>
                   {busy === "check-in" ? "Checking in…" : "✓ Check In"}
@@ -352,6 +367,16 @@ export default function BookingDetail() {
       {showCharge   && <ChargeModal  onClose={() => setShowCharge(false)}  onSave={async (p) => { await postFolioItem(id, p); setShowCharge(false); load(); }} />}
       {showPayment  && <PaymentModal balance={balance} onClose={() => setShowPayment(false)} onSave={async (p) => { await addBookingPayment(id, p); setShowPayment(false); load(); }} />}
       {showConfirm && confirmation && <ConfirmationModal data={confirmation} onClose={() => setShowConfirm(false)} />}
+      {editing && (
+        <BookingFormModal
+          branchId={branchId}
+          guests={editing.guests}
+          agents={editing.agents}
+          initial={booking}
+          onClose={() => setEditing(null)}
+          onCreated={() => { setEditing(null); load(); }}
+        />
+      )}
     </AppShell>
   );
 }
@@ -463,13 +488,21 @@ function ConfirmationModal({ data, onClose }) {
   const [copied, setCopied] = useState(false);
   const b = data.booking;
   const hotel = data.hotel || {};
-  // The property's own house times, not a number baked into this file.
-  const inTime  = data.policy?.check_in_pretty  || "2:00 PM";
-  const outTime = data.policy?.check_out_pretty || "11:00 AM";
-  const cancelLine = data.policy?.cancellation_line
-    || "Free cancellation up to 48 hours before arrival; otherwise a 1 night stay charge applies.";
+  // The hotel's own times and cancellation rule, and nothing else: until the
+  // owner has saved their stay policy the server sends none, and none is printed.
+  const inTime  = data.policy?.check_in_pretty  || null;
+  const outTime = data.policy?.check_out_pretty || null;
+  const cancelLine = data.policy?.cancellation_line || null;
+  const policySet = Boolean(data.policy?.policy_saved);
   const paid = Number(b.paid_total || 0);
   const docRef = useRef(null);
+  const ownTerms = String(data.policy?.extra_terms ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // Names are keyed in as they are said ("eden hazard", "premium"); a printed
+  // letter should read properly. Only an all-lowercase word gets its capital, so
+  // "McDonald" and "O'Neil" are left as typed.
+  const properCase = (s) => String(s || "").replace(/\b[a-z][a-z'’-]*\b/g, (w) => w[0].toUpperCase() + w.slice(1));
+  const guestName = properCase(b.guest_name);
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(data.whatsapp_text); setCopied(true); setTimeout(() => setCopied(false), 2000); }
@@ -501,6 +534,13 @@ function ConfirmationModal({ data, onClose }) {
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" }}>✕</button>
         </div>
 
+        {!policySet && (
+          <div className="no-print" style={{ ...errorBox, background: "#EFF6FF", borderColor: "#BFDBFE", color: "#1E40AF", marginBottom: 14 }}>
+            Your check-in and check-out times and your cancellation rule aren't on this confirmation, because you haven't
+            set them yet. <a href="/branch-admin/hotel-profile" style={{ color: "#1565C0", fontWeight: 600 }}>Set them in Hotel Profile → Stay policy</a>.
+          </div>
+        )}
+
         {/* The printed document. Mirrors the property's paper confirmation. */}
         <div ref={docRef} style={{ border: "1px solid #E2E8F0", borderRadius: 10, padding: 24, color: "#1E293B" }}>
 
@@ -509,7 +549,8 @@ function ConfirmationModal({ data, onClose }) {
             <div>
               {/* The property's own mark, not the POS product logo. */}
               <img src={DOCUMENT_LOGO} alt="" onError={hideIfMissing}
-                style={{ maxHeight: 62, maxWidth: 230, objectFit: "contain", marginBottom: 8, display: "block" }} />
+                style={{ height: 68, width: "auto", maxWidth: 240, objectFit: "contain", objectPosition: "left center",
+                         marginBottom: 10, display: "block" }} />
               <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: 0.3 }}>
                 {(hotel.B_name || "Hotel").toUpperCase()}
               </div>
@@ -531,7 +572,7 @@ function ConfirmationModal({ data, onClose }) {
           </div>
 
           <div style={{ fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
-            Dear {b.guest_name || "Guest"},<br />
+            Dear {guestName || "Guest"},<br />
             Thank you for choosing {hotel.B_name || "us"}. We are pleased to inform you that your
             reservation is <strong>CONFIRMED</strong> and your details are as follows:
           </div>
@@ -539,7 +580,7 @@ function ConfirmationModal({ data, onClose }) {
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>RESERVATION DETAILS</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px", marginBottom: 16 }}>
             <div>
-              <L k="Guest Name" v={b.guest_name} />
+              <L k="Guest Name" v={guestName} />
               <L k="Country / Region" v={b.guest_country} />
               <L k="Email" v={b.guest_email} />
               <L k="Arrival Time" v={b.arrival_time?.slice(0, 5)} />
@@ -549,8 +590,8 @@ function ConfirmationModal({ data, onClose }) {
               <L k="Check-In Date" v={dmy(b.check_in_date)} />
               <L k="Check-Out Date" v={dmy(b.check_out_date)} />
               <L k="No. of Nights" v={b.nights} />
-              <L k="Check-In Time" v={inTime} />
-              <L k="Check-Out Time" v={outTime} />
+              {inTime && <L k="Check-In Time" v={inTime} />}
+              {outTime && <L k="Check-Out Time" v={outTime} />}
             </div>
           </div>
 
@@ -568,7 +609,7 @@ function ConfirmationModal({ data, onClose }) {
               {(b.rooms || []).map(r => (
                 <tr key={r.booking_room_id}>
                   <td style={{ padding: "6px 8px", border: "1px solid #E2E8F0" }}>
-                    {r.type_name}{r.room_number ? ` (Room ${r.room_number})` : ""}
+                    {properCase(r.type_name)}{r.room_number ? ` (Room ${r.room_number})` : ""}
                   </td>
                   <td style={{ padding: "6px 8px", border: "1px solid #E2E8F0" }}>
                     {b.adults} Adult{b.adults === 1 ? "" : "s"}{b.children ? `, ${b.children} Child` : ""}
@@ -606,15 +647,17 @@ function ConfirmationModal({ data, onClose }) {
             </div>
           </div>
 
-          <div style={{ marginTop: 20, paddingTop: 12, borderTop: "1px solid #E2E8F0" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 5 }}>Terms &amp; Conditions / Stay Policies</div>
-            <ol style={{ fontSize: 10, color: "#475569", lineHeight: 1.7, paddingLeft: 16, margin: 0 }}>
-              <li>Standard check-in time is {inTime} and check-out time is {outTime}.</li>
-              <li>Please present a printed copy of this confirmation voucher along with a valid ID card or Passport upon arrival.</li>
-              <li>Cancellation policy: {cancelLine}</li>
-              <li>All rates are inclusive of local service fees and government taxes unless indicated otherwise.</li>
-            </ol>
-          </div>
+          {(inTime || outTime || cancelLine || ownTerms.length > 0) && (
+            <div style={{ marginTop: 20, paddingTop: 12, borderTop: "1px solid #E2E8F0" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 5 }}>Terms &amp; Conditions / Stay Policies</div>
+              <ol style={{ fontSize: 10, color: "#475569", lineHeight: 1.7, paddingLeft: 16, margin: 0 }}>
+                {inTime && outTime && <li>Standard check-in time is {inTime} and check-out time is {outTime}.</li>}
+                {cancelLine && <li>Cancellation policy: {cancelLine}</li>}
+                {/* The hotel's own lines, written on the Hotel Profile page. */}
+                {ownTerms.map((line, i) => <li key={i}>{line}</li>)}
+              </ol>
+            </div>
+          )}
         </div>
 
         {!b.guest_phone && (

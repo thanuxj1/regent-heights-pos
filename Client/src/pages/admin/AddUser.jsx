@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaArrowLeft, FaCheck } from "react-icons/fa";
+import { Link } from "react-router-dom";
 import Sidebar from "../../components/admin/Sidebar";
 import Header from "../../components/admin/Header";
 import Button from "../../components/admin/Button";
@@ -10,7 +11,6 @@ import profileImage from "../../assets/images/Ellipse 11.png";
 import plusImage from "../../assets/images/Plus circle.png";
 import { createUser, getBranches, getRoles } from "../../services/api";
 import { assignableRoles } from "../../constants/roles";
-import {Link} from 'react-router-dom';
 const AddUser = () => {
 	const [formData, setFormData] = useState({
 		firstName: "",
@@ -21,7 +21,9 @@ const AddUser = () => {
 		branch: "",
 		password: "",
 		confirmPassword: "",
+		image: "",
 	});
+	const photoRef = useRef(null);
 	const [roles, setRoles] = useState([]);
 	const [branches, setBranches] = useState([]);
 	const [isLoadingOptions, setIsLoadingOptions] = useState(true);
@@ -107,25 +109,27 @@ const AddUser = () => {
 		try {
 			setIsSubmitting(true);
 			await createUser({
-				u_fname: formData.firstName,
-				u_lname: formData.lastName,
-				u_email: formData.email,
-				u_pw: formData.password,
-				u_connumber: formData.contactNumber || null,
-				role_id: Number(formData.role),
-				b_id: formData.branch ? Number(formData.branch) : null,
-			});
+			u_fname: formData.firstName,
+			u_lname: formData.lastName,
+			u_email: formData.email,
+			u_pw: formData.password,
+			u_connumber: formData.contactNumber || null,
+			role_id: Number(formData.role),
+			b_id: formData.branch ? Number(formData.branch) : null,
+			u_image: formData.image || null,
+		});
 
 			setShowSuccessToast(true);
 			setFormData((prev) => ({
-				...prev,
-				firstName: "",
-				lastName: "",
-				email: "",
-				contactNumber: "",
-				password: "",
-				confirmPassword: "",
-			}));
+			...prev,
+			firstName: "",
+			lastName: "",
+			email: "",
+			image: "",
+			contactNumber: "",
+			password: "",
+			confirmPassword: "",
+		}));
 		} catch (error) {
 			setErrorMessage(error?.response?.data?.message || "Failed to create user");
 		} finally {
@@ -141,177 +145,154 @@ const AddUser = () => {
 				<Header title="User Management" />
 
 				<div style={{ padding: "18px 24px 28px" }}>
-				<a href="/users">	<div
-						style={{
-							display: "inline-flex",
-							alignItems: "center",
-							gap: "8px",
-							color: "#6A6A6A",
-							fontSize: "14px",
-							fontWeight: "500",
-							marginBottom: "14px",
-							cursor: "pointer",
-						}}
-					>
-						
-						<FaArrowLeft size={14} />
-						<span>Back to User Management</span>
-						
-						
-						
-					</div>
-</a>
-					<div style={{ maxWidth: "980px", margin: "0 auto" }}>
-						<h1
-							style={{
-								margin: "0 0 22px",
-								textAlign: "center",
-								fontSize: "42px",
-								fontWeight: "700",
-								color: "#111",
-							}}
-						>
-							Add New User
-						</h1>
+					<Link to="/users" style={{ textDecoration: "none" }}>
+						<div style={{ display: "inline-flex", alignItems: "center", gap: "8px", color: "#6A6A6A", fontSize: "14px", fontWeight: "500", marginBottom: "14px", cursor: "pointer" }}>
+							<FaArrowLeft size={14} />
+							<span>Back to User Management</span>
+						</div>
+					</Link>
+					<div style={{ maxWidth: "820px", margin: "0 auto" }}>
+						{/* Card — no overflow:hidden so avatar is never clipped */}
+						<div style={{ background: "#fff", borderRadius: "18px", boxShadow: "0 4px 24px rgba(30,50,100,0.09)" }}>
 
-						<div
-							style={{
-								display: "grid",
-								gridTemplateColumns: "160px 1fr",
-								gap: "26px",
-								alignItems: "start",
-							}}
-						>
-							<div
-								style={{
-									width: "126px",
-									height: "126px",
-									borderRadius: "50%",
-									display: "flex",
-									alignItems: "center",
-									justifyContent: "center",
-									position: "relative",
-									marginTop: "6px",
-								}}
-							>
-								<img
-									src={profileImage}
-									alt="User profile"
-									style={{ width: "126px", height: "126px", objectFit: "contain" }}
-								/>
-								<img
-									src={plusImage}
-									alt="Add profile"
+							{/* Banner — rounded only on top */}
+							<div style={{
+								height: "120px",
+								background: "linear-gradient(120deg, #1565C0 0%, #42a5f5 100%)",
+								borderRadius: "18px 18px 0 0",
+							}} />
+
+							{/* Card Body Container */}
+							<div style={{ position: "relative", padding: "64px 32px 32px" }}>
+								
+								{/* Avatar circle - Absolutely positioned over the banner */}
+								<div
 									style={{
-										width: "30px",
-										height: "30px",
 										position: "absolute",
-										bottom: "10px",
-										right: "16px",
+										top: "-48px",
+										left: "32px",
+										width: "96px",
+										height: "96px",
 									}}
-								/>
-							</div>
-
-							<form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-								<div
-									style={{
-										display: "grid",
-										gridTemplateColumns: "1fr 1fr",
-										gap: "20px",
-									}}
+									onClick={() => photoRef.current?.click()}
+									title={formData.image ? "Change photo" : "Add a photo"}
 								>
-									<FormField
-										label="First Name"
-										value={formData.firstName}
-										onChange={(event) => updateField("firstName", event.target.value)}
-									/>
-									<FormField
-										label="Last Name"
-										value={formData.lastName}
-										onChange={(event) => updateField("lastName", event.target.value)}
-									/>
-								</div>
-
-								<div
-									style={{
-										display: "grid",
-										gridTemplateColumns: "1fr 1fr",
-										gap: "20px",
-									}}
-								>
-									<FormField
-										label="Email"
-										type="email"
-										value={formData.email}
-										onChange={(event) => updateField("email", event.target.value)}
-									/>
-									<FormField
-										label="Contact Number"
-										value={formData.contactNumber}
-										onChange={(event) => updateField("contactNumber", event.target.value)}
-									/>
-								</div>
-
-								<div
-									style={{
-										display: "grid",
-										gridTemplateColumns: "1fr 1fr",
-										gap: "20px",
-										alignItems: "start",
-									}}
-								>
-									<FormSelect
-										label="User Role"
-										value={formData.role}
-										onChange={(event) => updateField("role", event.target.value)}
-										options={roleOptions}
-									/>
-									<FormSelect
-										label="Assigned Branch"
-										value={formData.branch}
-										onChange={(event) => updateField("branch", event.target.value)}
-										options={branchOptions}
-									/>
-								</div>
-
-								<PasswordField
-									label="Password"
-									value={formData.password}
-									width="62%"
-									onChange={(event) => updateField("password", event.target.value)}
-								/>
-
-								<PasswordField
-									label="Confirm Password"
-									value={formData.confirmPassword}
-									width="62%"
-									onChange={(event) => updateField("confirmPassword", event.target.value)}
-								/>
-
-								{isLoadingOptions && (
-									<p style={{ margin: 0, color: "#5E5E5E", fontSize: "13px" }}>Loading roles and branches...</p>
-								)}
-
-								{errorMessage && (
-									<p style={{ margin: 0, color: "#C62828", fontSize: "13px" }}>{errorMessage}</p>
-								)}
-
-								<div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>
-									<Button
-										label={isSubmitting ? "Creating..." : "Create User Account"}
-										type="submit"
-										disabled={isSubmitting || isLoadingOptions}
-										style={{
-											width: "200px",
-											height: "40px",
-											borderRadius: "8px",
-											fontSize: "14px",
-											fontWeight: "500",
-											background: "#1565C0",
+									<input
+										ref={photoRef}
+										type="file"
+										accept="image/*"
+										style={{ display: "none" }}
+										onChange={(e) => {
+											const file = e.target.files?.[0];
+											if (!file) return;
+											const reader = new FileReader();
+											reader.onload = (ev) => updateField("image", ev.target.result);
+											reader.readAsDataURL(file);
 										}}
 									/>
+									<img
+										src={formData.image || profileImage}
+										alt="Profile"
+										style={{
+											width: "96px",
+											height: "96px",
+											borderRadius: "50%",
+											objectFit: "cover",
+											border: "4px solid #fff",
+											boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
+											display: "block",
+											cursor: "pointer",
+										}}
+									/>
+									{/* + change icon */}
+									<div style={{
+										position: "absolute",
+										bottom: "4px",
+										right: "4px",
+										width: "26px",
+										height: "26px",
+										borderRadius: "50%",
+										background: "#fff",
+										boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										cursor: "pointer",
+										pointerEvents: "none",
+									}}>
+										<img src={plusImage} alt="change" style={{ width: "22px", height: "22px" }} />
+									</div>
+									{/* Remove photo button */}
+									{formData.image && (
+										<button
+											type="button"
+											onClick={(e) => {
+												e.stopPropagation();
+												updateField("image", "");
+												if (photoRef.current) photoRef.current.value = "";
+											}}
+											title="Remove photo"
+											style={{
+												position: "absolute",
+												top: "2px",
+												right: "2px",
+												width: "22px",
+												height: "22px",
+												borderRadius: "50%",
+												background: "#dc2626",
+												color: "#fff",
+												border: "2px solid #fff",
+												cursor: "pointer",
+												fontSize: "12px",
+												fontWeight: "700",
+												display: "flex",
+												alignItems: "center",
+												justifyContent: "center",
+											}}
+										>×</button>
+									)}
 								</div>
-							</form>
+
+								{/* Header row with Name and Save button */}
+								<div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "32px" }}>
+									<div>
+										<h2 style={{ margin: "0 0 6px", fontSize: "24px", fontWeight: "800", color: "#0F172A", letterSpacing: "-0.02em" }}>
+											Add New User
+										</h2>
+										<div style={{ fontSize: "14px", color: "#64748B", fontWeight: "500" }}>
+											Create a staff login and set their role
+										</div>
+									</div>
+								</div>
+
+								<form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+									<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+										<FormField label="First Name" value={formData.firstName} onChange={(event) => updateField("firstName", event.target.value)} />
+										<FormField label="Last Name" value={formData.lastName} onChange={(event) => updateField("lastName", event.target.value)} />
+									</div>
+									<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+										<FormField label="Email" type="email" value={formData.email} onChange={(event) => updateField("email", event.target.value)} />
+										<FormField label="Contact Number" value={formData.contactNumber} onChange={(event) => updateField("contactNumber", event.target.value)} />
+									</div>
+									<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", alignItems: "start" }}>
+										<FormSelect label="User Role" value={formData.role} onChange={(event) => updateField("role", event.target.value)} options={roleOptions} />
+										<FormSelect label="Assigned Branch" value={formData.branch} onChange={(event) => updateField("branch", event.target.value)} options={branchOptions} />
+									</div>
+									<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+										<PasswordField label="Password" value={formData.password} onChange={(event) => updateField("password", event.target.value)} />
+										<PasswordField label="Confirm Password" value={formData.confirmPassword} onChange={(event) => updateField("confirmPassword", event.target.value)} />
+									</div>
+
+									{isLoadingOptions && <p style={{ margin: 0, color: "#5E5E5E", fontSize: "13px" }}>Loading roles and branches...</p>}
+									{errorMessage && <p style={{ margin: 0, color: "#C62828", fontSize: "13px" }}>{errorMessage}</p>}
+
+									<div style={{ display: "flex", justifyContent: "flex-end", marginTop: "12px", borderTop: "1px solid #F1F5F9", paddingTop: "24px" }}>
+										<Button label={isSubmitting ? "Creating..." : "Create User Account"} type="submit" disabled={isSubmitting || isLoadingOptions}
+											style={{ width: "200px", height: "42px", borderRadius: "10px", fontSize: "14px", fontWeight: "600", background: "#1565C0" }}
+										/>
+									</div>
+								</form>
+							</div>
 						</div>
 					</div>
 				</div>

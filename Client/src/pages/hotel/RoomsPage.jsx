@@ -128,7 +128,15 @@ export default function RoomsPage() {
                     </div>
 
                     <div style={{ fontSize: 12, color: "#64748B", marginBottom: 10 }}>
-                      {money(r.base_rate)}/night · sleeps {r.max_occupancy}
+                      {money(r.base_rate)}/night
+                      {(() => {
+                        const a = r.max_adults, c = r.max_children;
+                        const who = [
+                          a ? `${a} adult${Number(a) === 1 ? "" : "s"}` : null,
+                          c ? `${c} child${Number(c) === 1 ? "" : "ren"}` : null,
+                        ].filter(Boolean).join(" + ");
+                        return who ? ` · takes ${who}` : "";
+                      })()}
                     </div>
 
                     {r.occupancy === "occupied" ? (

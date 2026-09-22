@@ -4,6 +4,7 @@ import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
 import { getBranchById, updateBranch, getStayPolicy, updateStayPolicy } from "../../services/api";
 import { card, input, label, btn, errorBox } from "../hotel/ui";
+import DrawerPinCard from "../../components/branch-admin/DrawerPinCard";
 
 /**
  * The property's own details — the name, address and phone that print on every
@@ -139,6 +140,14 @@ export default function HotelProfile() {
               <p style={{ margin: "0 0 22px", fontSize: 13, color: "#64748B" }}>
                 The times printed on every confirmation, and what a guest is charged for leaving late.
               </p>
+              {!policy.policy_saved && (
+                <div style={{ margin: "-6px 0 18px", padding: "10px 12px", borderRadius: 8, background: "#EFF6FF",
+                              border: "1px solid #BFDBFE", color: "#1E40AF", fontSize: 12.5, lineHeight: 1.5 }}>
+                  You haven&apos;t saved these yet. The values below are only starting suggestions, so until you press
+                  <strong> Save Policy</strong> your check-in and check-out times, cancellation rule and terms are left
+                  off booking confirmations.
+                </div>
+              )}
 
               {policyError && <div style={errorBox}>{policyError}</div>}
 
@@ -146,6 +155,15 @@ export default function HotelProfile() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                   <Field label="Check-In From"  type="time" value={policy.check_in_time?.slice(0, 5) || ""}  onChange={setP("check_in_time")} />
                   <Field label="Check-Out By"   type="time" value={policy.check_out_time?.slice(0, 5) || ""} onChange={setP("check_out_time")} />
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <Field label="Tax on room charges (%)" type="number" min={0} max={100} step="0.01"
+                    value={policy.default_tax_pct ?? 0} onChange={setP("default_tax_pct")} />
+                  <p style={{ margin: "-8px 0 0", fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>
+                    New bookings start with this rate. Leave it at 0 if you don&apos;t charge tax; you can still change it
+                    on any single booking.
+                  </p>
                 </div>
 
                 <div style={{ marginBottom: 16 }}>
@@ -192,6 +210,43 @@ export default function HotelProfile() {
                   </p>
                 </div>
 
+                <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid #E2E8F0" }}>
+                  <label style={{ ...label, marginBottom: 4 }} htmlFor="hp-terms">
+                    Terms &amp; conditions on the booking confirmation
+                  </label>
+                  <p style={{ margin: "0 0 8px", fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>
+                    One term per line. The check-in and check-out times and the cancellation rule above are always
+                    printed first, so you don&apos;t need to write them again.
+                  </p>
+                  <textarea
+                    id="hp-terms"
+                    rows={6}
+                    maxLength={1500}
+                    style={{ ...input, resize: "vertical", lineHeight: 1.55, fontFamily: "inherit" }}
+                    value={policy.extra_terms ?? ""}
+                    onChange={setP("extra_terms")}
+                    placeholder="e.g. Smoking is not permitted inside the rooms."
+                  />
+                  {(() => {
+                    const count = String(policy.extra_terms ?? "").split(/\r?\n/).filter((l) => l.trim()).length;
+                    return (
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 12 }}>
+                        <span style={{ color: count > 12 ? "#DC2626" : "#64748B" }}>{count} of 12 lines</span>
+                        {policy.suggested_extra_terms && !String(policy.extra_terms ?? "").trim() && (
+                          <button
+                            type="button"
+                            onClick={() => { setPolicy((p) => ({ ...p, extra_terms: p.suggested_extra_terms })); setPolicySaved(false); }}
+                            style={{ background: "none", border: "none", padding: 0, color: "#1565C0", fontSize: 12,
+                                     textDecoration: "underline", cursor: "pointer" }}
+                          >
+                            Insert suggested wording
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
                 <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 22 }}>
                   <button type="submit" style={{ ...btn("primary"), opacity: savingPolicy ? 0.6 : 1 }} disabled={savingPolicy}>
                     {savingPolicy ? "Saving…" : "Save Policy"}
@@ -201,6 +256,8 @@ export default function HotelProfile() {
               </form>
             </div>
           )}
+
+          <DrawerPinCard />
         </main>
       </div>
     </div>

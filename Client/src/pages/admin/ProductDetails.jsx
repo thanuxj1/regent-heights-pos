@@ -162,7 +162,7 @@ const ProductDetails = () => {
     tax_group: "5",
     track_inventory: true,
     low_stock: "10",
-    add_ons: { Cheese: true, Bacon: true },
+    add_ons: {},
     stations: { Kitchen: true, Bar: true },
   });
 
@@ -198,7 +198,7 @@ const ProductDetails = () => {
           tax_group: String(productData?.tax_group ?? "5"),
           track_inventory: productData?.track_inventory !== undefined ? Boolean(productData.track_inventory) : true,
           low_stock: String(productData?.low_stock ?? "10"),
-          add_ons: productData?.add_ons || { Cheese: true, Bacon: true },
+          add_ons: productData?.add_ons || {},
           stations: productData?.stations || { Kitchen: true, Bar: true },
         });
       } catch (err) {
@@ -266,7 +266,8 @@ const ProductDetails = () => {
       return;
     }
 
-    if (!form.pro_name.trim() || form.pro_qty === "" || form.pro_price === "") {
+    if (!form.pro_name.trim() || form.pro_price === ""
+    || (form.track_inventory && form.pro_qty === "")) {
       setError("Product name, quantity, and sales price are required");
       return;
     }
@@ -279,7 +280,9 @@ const ProductDetails = () => {
 
       const updated = await updateProduct(productId, {
         pro_name: form.pro_name.trim(),
-        pro_qty: Number(form.pro_qty),
+        // Nothing is counted, so nothing is stored: a leftover figure here would
+    // be a number that means nothing the day the toggle goes back on.
+    pro_qty: form.track_inventory ? Number(form.pro_qty) : 0,
         pro_price: Number(form.pro_price),
         cost_price: Number(form.cost_price) || 0,
         pro_image: form.pro_image.trim(),
@@ -406,7 +409,13 @@ const ProductDetails = () => {
                       </div>
                       <div>
                         <label style={labelStyle}>Quantity</label>
-                        <input type="number" min="0" style={inputStyle} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
+                        {form.track_inventory ? (
+                        	<input type="number" min="0" style={inputStyle} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
+                        ) : (
+                        	<div title="Made to order — nothing is counted" style={{ ...inputStyle, display: "flex", alignItems: "center", color: "#94A3B8", background: "#F8FAFC" }}>
+                        		—
+                        	</div>
+                        )}
                       </div>
                     </div>
 
@@ -592,10 +601,17 @@ const ProductDetails = () => {
                 </div>
               </div>
 
-              <h2 style={{ ...sectionTitleStyle, fontSize: "20px", marginTop: "22px", marginBottom: "8px" }}>Track Inventory</h2>
+              <h2 style={{ ...sectionTitleStyle, fontSize: "20px", marginTop: "22px", marginBottom: "8px" }}>Stock</h2>
               <div style={cardStyle}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
-                  <div style={{ fontSize: "14px", fontWeight: "700", color: "#374151" }}>Track Inventory</div>
+                  <div>
+                  	<div style={{ fontSize: "14px", fontWeight: "700", color: "#374151" }}>Counted stock</div>
+                  	<div style={{ fontSize: "11px", color: "#6B7280", marginTop: "2px", maxWidth: "420px", lineHeight: 1.45 }}>
+                  		{form.track_inventory
+                  			? "It sits on the rack in a number — a tray of pastries, bottled drinks — and that number goes down as it sells."
+                  			: "Made to order: cooked when the customer asks. Nothing is counted and it never reads out of stock. If it has a recipe, the till takes the ingredients instead."}
+                  	</div>
+                  </div>
                   <button type="button" onClick={() => setForm((prev) => ({ ...prev, track_inventory: !prev.track_inventory }))} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}>
                     <div style={{ ...toggleTrackStyle, background: form.track_inventory ? "#1769AA" : "#CBD5E1" }}>
                       <div style={{ ...toggleKnobStyle, transform: form.track_inventory ? "translateX(18px)" : "translateX(0)" }} />
@@ -603,7 +619,7 @@ const ProductDetails = () => {
                   </button>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", opacity: form.track_inventory ? 1 : 0.45, pointerEvents: form.track_inventory ? "auto" : "none" }}>
                   <div>
                     <label style={labelStyle}>Current stock</label>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>

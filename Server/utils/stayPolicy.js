@@ -14,7 +14,22 @@ export const POLICY_DEFAULTS = {
   late_full_night_after: 6,
   cancel_free_hours: 48,
   cancel_charge_nights: 1,
+  // No tax is added to a booking until the hotel sets a rate.
+  default_tax_pct: 0,
 };
+
+/**
+ * Wording the owner can drop into their terms with one click. It is a suggestion
+ * only: nothing here is printed on a confirmation unless the owner keeps it, so a
+ * hotel is never made to say something it did not write.
+ */
+export const SUGGESTED_TERMS =
+  "Please present a printed copy of this confirmation voucher along with a valid ID card or Passport upon arrival.\n"
+  + "All rates are inclusive of local service fees and government taxes unless indicated otherwise.";
+
+/** The owner's terms as a list of lines, blanks dropped. */
+export const termsLines = (text) =>
+  String(text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
 /** The cancellation terms as one sentence, so the voucher and the WhatsApp
  *  message can never drift apart. */

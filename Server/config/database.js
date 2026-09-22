@@ -22,8 +22,19 @@ const { Pool } = pkg;
  * So: idle connections are kept, not dropped, and TCP keepalive stops anything
  * in between quietly closing them.
  */
+/**
+ * Neon's URL carries `sslmode=require`, and pg now prints eight lines warning
+ * that the meaning of that word changes in its next major version. TLS here is
+ * decided by the `ssl` option below, not by the URL, so the parameter does
+ * nothing except shout over whatever a script is trying to say — a password
+ * prompt, for one. Dropped from the string; the connection is unchanged.
+ */
+const connectionString = String(process.env.DATABASE_URL || "")
+  .replace(/([?&])sslmode=[^&]*&?/i, (_m, lead) => (lead === "?" ? "?" : "&"))
+  .replace(/[?&]$/, "");
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   ssl: {
     rejectUnauthorized: false,
   },

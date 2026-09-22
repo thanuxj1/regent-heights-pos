@@ -1,9 +1,6 @@
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../config";
 
-const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL ||
-  import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, "") ||
-  "http://localhost:5000";
 
 let socket;
 
@@ -38,14 +35,26 @@ export const getSocket = () => {
   return socket;
 };
 
+/**
+ * Connect as whoever is signed in now.
+ *
+ * If the socket is connected as someone else — a sign-out and a different
+ * sign-in, here or in another tab — it reconnects, so the server seats it in
+ * the new person's rooms. It used to stay connected as the first person, and a
+ * screen went on hearing (and missing) events meant for someone else. The same
+ * socket is reused, so the screens' listeners stay attached.
+ */
 export const connectSocket = () => {
   const activeSocket = getSocket();
+  const token = localStorage.getItem("token") || null;
+  const switched = (activeSocket.auth?.token ?? null) !== token;
 
-  activeSocket.auth = {
-    token: localStorage.getItem("token") || null,
-  };
+  activeSocket.auth = { token };
 
-  if (!activeSocket.connected) {
+  if (switched && activeSocket.active) {
+    activeSocket.disconnect();
+  }
+  if (!activeSocket.connected && token) {
     activeSocket.connect();
   }
 

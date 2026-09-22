@@ -14,7 +14,8 @@ import {
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import { useAuth } from "../../context/AuthContext";
-import { getOrders, getOrderItems, getBranchProducts, getBranchById } from "../../services/api";
+import { getOrders, getOrderItems, getBranchProducts, getBranchById, getReportSummary } from "../../services/api";
+import { dayKey } from "../../utils/dates";
 import totalRevenueIcon from "../../assets/images/total revenue.png";
 import totalOrdersIcon from "../../assets/images/total orders.png";
 import orderValueIcon from "../../assets/images/order value.png";
@@ -37,11 +38,9 @@ const formatCurrency = (value) => {
 	return `LKR ${number.toFixed(2)}`;
 };
 
-const getDateKey = (date) => {
-	if (!date) return "";
-	if (typeof date === "string") return date.slice(0, 10);
-	return new Date(date).toISOString().slice(0, 10);
-};
+// The calendar day as the hotel reads it. The UTC day (toISOString) is a day early for
+// anything dated before 05:30, and a DATE column arrives as a timestamp a day early too.
+const getDateKey = (date) => dayKey(date);
 
 const SalesRevenue = () => {
 	const { user } = useAuth();
@@ -54,7 +53,7 @@ const SalesRevenue = () => {
 	const [branchName, setBranchName] = useState("");
 
 	// "Custom" used to be a hardcoded 14 days with no way to change it.
-	const iso = (d) => d.toISOString().slice(0, 10);
+	const iso = (d) => dayKey(d);
 	const [customFrom, setCustomFrom] = useState(() => {
 		const d = new Date(); d.setDate(d.getDate() - 13); return iso(d);
 	});
@@ -114,7 +113,7 @@ const SalesRevenue = () => {
 	const rangeDays = useMemo(() => {
 		const build = (dates) =>
 			dates.map((date) => ({
-				key: date.toISOString().slice(0, 10),
+				key: dayKey(date),
 				label: dates.length <= 7
 					? date.toLocaleDateString("en-US", { weekday: "short" })
 					: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
@@ -137,6 +136,14 @@ const SalesRevenue = () => {
 			const d = new Date(); d.setDate(d.getDate() - (total - 1 - i)); return d;
 		}));
 	}, [timeRange, customFrom, customTo]);
+
+	// Only the orders inside the range on show. The order count, the average, the
+	// order-type split and the top items were taken over every order ever, so
+	// picking "Today" changed the revenue and nothing else.
+	const rangeOrders = useMemo(() => {
+		const keys = new Set(rangeDays.map((day) => day.key));
+		return orders.filter((order) => keys.has(getDateKey(order?.or_date)));
+	}, [orders, rangeDays]);
 
 	const ordersByDate = useMemo(() => {
 		const map = new Map();
@@ -163,7 +170,7 @@ const SalesRevenue = () => {
 		return revenueByDay.reduce((sum, value) => sum + value, 0);
 	}, [revenueByDay]);
 
-	const totalOrders = useMemo(() => orders.length, [orders]);
+	const totalOrders = useMemo(() => rangeOrders.length, [rangeOrders]);
 
 	const avgOrderValue = useMemo(() => {
 		if (totalOrders === 0) return 0;
@@ -182,20 +189,30 @@ const SalesRevenue = () => {
 		return { value: maxValue, label: rangeDays[maxIndex]?.label || "-" };
 	}, [rangeDays, revenueByDay]);
 
-	const netProfit = useMemo(() => {
-		return totalRevenue * 0.72;
-	}, [totalRevenue]);
+	// The real figure for the same range, from the business's own books — revenue less
+	// expenses, supplier payments and agent commission — not 72% of sales.
+	const [summary, setSummary] = useState(null);
+	useEffect(() => {
+		const id = user?.b_id ?? user?.B_id;
+		if (!id || rangeDays.length === 0) return undefined;
+		let alive = true;
+		getReportSummary({ b_id: id, from: rangeDays[0].key, to: rangeDays[rangeDays.length - 1].key })
+			.then((s) => { if (alive) setSummary(s); })
+			.catch(() => { if (alive) setSummary(null); });
+		return () => { alive = false; };
+	}, [user?.b_id, user?.B_id, rangeDays]);
+	const netProfit = summary ? Number(summary.profit?.net ?? 0) : null;
 
 	const orderTypeBreakdown = useMemo(() => {
 		const counts = { "dine-in": 0, takeaway: 0, delivery: 0 };
-		orders.forEach((order) => {
+		rangeOrders.forEach((order) => {
 			const type = order?.or_type;
 			if (type && counts[type] !== undefined) {
 				counts[type] += 1;
 			}
 		});
 		return counts;
-	}, [orders]);
+	}, [rangeOrders]);
 
 	const productNameById = useMemo(() => {
 		const map = new Map();
@@ -209,7 +226,7 @@ const SalesRevenue = () => {
 
 	const topItems = useMemo(() => {
 		const tally = new Map();
-		const validOrders = new Set(orders.map((order) => order?.or_id));
+		const validOrders = new Set(rangeOrders.map((order) => order?.or_id));
 
 		orderItems.forEach((item) => {
 			if (!validOrders.has(item?.order_id)) return;
@@ -227,14 +244,14 @@ const SalesRevenue = () => {
 				name: productNameById.get(id) || `Item ${id}`,
 				qty,
 			}));
-	}, [orders, orderItems, productNameById]);
+	}, [rangeOrders, orderItems, productNameById]);
 
 	const previousRevenueByDay = useMemo(() => {
 		const offset = rangeDays.length;
 		return rangeDays.map((_, index) => {
 			const target = new Date();
 			target.setDate(target.getDate() - (offset + (rangeDays.length - 1 - index)));
-			const key = target.toISOString().slice(0, 10);
+			const key = dayKey(target);
 			const list = ordersByDate.get(key) || [];
 			return list.reduce((sum, order) => {
 				const value = Number(order.or_totalCostWtax ?? order.or_totalcost ?? 0);
@@ -327,18 +344,27 @@ const SalesRevenue = () => {
 		cutout: "68%",
 	};
 
+	// How the sales in this range were paid, by value. This was a fixed 55/30/15 split
+	// whatever had actually been sold.
 	const paymentBreakdown = useMemo(() => {
-		const fallback = { card: 55, online: 30, cash: 15 };
-		return fallback;
-	}, []);
+		const totals = new Map();
+		rangeOrders.forEach((order) => {
+			const method = String(order.payment_method || "").toLowerCase() || "unknown";
+			const value = Number(order.or_totalCostWtax ?? order.or_totalcost ?? 0);
+			totals.set(method, (totals.get(method) || 0) + (Number.isNaN(value) ? 0 : value));
+		});
+		return [...totals.entries()].sort((a, b) => b[1] - a[1]);
+	}, [rangeOrders]);
 
 	const paymentChartData = useMemo(() => {
+		const palette = ["#2563EB", "#22C55E", "#0EA5E9", "#F59E0B", "#A855F7", "#94A3B8"];
+		const pretty = (m) => m.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 		return {
-			labels: ["Card", "Online", "Cash"],
+			labels: paymentBreakdown.map(([method]) => pretty(method)),
 			datasets: [
 				{
-					data: [paymentBreakdown.card, paymentBreakdown.online, paymentBreakdown.cash],
-					backgroundColor: ["#2563EB", "#22C55E", "#0EA5E9"],
+					data: paymentBreakdown.map(([, value]) => value),
+					backgroundColor: paymentBreakdown.map((_, i) => palette[i % palette.length]),
 					borderWidth: 0,
 				},
 			],
@@ -425,7 +451,7 @@ const SalesRevenue = () => {
 								/>
 							</div>
 							<div>
-								<div className="text-xs font-semibold text-gray-700">Total Revenue</div>
+								<div className="text-xs font-semibold text-gray-700">Restaurant Revenue</div>
 								<div className="text-sm font-bold text-slate-900">
 									{isLoading ? "..." : formatCurrency(totalRevenue)}
 								</div>
@@ -444,7 +470,7 @@ const SalesRevenue = () => {
 								/>
 							</div>
 							<div>
-								<div className="text-xs font-semibold text-gray-700">Total Orders</div>
+								<div className="text-xs font-semibold text-gray-700">Restaurant Orders</div>
 								<div className="text-sm font-bold text-slate-900">
 									{isLoading ? "..." : String(totalOrders)}
 								</div>
@@ -463,7 +489,7 @@ const SalesRevenue = () => {
 								/>
 							</div>
 							<div>
-								<div className="text-xs font-semibold text-gray-700">AVG Order Value</div>
+								<div className="text-xs font-semibold text-gray-700">Avg Restaurant Order</div>
 								<div className="text-sm font-bold text-slate-900">
 									{isLoading ? "..." : formatCurrency(avgOrderValue)}
 								</div>
@@ -482,10 +508,11 @@ const SalesRevenue = () => {
 								/>
 							</div>
 							<div>
-								<div className="text-xs font-semibold text-gray-700">Net Profit</div>
+								<div className="text-xs font-semibold text-gray-700" title="All revenue for this period, less expenses, supplier payments and commission">Net Profit (business)</div>
 								<div className="text-sm font-bold text-slate-900">
-									{isLoading ? "..." : formatCurrency(netProfit)}
+									{isLoading ? "..." : netProfit === null ? "—" : formatCurrency(netProfit)}
 								</div>
+								<div className="text-[10px] text-gray-600">hotel + restaurant, after expenses</div>
 							</div>
 						</div>
 					</div>
@@ -544,10 +571,28 @@ const SalesRevenue = () => {
 								<div className="h-44 mt-4">
 									{isLoading ? (
 										<div className="h-full rounded-xl bg-slate-50 animate-pulse" />
+									) : paymentBreakdown.length === 0 ? (
+										<div className="flex h-full items-center justify-center text-xs text-slate-400">No sales in this period.</div>
 									) : (
 										<Doughnut data={paymentChartData} options={doughnutOptions} />
 									)}
 								</div>
+							</div>
+
+							<div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+								<h3 className="text-sm font-bold text-slate-900">Top Selling Items</h3>
+								{topItems.length === 0 ? (
+									<p className="mt-4 text-xs text-slate-400">Nothing sold in this period.</p>
+								) : (
+									<ul className="mt-4 space-y-3">
+										{topItems.map((item) => (
+											<li key={item.id} className="flex items-center justify-between text-sm text-slate-700">
+												<span className="truncate font-medium">{item.name}</span>
+												<span className="ml-3 text-xs font-semibold text-slate-500">{item.qty} sold</span>
+											</li>
+										))}
+									</ul>
+								)}
 							</div>
 						</div>
 					</div>

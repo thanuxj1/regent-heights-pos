@@ -1,19 +1,23 @@
-export const printReceipt = (invoice) => {
-  const printWindow = window.open("", "_blank", "width=400,height=640");
-  if (!printWindow) {
-    alert("Your browser blocked the receipt window. Allow pop-ups for this site and try again.");
-    return;
-  }
+import { printHtml } from "./printElement";
 
+/**
+ * The customer's bill.
+ *
+ * It printed through a pop-up window, which the browser allows only while a
+ * click is still fresh. Printing the bill the moment a payment goes through has
+ * no click left to lean on, so the window was blocked and the customer got no
+ * receipt. It goes through a hidden frame now, like every other print here.
+ */
+export const printReceipt = (invoice) => {
   const subtotal = Number(invoice.subtotal || 0).toFixed(2);
   const discount = Number(invoice.discount || 0).toFixed(2);
   const tax = Number(invoice.tax || 0).toFixed(2);
   const total = Number(invoice.total || 0).toFixed(2);
 
-  printWindow.document.write(`
+  const page = `
     <html>
       <head>
-        <title>Receipt</title>
+        <title>Bill ${invoice.invoiceNo ?? invoice.orderId ?? ""}</title>
 
         <style>
           * {
@@ -191,18 +195,7 @@ export const printReceipt = (invoice) => {
 
       </body>
     </html>
-  `);
+  `;
 
-  printWindow.document.close();
-
-  // Wait for the window to finish laying out before printing, and only close it
-  // once the dialog is dismissed. Closing on a fixed timer used to cancel the
-  // print job on slower machines.
-  const go = () => {
-    printWindow.focus();
-    printWindow.print();
-  };
-  printWindow.onafterprint = () => printWindow.close();
-  if (printWindow.document.readyState === "complete") go();
-  else printWindow.onload = go;
+  printHtml(page, { title: `Bill ${invoice.invoiceNo ?? invoice.orderId ?? ""}`.trim() });
 };

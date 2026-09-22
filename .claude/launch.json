@@ -4,16 +4,35 @@
     {
       "name": "pos-client",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "Client",
       "port": 3000
     },
     {
       "name": "pos-preview",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["vite", "preview", "--port", "4173", "--host", "localhost"],
+      "runtimeArgs": [
+        "vite",
+        "preview",
+        "--port",
+        "4173",
+        "--host",
+        "localhost"
+      ],
       "cwd": "Client",
       "port": 4173
+    },
+    {
+      "name": "pos-server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "start"
+      ],
+      "cwd": "Server",
+      "port": 5000
     }
   ]
 }

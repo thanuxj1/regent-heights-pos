@@ -1,9 +1,10 @@
+import { takeStock, noteShortfall } from "../utils/inventory.js";
 import pool from "../config/database.js";
 import { branchClause, writeBranchId, assertInScope } from "../utils/scope.js";
 import { effectiveCheckout, isOverstaying } from "../utils/occupancy.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import {
-  emitSocketEvent, emitOrderEvent, KITCHEN_SOCKET_ROOM,
+  emitSocketEvent, emitOrderEvent, getKitchenSocketRoom,
 } from "../utils/socket.js";
 
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
@@ -26,7 +27,8 @@ export async function getRoomGrid(req, res, next) {
 
     const { rows } = await pool.query(
       `SELECT r.room_id, r.room_number, r.floor, r.hk_status, r.is_active,
-              rt.room_type_id, rt.type_name, rt.type_code, rt.base_rate, rt.max_occupancy,
+              rt.room_type_id, rt.type_name, rt.type_code, rt.base_rate,
+              rt.included_guests, rt.max_adults, rt.max_children,
               bk.booking_id, bk.booking_ref, bk.status AS booking_status, bk.source,
               bk.check_in_date, bk.check_out_date, bk.adults, bk.children,
               bk.grand_total, bk.advance_paid,
@@ -153,7 +155,7 @@ export async function getGuestHistory(req, res, next) {
     if (!g.rows.length) { res.status(404); return next(new Error("Guest not found")); }
 
     const bookings = await pool.query(
-      `SELECT b.*, mp.plan_name, a.agent_name,
+      `SELECT b.*, a.agent_name,
               COALESCE(pay.paid, 0) AS paid_total,
               (SELECT string_agg(DISTINCT COALESCE(r.room_number, rt.type_name), ', ')
                FROM "BOOKING_ROOM" br
@@ -161,7 +163,6 @@ export async function getGuestHistory(req, res, next) {
                LEFT JOIN "ROOM_TYPE" rt ON rt.room_type_id = br.room_type_id
                WHERE br.booking_id = b.booking_id) AS rooms_label
        FROM "BOOKING" b
-       LEFT JOIN "MEAL_PLAN" mp ON mp.plan_id = b.meal_plan_id
        LEFT JOIN "COMMISSION_AGENT" a ON a.agent_id = b.agent_id
        LEFT JOIN LATERAL (
          SELECT SUM(CASE WHEN kind='refund' THEN -amount ELSE amount END) AS paid
@@ -290,12 +291,20 @@ export async function createRoomServiceOrder(req, res, next) {
     if (!Array.isArray(items) || !items.length) {
       res.status(400); return next(new Error("At least one item is required"));
     }
+    for (const [n, i] of items.entries()) {
+      const q = Number(i?.pro_quantity ?? 1);
+      if (!Number.isInteger(Number(i?.Bpro_id)) || !Number.isInteger(q) || q <= 0 || q > 999) {
+        res.status(400);
+        return next(new Error(`Item ${n + 1}: needs a product and a whole quantity between 1 and 999`));
+      }
+    }
 
     await client.query("BEGIN");
 
     // The room must have a guest in it with an open folio
     const occ = await client.query(
-      `SELECT b.booking_id, b.b_id, b.guest_id, f.folio_id, r.room_number, g.full_name
+      `SELECT b.booking_id, b.b_id, b.guest_id, b.meal_plan_id, b.adults, b.children,
+              f.folio_id, r.room_number, g.full_name
        FROM "BOOKING_ROOM" br
        JOIN "BOOKING" b ON b.booking_id = br.booking_id
        JOIN "ROOM" r    ON r.room_id = br.room_id
@@ -311,8 +320,11 @@ export async function createRoomServiceOrder(req, res, next) {
       return next(new Error("That room has no checked-in guest with an open folio"));
     }
     const { booking_id, b_id, folio_id, room_number, full_name } = occ.rows[0];
+    const booking = occ.rows[0];
 
-    const subtotal = items.reduce((s, i) => s + num(i.unit_price) * num(i.pro_quantity, 1), 0);
+    const priced = items.map(i => ({ ...i, qty: num(i.pro_quantity, 1) }));
+
+    const subtotal = priced.reduce((s, i) => s + num(i.unit_price) * i.qty, 0);
     const taxPct   = num(tax_pct, 0);
     const tax      = +(subtotal * taxPct / 100).toFixed(2);
     const total    = +(subtotal + tax).toFixed(2);
@@ -327,32 +339,44 @@ export async function createRoomServiceOrder(req, res, next) {
     );
     const order = ord.rows[0];
 
-    for (const i of items) {
-      const qty = num(i.pro_quantity, 1);
+    const lines = [];
+    for (const i of priced) {
       const unit = num(i.unit_price);
-      await client.query(
+      const line = await client.query(
         `INSERT INTO "ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [Number(i.Bpro_id), qty, unit, +(qty * unit).toFixed(2), order.or_id]
+         VALUES ($1,$2,$3,$4,$5) RETURNING "orderItem_id"`,
+        [Number(i.Bpro_id), i.qty, unit, +(i.qty * unit).toFixed(2), order.or_id]
       );
+      lines.push({ bpro_id: Number(i.Bpro_id), qty: i.qty, order_item_id: line.rows[0].orderItem_id });
     }
+
+    // Room service is a sale like any other: the dish goes, so its ingredients
+    // go — it never reduced stock at all before. A dish from another property's
+    // menu is refused; a count that says there is none is noted, not refused.
+    const stock = await takeStock(client, { b_id, order_id: order.or_id, lines, u_id: req.user?.u_id ?? null });
 
     // Put it on the bill straight away. The checkout sweep skips anything already
     // posted (it matches on ref_order_id), so this never double-charges.
-    await client.query(
-      `INSERT INTO "FOLIO_ITEM"
-         (folio_id, source, ref_order_id, description, qty, unit_price, amount, posted_by)
-       VALUES ($1,'restaurant',$2,$3,1,$4,$4,$5)`,
-      [folio_id, order.or_id,
-       `Room service — order #${order.or_id}${notes ? ` (${notes})` : ""}`,
-       total, req.user?.u_id || null]
-    );
+    // A folio line only where there is something to pay. An order the plan
+    // covered in full still happened — the ticket and the stock movement say so
+    // — but putting 0.00 on the bill only invites the question "what is this?".
+    if (total > 0) {
+      await client.query(
+        `INSERT INTO "FOLIO_ITEM"
+           (folio_id, source, ref_order_id, description, qty, unit_price, amount, posted_by)
+         VALUES ($1,'restaurant',$2,$3,1,$4,$4,$5)`,
+        [folio_id, order.or_id,
+         `Room service — order #${order.or_id}${notes ? ` (${notes})` : ""}`,
+         total, req.user?.u_id || null]
+      );
+    }
 
     await client.query("COMMIT");
+    noteShortfall(req, { b_id, order_id: order.or_id, short: stock.short });
 
     // Kitchen sees it the same as any other ticket
     const ticket = { ...order, room_number, guest_name: full_name, notes: notes || null };
-    emitSocketEvent("order:created", ticket, { room: KITCHEN_SOCKET_ROOM });
+    emitSocketEvent("order:created", ticket, { room: getKitchenSocketRoom(order.b_id) });
     // Carry the room and guest with the event. The bare ORDER row only has ids,
     // so the notification could say no more than "New order #37 (room_service)"
     // — technically true and no use to anyone reading it.
@@ -371,6 +395,89 @@ export async function createRoomServiceOrder(req, res, next) {
     });
   } catch (err) {
     // client may be undefined if it was the connect itself that failed.
+    await client?.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client?.release();
+  }
+}
+
+/**
+ * POST /api/hotel/room-service/charge-order
+ * body: { order_id, room_id, tax_pct }
+ *
+ * An order the kitchen already has — sent as a KOT, or a waiter's — is put on a
+ * guest's bill. It is the same order: no second ticket, and no second round of
+ * stock, because the first one already took it. Charging it through the
+ * room-service endpoint instead made a brand-new order, so the food was cooked
+ * and counted out twice.
+ */
+export async function chargeOrderToRoom(req, res, next) {
+  let client;
+  try {
+    client = await pool.connect();
+    const order_id = Number(req.body?.order_id);
+    const room_id = Number(req.body?.room_id);
+    if (!Number.isInteger(order_id) || order_id <= 0) { res.status(400); return next(new Error("order_id is required")); }
+    if (!Number.isInteger(room_id) || room_id <= 0) { res.status(400); return next(new Error("room_id is required")); }
+    await assertInScope(req, res, { table: "ROOM", idColumn: "room_id", id: room_id });
+    await assertInScope(req, res, { table: "ORDER", idColumn: "or_id", id: order_id });
+
+    await client.query("BEGIN");
+    const found = await client.query(
+      `SELECT or_id, or_status, folio_id, payment_method, voided_by, b_id FROM "ORDER" WHERE or_id = $1 FOR UPDATE`,
+      [order_id]);
+    if (!found.rows.length) { await client.query("ROLLBACK"); res.status(404); return next(new Error("Order not found")); }
+    const o = found.rows[0];
+    if (o.folio_id) { await client.query("ROLLBACK"); res.status(409); return next(new Error("This order is already on a guest's bill.")); }
+    if (o.payment_method || o.voided_by || o.or_status === "cancelled") {
+      await client.query("ROLLBACK");
+      res.status(409);
+      return next(new Error("This order has already been paid or cancelled, so it cannot be put on a room bill."));
+    }
+
+    const occ = await client.query(
+      `SELECT b.booking_id, f.folio_id, r.room_number, g.full_name
+       FROM "BOOKING_ROOM" br
+       JOIN "BOOKING" b ON b.booking_id = br.booking_id
+       JOIN "ROOM" r    ON r.room_id = br.room_id
+       JOIN "FOLIO" f   ON f.booking_id = b.booking_id AND f.status = 'open'
+       LEFT JOIN "GUEST" g ON g.guest_id = b.guest_id
+       WHERE br.room_id = $1 AND b.status = 'checked_in'
+       LIMIT 1`,
+      [room_id]);
+    if (!occ.rows.length) {
+      await client.query("ROLLBACK");
+      res.status(409);
+      return next(new Error("That room has no checked-in guest with an open folio"));
+    }
+    const { booking_id, folio_id, room_number, full_name } = occ.rows[0];
+
+    // What is on the order now, not what the till thinks — the lines were brought
+    // up to date just before this call.
+    const sum = await client.query(
+      `SELECT COALESCE(SUM(total_price), 0) AS s FROM "ORDER_ITEM" WHERE order_id = $1`, [order_id]);
+    const subtotal = num(sum.rows[0].s);
+    const tax = +(subtotal * num(req.body?.tax_pct, 0) / 100).toFixed(2);
+    const total = +(subtotal + tax).toFixed(2);
+
+    await client.query(
+      `UPDATE "ORDER" SET or_type = 'room_service', room_id = $2, folio_id = $3,
+              or_tax = $4, or_totalcost = $5, "or_totalCostWtax" = $6
+        WHERE or_id = $1`,
+      [order_id, room_id, folio_id, tax, subtotal, total]);
+    if (total > 0) {
+      await client.query(
+        `INSERT INTO "FOLIO_ITEM"
+           (folio_id, source, ref_order_id, description, qty, unit_price, amount, posted_by)
+         VALUES ($1,'restaurant',$2,$3,1,$4,$4,$5)`,
+        [folio_id, order_id, `Room service — order #${order_id}`, total, req.user?.u_id || null]);
+    }
+    await client.query("COMMIT");
+
+    emitOrderEvent("order:updated", { or_id: order_id, b_id: o.b_id, or_type: "room_service", room_number, guest_name: full_name });
+    res.status(200).json({ success: true, order: { or_id: order_id }, folio_id, booking_id, room_number, guest_name: full_name, total });
+  } catch (err) {
     await client?.query("ROLLBACK").catch(() => {});
     next(err);
   } finally {

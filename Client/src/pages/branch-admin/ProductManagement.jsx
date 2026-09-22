@@ -1,3 +1,4 @@
+import { API_URL, IMAGE_BASE_URL } from "../../config";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -12,10 +13,12 @@ import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import Button from "../../components/admin/Button";
 import ProductItemsTable from "../../components/branch-admin/ProductItemsTable";
-import { getBranchProducts, updateBranchProduct, deleteBranchProduct } from "../../services/api";
+import CountStockModal from "../../components/branch-admin/CountStockModal";
+import RestockModal from "../../components/branch-admin/RestockModal";
+import { getBranchProducts, deleteBranchProduct, countBranchProduct, restockBranchProduct, getProductById } from "../../services/api";
+import { stockOf } from "../../utils/stockLabel";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-const IMAGE_BASE_URL = API_BASE_URL.replace(/\/api\/?$/i, "");
+const API_BASE_URL = API_URL;
 
 const cardBaseStyle = {
 	flex: "0 1 calc((100% - 60px) / 3)",
@@ -66,9 +69,13 @@ const statValueStyle = {
 	textAlign: "center",
 };
 
-const getStockStatus = (quantity) => {
-	if (quantity <= 0) return "Out of stock";
-	if (quantity <= 10) return "Low stock";
+// What the chip says. The thresholds are the item's own — "low" is whatever the
+// owner set as its Low stock alert, not a number picked here.
+const getStockStatus = (stock) => {
+	if (stock.madeToOrder) return "Made to order";
+	if (stock.count < 0) return "Below zero";
+	if (stock.soldOut) return "Out of stock";
+	if (stock.low) return "Low stock";
 	return "In stock";
 };
 
@@ -82,7 +89,8 @@ const resolveProductImage = (value) => {
 };
 
 const mapApiProductToTableItem = (product) => {
-	const quantity = Number(product.pro_quantity ?? 0);
+	const stock = stockOf(product);
+	const quantity = stock.count ?? 0;
 	const price = Number(product.pro_price ?? 0);
 	const imageUrl = resolveProductImage(product.pro_image);
 
@@ -97,8 +105,13 @@ const mapApiProductToTableItem = (product) => {
 		category: product.cat_name || "General",
 		price: `LKR ${price.toFixed(2)}`,
 		discount: `${Number(product.discount_pct ?? 0)}%`,
-		stock: quantity,
-		status: getStockStatus(quantity),
+		stock: stock.madeToOrder ? null : quantity,
+		// The only figure a made-to-order dish has: how many the kitchen has
+		// turned out since service began.
+		madeToday: Number(product.made_today ?? 0),
+		stockMode: product.stock_mode || "count",
+		limitedBy: product.limited_by || null,
+		status: getStockStatus(stock),
 	};
 };
 
@@ -114,14 +127,14 @@ const ProductManagement = () => {
 	const handleRemoveFromBranch = async (bproId) => {
 		const row = tableProducts.find((p) => p.id === bproId);
 		if (!row) return;
-		if (!window.confirm(`Remove "${row.name}" from this branch's menu?
+		if (!window.confirm(`Remove "${row.name}" from the menu?
 
 The product itself is kept, so you can add it back later.`)) return;
 		try {
 			await deleteBranchProduct(bproId);
 			setProducts((prev) => prev.filter((p) => p.Bpro_id !== bproId));
 		} catch (err) {
-			window.alert(err?.response?.data?.message || "Could not remove the product from this branch.");
+			window.alert(err?.response?.data?.message || "Could not remove the product from the menu.");
 		}
 	};
 	const { user } = useAuth();
@@ -129,7 +142,8 @@ The product itself is kept, so you can add it back later.`)) return;
 	const [products, setProducts] = useState([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
-	const [updatingStockId, setUpdatingStockId] = useState(null);
+	const [countingItem, setCountingItem] = useState(null);
+	const [restocking, setRestocking] = useState(null);
 	const [currentPage, setCurrentPage] = useState(1);
 	const itemsPerPage = 4;
 
@@ -143,10 +157,14 @@ The product itself is kept, so you can add it back later.`)) return;
 				// Use b_id directly from the JWT token — no need to re-fetch all branches
 				const myBranchId = user?.b_id ?? null;
 				
-				const response = myBranchId ? await getBranchProducts(myBranchId) : [];
+				const response = myBranchId ? await getBranchProducts(myBranchId).catch((err) => {
+					if (err?.response?.status === 404) return [];
+					throw err;
+				}) : [];
 				
 				if (!isMounted) return;
-				setProducts(Array.isArray(response) ? response : []);
+				const safeData = response?.data || response || [];
+				setProducts(Array.isArray(safeData) ? safeData : []);
 			} catch (err) {
 				if (!isMounted) return;
 				setError(err?.response?.data?.message || "Failed to load products");
@@ -199,44 +217,14 @@ The product itself is kept, so you can add it back later.`)) return;
 	const pageEnd = Math.min(currentPage * itemsPerPage, tableProducts.length);
 
 	const totalItems = products.length;
-	const lowStockCount = products.filter((item) => {
-		const quantity = Number(item.pro_quantity ?? 0);
-		return quantity > 0 && quantity <= 10;
+	// A dish cooked to order is neither low nor out: there was never a count of
+	// it to run down. Counting those as "out of stock" put the whole menu in red
+	// every morning.
+	const lowStockCount = products.filter((item) => stockOf(item).low).length;
+	const outOfStockCount = products.filter((item) => {
+		const s = stockOf(item);
+		return !s.madeToOrder && s.count <= 0;
 	}).length;
-	const outOfStockCount = products.filter((item) => Number(item.pro_quantity ?? 0) <= 0).length;
-
-	const handleAdjustStock = async (productId, delta) => {
-		if (updatingStockId !== null) return;
-
-		const existing = products.find((item) => item.Bpro_id === productId);
-		if (!existing) return;
-
-		const currentQty = Number(existing.pro_quantity ?? 0);
-		const nextQty = Math.max(0, currentQty + delta);
-		if (nextQty === currentQty) return;
-
-		try {
-			setUpdatingStockId(productId);
-			setError("");
-			const updated = await updateBranchProduct(productId, { pro_quantity: nextQty });
-
-			setProducts((prev) =>
-				prev.map((item) =>
-					item.Bpro_id === productId
-						? {
-							...item,
-							...updated,
-							pro_quantity: Number(updated?.pro_quantity ?? nextQty),
-						}
-						: item
-				)
-			);
-		} catch (err) {
-			setError(err?.response?.data?.message || "Failed to update stock quantity");
-		} finally {
-			setUpdatingStockId(null);
-		}
-	};
 
 	return (
 		<div style={{ display: "flex", background: "#F2F4F7", minHeight: "100vh" }}>
@@ -246,7 +234,6 @@ The product itself is kept, so you can add it back later.`)) return;
 				<Header
 					title="Branch Product Management"
 					role="Branch Admin"
-					email="branchadmin@gmail.com"
 					showAddUserIcon
 				/>
 
@@ -403,9 +390,17 @@ The product itself is kept, so you can add it back later.`)) return;
 
 					<ProductItemsTable
 						products={paginatedProducts}
-						onDecreaseStock={(id) => handleAdjustStock(id, -1)}
-						onIncreaseStock={(id) => handleAdjustStock(id, 1)}
-						updatingStockId={updatingStockId}
+						onRestock={async (id) => {
+							const item = products.find((p) => p.Bpro_id === id);
+							if (!item) return;
+							try {
+								const base = await getProductById(item.pro_id);
+								setRestocking({ item, inMain: Number(base?.pro_qty ?? 0) });
+							} catch {
+								window.alert("Could not read the storeroom's stock. Try again.");
+							}
+						}}
+						onCountStock={(id) => setCountingItem(products.find((p) => p.Bpro_id === id) || null)}
 						onViewProduct={openProduct}
 						onEditProduct={openProduct}
 						onDeleteProduct={handleRemoveFromBranch}
@@ -419,6 +414,36 @@ The product itself is kept, so you can add it back later.`)) return;
 					/>
 				</div>
 			</div>
+
+			{restocking && (
+				<RestockModal
+					title={restocking.item.pro_name}
+					onShelf={restocking.item.pro_quantity}
+					inMain={restocking.inMain}
+					onClose={() => setRestocking(null)}
+					onSave={async (qty) => {
+						const saved = await restockBranchProduct(restocking.item.Bpro_id, qty);
+						setProducts((prev) => prev.map((p) => (p.Bpro_id === restocking.item.Bpro_id
+							? { ...p, pro_quantity: saved.pro_quantity, available: saved.pro_quantity }
+							: p)));
+					}}
+				/>
+			)}
+
+			{countingItem && (
+				<CountStockModal
+					title={countingItem.pro_name}
+					current={countingItem.pro_quantity}
+					wholeNumbers
+					onClose={() => setCountingItem(null)}
+					onSave={async (count) => {
+						const saved = await countBranchProduct(countingItem.Bpro_id, count);
+						setProducts((prev) => prev.map((p) => (p.Bpro_id === countingItem.Bpro_id
+							? { ...p, pro_quantity: saved.pro_quantity, available: saved.pro_quantity }
+							: p)));
+					}}
+				/>
+			)}
 		</div>
 	);
 };

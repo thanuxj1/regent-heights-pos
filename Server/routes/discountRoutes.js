@@ -1,95 +1,38 @@
 import express from "express";
 const router = express.Router();
 
-import {
-  getDiscounts,
-  getDiscountById,
-  createDiscount,
-  updateDiscount,
-  patchDiscount,
-  deleteDiscount,
-  toggleDiscount,
-  redeemDiscount,
-  applyDiscount,
-  validateCoupon,
-  getActiveDiscountsToday,
-  checkComboDiscount,
-  getDiscountStats,
-} from "../controllers/discountController.js";
+/**
+ * Promotions / Discount module — DISABLED
+ *
+ * The module is incomplete (coupon codes are never redeemed at the POS)
+ * and is intentionally hidden from the UI. All routes return 410 Gone so
+ * any stale bookmark or direct API call gets a clear, logged rejection
+ * rather than silently succeeding or crashing.
+ *
+ * The order-level discount_pct used at the cashier till is handled entirely
+ * inside orderController.js and does NOT go through these routes — the till
+ * continues to work normally.
+ *
+ * To re-enable: restore the original discountRoutes.js from git history.
+ */
+const disabled = (_req, res) =>
+  res.status(410).json({
+    success: false,
+    message: "The Promotions module is currently disabled.",
+  });
 
-import {
-  requireAuth,
-  requireBranchAdminOrAdmin,
-  requireCashierOrAbove,
-  requireWaiterOrAbove,
-} from "../middleware/authMiddleware.js";
-
-// ─────────────────────────────────────────────
-// POS OPERATIONS (LIVE SYSTEM)
-// ─────────────────────────────────────────────
-
-// Active discounts
-router.get(
-  "/active/today",
-  requireAuth,
-  requireWaiterOrAbove,
-  getActiveDiscountsToday,
-);
-
-// Validate coupon
-router.get(
-  "/validate/:coupon_code",
-  requireAuth,
-  requireWaiterOrAbove,
-  validateCoupon,
-);
-
-// Apply discount (calculation only)
-router.post("/apply", requireAuth, requireCashierOrAbove, applyDiscount);
-
-// Combo discount check
-router.post(
-  "/combo/check",
-  requireAuth,
-  requireCashierOrAbove,
-  checkComboDiscount,
-);
-
-// Redeem discount (final usage)
-router.post("/:id/redeem", requireAuth, requireCashierOrAbove, redeemDiscount);
-
-// ─────────────────────────────────────────────
-// ANALYTICS
-// ─────────────────────────────────────────────
-router.get(
-  "/stats/summary",
-  requireAuth,
-  requireBranchAdminOrAdmin,
-  getDiscountStats,
-);
-
-// ─────────────────────────────────────────────
-// READ (ALL STAFF)
-// ─────────────────────────────────────────────
-router.get("/", requireAuth, requireWaiterOrAbove, getDiscounts);
-router.get("/:id", requireAuth, requireWaiterOrAbove, getDiscountById);
-
-// ─────────────────────────────────────────────
-// MANAGEMENT (ADMIN ONLY)
-// ─────────────────────────────────────────────
-router.post("/", requireAuth, requireBranchAdminOrAdmin, createDiscount);
-
-router.put("/:id", requireAuth, requireBranchAdminOrAdmin, updateDiscount);
-
-router.patch("/:id", requireAuth, requireBranchAdminOrAdmin, patchDiscount);
-
-router.delete("/:id", requireAuth, requireBranchAdminOrAdmin, deleteDiscount);
-
-router.patch(
-  "/:id/toggle",
-  requireAuth,
-  requireBranchAdminOrAdmin,
-  toggleDiscount,
-);
+router.get("/", disabled);
+router.get("/active/today", disabled);
+router.get("/stats/summary", disabled);
+router.get("/validate/:coupon_code", disabled);
+router.get("/:id", disabled);
+router.post("/", disabled);
+router.post("/apply", disabled);
+router.post("/combo/check", disabled);
+router.post("/:id/redeem", disabled);
+router.put("/:id", disabled);
+router.patch("/:id", disabled);
+router.patch("/:id/toggle", disabled);
+router.delete("/:id", disabled);
 
 export default router;

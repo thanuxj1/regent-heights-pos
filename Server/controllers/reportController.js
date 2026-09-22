@@ -8,6 +8,12 @@ const todayStr = () => hotelToday();
 // Also the hotel's calendar: a report headed "last 7 days" must start on the
 // day the staff would name, not the day GMT happens to be on.
 const daysAgo = (n) => hotelDay(-n);
+// A DATE column reaches Node as a Date at local midnight. Its UTC date is the day
+// before whenever the server is ahead of UTC — every daily bar sat a day early.
+const dayOf = (v) => {
+  const x = new Date(v);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+};
 
 /**
  * GET /api/reports/summary?b_id=&from=&to=
@@ -25,7 +31,7 @@ export async function getSummary(req, res, next) {
     const to   = req.query.to   || todayStr();
 
     const [hotel, restaurant, expenses, commissions, hotelDaily, restDaily, expDaily,
-           expByCat, roomNights, occupancy] = await Promise.all([
+           expByCat, roomNights, occupancy, suppliers, supplierDaily] = await Promise.all([
 
       pool.query(
         `SELECT COALESCE(SUM(fi.amount),0) AS total
@@ -99,25 +105,51 @@ export async function getSummary(req, res, next) {
       ),
 
       pool.query(
-        `SELECT COALESCE(SUM(b.nights * (SELECT COUNT(*) FROM "BOOKING_ROOM" br WHERE br.booking_id = b.booking_id)),0) AS sold
+        // Nights actually inside the range. A stay was counted whole if it began in
+        // the range, so one that ran on past the end (or began before it) put the
+        // wrong number of nights into occupancy, ADR and RevPAR.
+        `SELECT COALESCE(SUM(
+                  GREATEST(0, LEAST(b.check_out_date, $3::date + 1) - GREATEST(b.check_in_date, $2::date))
+                  * (SELECT COUNT(*) FROM "BOOKING_ROOM" br WHERE br.booking_id = b.booking_id)
+                ),0) AS sold
          FROM "BOOKING" b
          WHERE b.b_id = $1 AND b.status IN ('checked_in','checked_out')
-           AND b.check_in_date BETWEEN $2::date AND $3::date`,
+           AND b.check_in_date <= $3::date AND b.check_out_date > $2::date`,
         [b_id, from, to]
       ),
 
       pool.query(`SELECT COUNT(*) AS n FROM "ROOM" WHERE b_id = $1 AND is_active = TRUE`, [b_id]),
+
+      // Money paid to suppliers is money out, though nobody types it in as an
+      // expense — it is recorded against purchase orders. Counted on the day it
+      // was paid, like everything else on this page.
+      pool.query(
+        `SELECT COALESCE(SUM(sp.amount),0) AS total
+         FROM supplier_payment sp
+         JOIN purchase_order po ON po.po_id = sp.po_id
+         WHERE po.b_id = $1 AND sp.payment_date BETWEEN $2::date AND $3::date`,
+        [b_id, from, to]
+      ),
+      pool.query(
+        `SELECT sp.payment_date AS day, SUM(sp.amount) AS total
+         FROM supplier_payment sp
+         JOIN purchase_order po ON po.po_id = sp.po_id
+         WHERE po.b_id = $1 AND sp.payment_date BETWEEN $2::date AND $3::date
+         GROUP BY day ORDER BY day`,
+        [b_id, from, to]
+      ),
     ]);
 
     // Merge the three daily series onto one timeline
     const dayMap = {};
     const put = (rows, key) => rows.forEach(r => {
-      const d = new Date(r.day).toISOString().slice(0, 10);
-      (dayMap[d] ||= { day: d, hotel: 0, restaurant: 0, expenses: 0 })[key] = num(r.total);
+      const d = dayOf(r.day);
+      (dayMap[d] ||= { day: d, hotel: 0, restaurant: 0, expenses: 0 })[key] += num(r.total);
     });
     put(hotelDaily.rows, "hotel");
     put(restDaily.rows, "restaurant");
     put(expDaily.rows, "expenses");
+    put(supplierDaily.rows, "expenses");
 
     const daily = Object.values(dayMap)
       .sort((a, b) => a.day.localeCompare(b.day))
@@ -126,6 +158,8 @@ export async function getSummary(req, res, next) {
     const hotelRev = num(hotel.rows[0].total);
     const restRev  = num(restaurant.rows[0].total);
     const expTotal = num(expenses.rows[0].total);
+    const supTotal = num(suppliers.rows[0].total);
+    const outTotal = expTotal + supTotal;
     const commTotal = num(commissions.rows[0].total);
     const revenue  = hotelRev + restRev;
 
@@ -138,11 +172,19 @@ export async function getSummary(req, res, next) {
     res.json({
       range: { from, to, days: spanDays },
       revenue: { hotel: hotelRev, restaurant: restRev, total: revenue },
-      expenses: { total: expTotal, commissions: commTotal, by_category: expByCat.rows },
+      expenses: {
+        total: +outTotal.toFixed(2),
+        recorded: expTotal,
+        supplier_payments: supTotal,
+        commissions: commTotal,
+        by_category: (supTotal > 0
+          ? [...expByCat.rows, { exp_category: "supplier_payments", total: supTotal }]
+          : expByCat.rows).sort((a, b) => Number(b.total) - Number(a.total)),
+      },
       profit: {
         gross: revenue,
-        net: +(revenue - expTotal - commTotal).toFixed(2),
-        margin_pct: revenue ? +(((revenue - expTotal - commTotal) / revenue) * 100).toFixed(1) : 0,
+        net: +(revenue - outTotal - commTotal).toFixed(2),
+        margin_pct: revenue ? +(((revenue - outTotal - commTotal) / revenue) * 100).toFixed(1) : 0,
       },
       occupancy: {
         rooms_sold: roomsSold,
@@ -173,11 +215,13 @@ export async function getTransactions(req, res, next) {
 
     if (kind === "all" || kind === "hotel") {
       const r = await pool.query(
-        `SELECT bp.paid_at AS at, bp.amount, bp.method, bp.kind,
-                b.booking_ref AS ref, g.full_name AS party
+        `SELECT bp.paid_at AS at, bp.amount, bp.method, bp.kind, bp.received_by,
+                b.booking_ref AS ref, g.full_name AS party,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "BOOKING_PAYMENT" bp
          JOIN "BOOKING" b ON b.booking_id = bp.booking_id
          LEFT JOIN "GUEST" g ON g.guest_id = b.guest_id
+         LEFT JOIN "User" u ON u.u_id = bp.received_by
          WHERE b.b_id = $1 AND bp.paid_at::date BETWEEN $2::date AND $3::date
          ORDER BY bp.paid_at DESC`,
         [b_id, from, to]
@@ -185,6 +229,9 @@ export async function getTransactions(req, res, next) {
       r.rows.forEach(x => out.push({
         at: x.at, type: "Hotel payment", direction: x.kind === "refund" ? "out" : "in",
         amount: num(x.amount), method: x.method, reference: x.ref, party: x.party,
+        // The staff member who took the money — not the guest who paid it.
+        handled_by: x.handled_by || null,
+        handled_by_id: x.received_by ?? null,
       }));
     }
 

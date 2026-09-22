@@ -46,6 +46,7 @@ const ADMIN_NAV = [
       ["Inventory",          "/branch-admin/inventory"],
       ["Add Inventory Item", "/branch-admin/raw-ingredient"],
       ["Suppliers",          "/branch-admin/suppliers"],
+      ["Supplier Ledger",    "/branch-admin/supplier-ledger"],
       ["Recipe Mapper",      "/branch-admin/recipe-mapper"],
     ],
   },
@@ -60,7 +61,7 @@ const ADMIN_NAV = [
       ["Transactions",        "/branch-admin/transactions"],
       ["Sales & Revenue",     "/branch-admin/sales-revenue"],
       ["Cashier Performance", "/branch-admin/cashier-performance"],
-      ["Promotions",          "/admin/promotions"],
+      // ["Promotions", "/admin/promotions"], // hidden — module not yet active
       ["User Management",     "/branch-admin/users"],
       ["Activity Log",        "/branch-admin/activity"],
       ["Hotel Profile",       "/branch-admin/hotel-profile"],

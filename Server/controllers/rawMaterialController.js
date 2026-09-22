@@ -1,5 +1,6 @@
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
+import { logActivity } from "../utils/activityLog.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ export async function getRawMaterials(req, res, next) {
     const { role_id, com_id, b_id } = req.user;
     const branchFilter = req.query?.b_id ?? req.query?.B_id;
 
-    let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level,
+    let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount,
               CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock
        FROM "Raw_Material"`;
 
@@ -126,7 +127,7 @@ export async function getLowStockMaterials(req, res, next) {
     const { role_id, com_id, b_id } = req.user;
     const branchFilter = req.query?.b_id ?? req.query?.B_id;
 
-    let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level,
+    let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount,
               (record_level - stock_qty) AS shortage_qty
        FROM "Raw_Material"`;
 
@@ -167,7 +168,7 @@ export async function getRawMaterialById(req, res, next) {
     const id = parsePositiveInt(req.params.id, "rm_id");
     const { role_id, com_id, b_id } = req.user;
 
-    let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level,
+    let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount,
               CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock
        FROM "Raw_Material"
        WHERE rm_id = $1`;
@@ -210,9 +211,12 @@ export async function createRawMaterial(req, res, next) {
       "unit",
       "stock_qty",
       "record_level",
+      "item_category",
+      "yield_unit",
+      "yield_amount",
     ]);
 
-    const { rm_name, unit, stock_qty, record_level } = body;
+    const { rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount } = body;
 
     // ── Required fields ──
     if (!rm_name || !unit) {
@@ -318,10 +322,10 @@ export async function createRawMaterial(req, res, next) {
     }
 
     const result = await pool.query(
-      `INSERT INTO "Raw_Material" (rm_name, unit, stock_qty, record_level, "Com_id", b_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING rm_id, rm_name, unit, stock_qty, record_level`,
-      [rm_name, unitLower, stockQty, recordLevel, resolvedComId, resolvedBId],
+      `INSERT INTO "Raw_Material" (rm_name, unit, stock_qty, record_level, "Com_id", b_id, item_category, yield_unit, yield_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING rm_id, rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount`,
+      [rm_name, unitLower, stockQty, recordLevel, resolvedComId, resolvedBId, item_category || 'ingredient', yield_unit || null, yield_amount || null],
     );
 
     res.status(201).json(result.rows[0]);
@@ -347,6 +351,9 @@ export async function updateRawMaterial(req, res, next) {
       "unit",
       "stock_qty",
       "record_level",
+      "item_category",
+      "yield_unit",
+      "yield_amount",
     ]);
 
     // ── NEW: at least one field required ──
@@ -355,7 +362,7 @@ export async function updateRawMaterial(req, res, next) {
       throw new Error("No valid fields provided to update");
     }
 
-    const { rm_name, unit, stock_qty, record_level } = body;
+    const { rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount } = body;
 
     // ── Existence & Scoping check ──
     let existQuery = 'SELECT rm_id, rm_name FROM "Raw_Material" WHERE rm_id = $1';
@@ -453,14 +460,17 @@ export async function updateRawMaterial(req, res, next) {
     const result = await pool.query(
       `UPDATE "Raw_Material"
        SET
-         rm_name      = COALESCE($1, rm_name),
-         unit         = COALESCE($2, unit),
-         stock_qty    = COALESCE($3, stock_qty),
-         record_level = COALESCE($4, record_level)
-       WHERE rm_id = $5
-       RETURNING rm_id, rm_name, unit, stock_qty, record_level,
+         rm_name       = COALESCE($1, rm_name),
+         unit          = COALESCE($2, unit),
+         stock_qty     = COALESCE($3, stock_qty),
+         record_level  = COALESCE($4, record_level),
+         item_category = COALESCE($5, item_category),
+         yield_unit    = COALESCE($6, yield_unit),
+         yield_amount  = COALESCE($7, yield_amount)
+       WHERE rm_id = $8
+       RETURNING rm_id, rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount,
                  CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock`,
-      [rm_name ?? null, unitLower, stockQty, recordLevel, id],
+      [rm_name ?? null, unitLower, stockQty, recordLevel, item_category ?? null, yield_unit ?? null, yield_amount ?? null, id],
     );
 
     res.json(result.rows[0]);
@@ -480,8 +490,8 @@ export async function adjustStock(req, res, next) {
       throw new Error("Request body must be a JSON object");
     }
 
-    const body = sanitizeBody(req.body, ["adjustment", "operation"]);
-    const { adjustment, operation } = body;
+    const body = sanitizeBody(req.body, ["adjustment", "operation", "note"]);
+    const { adjustment, operation, note } = body;
 
     if (adjustment === undefined || !operation) {
       res.status(400);
@@ -520,7 +530,7 @@ export async function adjustStock(req, res, next) {
 
     const adjRounded = parseFloat(adjValue.toFixed(3));
 
-    let existQuery = 'SELECT rm_id, rm_name, stock_qty, record_level, unit FROM "Raw_Material" WHERE rm_id = $1';
+    let existQuery = 'SELECT rm_id, rm_name, stock_qty, record_level, unit, b_id FROM "Raw_Material" WHERE rm_id = $1';
     const existParams = [id];
     if (req.user.role_id !== ROLES.SUPER_ADMIN) {
       existQuery += ` AND "Com_id" = $2`;
@@ -538,34 +548,104 @@ export async function adjustStock(req, res, next) {
 
     const current = existing.rows[0];
 
-    if (operation === "subtract") {
-      const currentQty = parseFloat(current.stock_qty);
-      if (adjRounded > currentQty) {
-        res.status(409);
-        throw new Error(
-          `Cannot subtract ${adjRounded} ${current.unit} — only ${currentQty} ${current.unit} in stock`,
-        );
-      }
-    }
-
-    const operator = operation === "add" ? "+" : "-";
-
-    const result = await pool.query(
-      `UPDATE "Raw_Material"
-       SET stock_qty = stock_qty ${operator} $1
-       WHERE rm_id = $2
-       RETURNING rm_id, rm_name, unit, stock_qty, record_level,
-                 CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock`,
-      [adjRounded, id],
-    );
-
-    res.json(result.rows[0]);
+    // Taking out more than the count shows is allowed: the count is what is
+    // wrong. It goes below zero, which is what flags it for a recount.
+    const signed = operation.toLowerCase() === "add" ? adjRounded : -adjRounded;
+    const why = String(note || "").trim().slice(0, 200)
+      || (signed > 0 ? "Added by hand" : "Taken out by hand");
+    res.json(await recordCount(req, current, { delta: signed, note: why }));
   } catch (err) {
     next(err);
   }
 }
 
 // ─── DELETE /api/raw-materials/:id ────────────────────────────────────────────
+/**
+ * Change what is on the shelf, on the record: one transaction that sets the
+ * stock, writes the change to the stock ledger with who and why, and puts it in
+ * the owner's activity log. Every manual stock change goes through here.
+ */
+async function recordCount(req, material, { counted = null, delta = null, note }) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const cur = await client.query(
+      'SELECT stock_qty FROM "Raw_Material" WHERE rm_id = $1 FOR UPDATE', [material.rm_id]);
+    const before = Number(cur.rows[0].stock_qty);
+    const after = counted != null ? counted : +(before + delta).toFixed(3);
+    const change = +(after - before).toFixed(3);
+    const { rows } = await client.query(
+      `UPDATE "Raw_Material" SET stock_qty = $1::numeric WHERE rm_id = $2
+       RETURNING rm_id, rm_name, unit, stock_qty, record_level,
+                 CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock`,
+      [after, material.rm_id]);
+    const b_id = material.b_id ?? req.user?.b_id ?? null;
+    if (change !== 0 && b_id) {
+      await client.query(
+        `INSERT INTO "STOCK_MOVEMENT" (b_id, rm_id, qty, reason, note, created_by)
+         VALUES ($1, $2, $3::numeric, 'adjust', $4, $5)`,
+        [b_id, material.rm_id, change, note, req.user?.u_id ?? null]);
+    }
+    await client.query("COMMIT");
+
+    const u = material.unit;
+    logActivity(req, {
+      action: "update", entity: "raw_material", entity_id: material.rm_id, b_id,
+      summary: counted != null
+        ? `Counted ${material.rm_name}: ${after} ${u} on the shelf (the system said ${before} ${u}) — ${note}`
+        : `${change >= 0 ? "Added" : "Took out"} ${Math.abs(change)} ${u} of ${material.rm_name} by hand (now ${after} ${u}) — ${note}`,
+      details: { before, after, change, note },
+    });
+    return { ...rows[0], before, change };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * POST /api/raw-materials/:id/count — the manager counts what is actually on
+ * the shelf. Sales never stop for stock, so the figure drifts below zero when
+ * it was wrong; this is how it is put right, and it has to say why.
+ */
+export async function countRawMaterial(req, res, next) {
+  try {
+    const id = parsePositiveInt(req.params.id, "rm_id");
+    const counted = Number(req.body?.counted);
+    const note = String(req.body?.note ?? "").trim();
+    if (req.body?.counted === "" || req.body?.counted == null || !Number.isFinite(counted)
+        || counted < 0 || counted > 9999999.999) {
+      res.status(400);
+      throw new Error("Enter what you counted — zero or more.");
+    }
+    if (note.length < 3 || note.length > 200) {
+      res.status(400);
+      throw new Error("Say why the count changed (3–200 characters) — it is kept on the record.");
+    }
+
+    let q = 'SELECT rm_id, rm_name, unit, b_id FROM "Raw_Material" WHERE rm_id = $1';
+    const p = [id];
+    if (req.user.role_id !== ROLES.SUPER_ADMIN) {
+      q += ` AND "Com_id" = $2`;
+      p.push(req.user.com_id);
+      if (req.user.b_id) {
+        q += ` AND b_id = $3`;
+        p.push(req.user.b_id);
+      }
+    }
+    const found = await pool.query(q, p);
+    if (!found.rows.length) {
+      res.status(404);
+      throw new Error("Raw material not found");
+    }
+    res.json(await recordCount(req, found.rows[0], { counted: +counted.toFixed(3), note }));
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function deleteRawMaterial(req, res, next) {
   try {
     const id = parsePositiveInt(req.params.id, "rm_id");

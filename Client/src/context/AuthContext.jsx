@@ -1,114 +1,21 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import {
-  login as apiLogin,
-  setAuthToken,
-  getCurrentUser,
-} from "../services/api";
-import { connectSocket, disconnectSocket } from "../services/socket";
+import { createContext, useContext } from "react";
 
-export const AuthContext = createContext();
+// Only the context and its hook live here; the provider is AuthProvider.jsx.
+//
+// This file used to carry a second, unused provider that imported the API and
+// socket modules. Every edit to either one re-ran this file in development and
+// minted a fresh context, which could leave a screen reading one context while
+// the provider fed another. Nothing here imports anything that changes.
+export const AuthContext = createContext(null);
 
-export const useAuth = () => useContext(AuthContext);
+const SIGNED_OUT = {
+  user: null,
+  token: null,
+  login: async () => {
+    throw new Error("Sign-in is not ready yet. Reload the page.");
+  },
+  logout: () => {},
+};
 
-function isTokenExpired(token) {
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.exp && payload.exp < Date.now() / 1000;
-  } catch {
-    return true;
-  }
-}
-
-export function AuthProvider({ children }) {
-  const navigate = useNavigate();
-
-  const storedToken = localStorage.getItem("token");
-  const tokenValid = storedToken && !isTokenExpired(storedToken);
-
-  const [user, setUser] = useState(() => tokenValid ? getCurrentUser() : null);
-  const [token, setToken] = useState(() => tokenValid ? storedToken : null);
-
-  // Clear stale session immediately on mount if token is expired
-  useEffect(() => {
-    if (!tokenValid && storedToken) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Set auth token whenever token changes
-  useEffect(() => {
-    if (token) {
-      setAuthToken(token);
-    } else {
-      setAuthToken(null);
-    }
-  }, [token]);
-
-  // Handle WebSocket connection
-  useEffect(() => {
-    if (token) {
-      connectSocket();
-    } else {
-      disconnectSocket();
-    }
-
-    return () => {
-      disconnectSocket();
-    };
-  }, [token]);
-
-  // Login function
-  const login = async (credentials) => {
-    try {
-      const data = await apiLogin(credentials); // expects { token, user }
-
-      if (!data?.token) {
-        throw new Error("No token returned");
-      }
-
-      setToken(data.token);
-      setUser(data.user);
-
-      setAuthToken(data.token);
-
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data.user));
-
-      return data;
-    } catch (error) {
-      console.error("Login failed:", error);
-      throw error;
-    }
-  };
-
-  // Logout function
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-
-    setAuthToken(null);
-
-    disconnectSocket();
-
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-
-    navigate("/login");
-  };
-
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        login,
-        logout,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-}
+/** The signed-in person, or a signed-out stand-in outside the provider. */
+export const useAuth = () => useContext(AuthContext) ?? SIGNED_OUT;

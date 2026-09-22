@@ -1,3 +1,4 @@
+import { API_URL, IMAGE_BASE_URL } from "../../config";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../../components/branch-admin/Sidebar";
@@ -14,8 +15,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 
 const VALID_UNITS = ["kg", "g", "l", "ml", "pcs", "units", "box", "pack"];
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-const IMAGE_BASE_URL = API_BASE_URL.replace(/\/api\/?$/i, "");
+const API_BASE_URL = API_URL;
 
 const resolveProductImage = (value) => {
   if (!value) return "";
@@ -114,21 +114,24 @@ const RecipeMapperDetail = () => {
     (material) => String(material.rm_id) === String(selectedRawMaterial)
   );
 
-  const unitOptions = useMemo(() => {
-    const units = new Set(["kg", "g", "l", "ml"]);
-    rawMaterials.forEach((material) => {
-      if (material?.unit) units.add(material.unit);
-    });
-    return Array.from(units);
-  }, [rawMaterials]);
+  const availableUnits = useMemo(() => {
+    if (!selectedMaterial) return [];
+    const base = selectedMaterial.yield_unit || selectedMaterial.unit;
+    if (!base) return [];
+    const lower = base.toLowerCase();
+    if (["kg", "g", "mg"].includes(lower)) return ["kg", "g"];
+    if (["l", "ml"].includes(lower)) return ["l", "ml"];
+    return [base];
+  }, [selectedMaterial]);
 
   useEffect(() => {
     if (!selectedRawMaterial) {
       setSelectedUnit("");
       return;
     }
-    setSelectedUnit(selectedMaterial?.unit || "");
-  }, [selectedRawMaterial, selectedMaterial?.unit]);
+    const defaultUnit = selectedMaterial?.yield_unit || selectedMaterial?.unit || "";
+    setSelectedUnit(defaultUnit);
+  }, [selectedRawMaterial, selectedMaterial]);
 
   const handleAddIngredient = async () => {
     if (!selectedRawMaterial || !quantityRequired || !selectedUnit) {
@@ -287,17 +290,6 @@ const RecipeMapperDetail = () => {
                   >
                     {categoryLabel}
                   </span>
-                  <span
-                    style={{
-                      background: "rgba(15, 23, 42, 0.75)",
-                      color: "#fff",
-                      padding: "4px 10px",
-                      borderRadius: "10px",
-                      fontSize: "11px",
-                    }}
-                  >
-                    15m
-                  </span>
                 </div>
               </div>
             </div>
@@ -366,7 +358,8 @@ const RecipeMapperDetail = () => {
                 style={inputStyle}
               >
                 <option value="">e.g., Fresh Tomatoes</option>
-                {rawMaterials.map((material) => (
+                {/* Recipes use ingredients — not hotel supplies (serviettes, cleaning goods) or resale products. */}
+                {rawMaterials.filter((m) => (m.item_category || "ingredient") === "ingredient").map((material) => (
                   <option key={material.rm_id} value={material.rm_id}>
                     {material.rm_name}
                   </option>
@@ -391,10 +384,16 @@ const RecipeMapperDetail = () => {
                   <select
                     value={selectedUnit}
                     onChange={(event) => setSelectedUnit(event.target.value)}
-                    style={inputStyle}
+                    style={{
+                      ...inputStyle,
+                      backgroundColor: !selectedRawMaterial ? "#f9fafb" : "#fff",
+                      cursor: !selectedRawMaterial ? "not-allowed" : "pointer"
+                    }}
+                    disabled={!selectedRawMaterial || availableUnits.length <= 1}
                   >
-                    <option value="">Select unit</option>
-                    {unitOptions.map((unit) => (
+                    {!selectedRawMaterial && <option value="">Select ingredient first</option>}
+                    {selectedRawMaterial && availableUnits.length === 0 && <option value="">No unit</option>}
+                    {availableUnits.map((unit) => (
                       <option key={unit} value={unit}>
                         {unit}
                       </option>

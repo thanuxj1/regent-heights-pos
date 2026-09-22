@@ -207,6 +207,11 @@ export default function KitchenOrders() {
                                 </span>
                               </div>
                             ))}
+                            {order.kitchen_note && (
+                              <div style={{ marginTop: 4, padding: "4px 8px", borderRadius: 6, background: "#FFFBEB", border: "1px solid #FCD34D", color: "#92400E", fontSize: 12, fontWeight: 600 }}>
+                                {order.kitchen_note}
+                              </div>
+                            )}
                           </div>
                         </td>
                       </tr>

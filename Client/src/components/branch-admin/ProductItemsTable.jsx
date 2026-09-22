@@ -5,12 +5,17 @@ const statusStyles = {
   "In stock": { background: "#D7F4DF", color: "#2C9B52" },
   "Low stock": { background: "#FFE8BE", color: "#C98918" },
   "Out of stock": { background: "#FFD8D8", color: "#D04444" },
+  // Not a warning: nothing has run out, there is simply nothing to count.
+  "Made to order": { background: "#E3F0FB", color: "#0A5BAE" },
+  "Below zero": { background: "#DC2626", color: "#FFFFFF" },
 };
 
 const ProductItemsTable = ({
   products = [],
   onDecreaseStock,
   onIncreaseStock,
+  onCountStock,
+  onRestock,
   updatingStockId = null,
   onViewProduct,
   onEditProduct,
@@ -24,6 +29,10 @@ const ProductItemsTable = ({
   onPageChange,
 }) => {
   const shouldShowActions = showActions && (onViewProduct || onEditProduct || onDeleteProduct);
+  // A bare +/− changes a figure without saying why. A property's shelf count is
+  // corrected by counting it, so that list passes no stepper and shows Count
+  // instead; the company product list, which is not on the stock ledger, keeps it.
+  const showStepper = Boolean(onDecreaseStock || onIncreaseStock);
   const showPageNumbers = totalPages <= 4;
   const canGoPrevious = currentPage > 1;
   const canGoNext = currentPage < totalPages;
@@ -112,7 +121,25 @@ const ProductItemsTable = ({
                 <td style={{ padding: "10px 14px", color: "#6B7280", fontSize: "14px" }}>{item.price}</td>
                 <td style={{ padding: "10px 14px", color: "#6B7280", fontSize: "14px" }}>{item.discount}</td>
                 <td style={{ padding: "10px 14px" }}>
+                  {item.stockMode === "made_to_order" ? (
+                    // Cooked when somebody asks for it. There is no shelf to count,
+                    // so the only honest number is how many have been made today.
+                    <span title="Cooked to order — nothing is counted, and it never runs out"
+                      style={{ fontSize: "14px", color: "#111827" }}>
+                      {item.madeToday > 0 ? item.madeToday : "—"}
+                      <span style={{ marginLeft: 6, fontSize: "11px", color: "#6B7280" }}>made today</span>
+                    </span>
+                  ) : item.stockMode === "recipe" ? (
+                    // Its stock is its ingredients, so there is no count to nudge up
+                    // or down here — the Inventory page is where it changes.
+                    <span title={item.limitedBy ? `Limited by ${item.limitedBy}` : "Made from its recipe"}
+                      style={{ fontSize: "14px", color: "#111827" }}>
+                      {item.stock}
+                      <span style={{ marginLeft: 6, fontSize: "11px", color: "#6B7280" }}>from ingredients</span>
+                    </span>
+                  ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "#111827" }}>
+                    {showStepper && (
                     <button
                       type="button"
                       onClick={() => onDecreaseStock?.(item.id)}
@@ -142,7 +169,10 @@ const ProductItemsTable = ({
                         <FaMinus size={10} color="#6B7280" style={{ display: "block" }} />
                       )}
                     </button>
-                    <span style={{ width: "26px", textAlign: "center", fontSize: "14px" }}>{item.stock}</span>
+                    )}
+                    <span style={{ width: "26px", textAlign: "center", fontSize: "14px",
+                                   ...(item.stock < 0 ? { color: "#B91C1C", fontWeight: 700 } : {}) }}>{item.stock}</span>
+                    {showStepper && (
                     <button
                       type="button"
                       onClick={() => onIncreaseStock?.(item.id)}
@@ -172,7 +202,37 @@ const ProductItemsTable = ({
                         <FaPlus size={10} color="#6B7280" style={{ display: "block" }} />
                       )}
                     </button>
+                    )}
+                    {onRestock && (
+                      <button
+                        type="button"
+                        onClick={() => onRestock(item.id)}
+                        title="Move more from the storeroom onto the menu"
+                        style={{
+                          marginLeft: showStepper ? "4px" : 0, padding: "2px 8px", borderRadius: "6px",
+                          border: "1px solid #BBF7D0", background: "#F0FDF4", color: "#15803D",
+                          fontSize: "12px", fontWeight: 600, cursor: "pointer",
+                        }}
+                      >
+                        Restock
+                      </button>
+                    )}
+                    {onCountStock && (
+                      <button
+                        type="button"
+                        onClick={() => onCountStock(item.id)}
+                        title="Count what is on the shelf and set the figure"
+                        style={{
+                          marginLeft: showStepper ? "4px" : 0, padding: "2px 8px", borderRadius: "6px",
+                          border: "1px solid #BFDBFE", background: "#EFF6FF", color: "#1D4ED8",
+                          fontSize: "12px", fontWeight: 600, cursor: "pointer",
+                        }}
+                      >
+                        Count
+                      </button>
+                    )}
                   </div>
+                  )}
                 </td>
                 <td style={{ padding: "10px 14px" }}>
                   <span

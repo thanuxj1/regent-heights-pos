@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Header from "../../components/branch-admin/Header";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
+import { dayKey, monthKey, todayKey } from "../../utils/dates";
 import {
   getAgents, createAgent, updateAgent, deleteAgent,
   getCommissionRecords, createCommissionRecord, updateCommissionRecord, deleteCommissionRecord,
@@ -11,10 +12,10 @@ function initials(name) {
   return (name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 }
 function fmt2(v) { return Number(v||0).toLocaleString("en-LK", { minimumFractionDigits:2, maximumFractionDigits:2 }); }
-function thisMonth() { return new Date().toISOString().slice(0,7); }
+function thisMonth() { return monthKey(new Date()); }
 
-const BLANK_AGENT = { agent_name:"", agent_phone:"", agent_email:"", commission_rate:10, notes:"" };
-const BLANK_RECORD = { commission_amount:"", record_date: new Date().toISOString().slice(0,10), notes:"", status:"pending", order_id:"" };
+const BLANK_AGENT = { agent_name:"", agent_phone:"", agent_email:"", commission_rate:"", notes:"" };
+const blankRecord = () => ({ commission_amount:"", record_date: todayKey(), notes:"", status:"pending", order_id:"" });
 
 const COLORS = ["#1565C0","#0F766E","#7C3AED","#BE185D","#D97706","#0369A1","#166534","#9333EA"];
 function agentColor(id) { return COLORS[id % COLORS.length]; }
@@ -35,7 +36,7 @@ export default function CommissionAgents() {
 
   // Record modal
   const [showRecordModal, setShowRecordModal] = useState(false);
-  const [recordForm, setRecordForm] = useState(BLANK_RECORD);
+  const [recordForm, setRecordForm] = useState(blankRecord);
   const [editingRecord, setEditingRecord] = useState(null);
 
   const [submitting, setSubmitting] = useState(false);
@@ -64,13 +65,13 @@ export default function CommissionAgents() {
 
   const agentRecords = useMemo(() => {
     if (!selectedAgent) return [];
-    return records.filter(r => r.agent_id === selectedAgent.agent_id).sort((a,b) => b.record_date.localeCompare(a.record_date));
+    return records.filter(r => r.agent_id === selectedAgent.agent_id).sort((a,b) => dayKey(b.record_date).localeCompare(dayKey(a.record_date)));
   }, [records, selectedAgent]);
 
   const monthlyBreakdown = useMemo(() => {
     const map = {};
     agentRecords.forEach(r => {
-      const m = r.record_date?.slice(0,7);
+      const m = monthKey(r.record_date);
       if (!map[m]) map[m] = { month:m, total:0, paid:0, pending:0, count:0 };
       map[m].total += Number(r.commission_amount);
       map[m][r.status] = (map[m][r.status]||0) + Number(r.commission_amount);
@@ -81,7 +82,7 @@ export default function CommissionAgents() {
 
   const currentMonthTotal = useMemo(() => {
     const m = thisMonth();
-    return agentRecords.filter(r => r.record_date?.slice(0,7) === m).reduce((s,r) => s + Number(r.commission_amount), 0);
+    return agentRecords.filter(r => monthKey(r.record_date) === m).reduce((s,r) => s + Number(r.commission_amount), 0);
   }, [agentRecords]);
 
   // Agent CRUD
@@ -89,7 +90,11 @@ export default function CommissionAgents() {
   const openEditAgent = (a) => { setAgentForm({ agent_name:a.agent_name, agent_phone:a.agent_phone||"", agent_email:a.agent_email||"", commission_rate:a.commission_rate, notes:a.notes||"" }); setEditingAgent(a); setError(""); setShowAgentModal(true); };
 
   const handleAgentSubmit = async (e) => {
-    e.preventDefault(); setSubmitting(true); setError("");
+    e.preventDefault(); setError("");
+    if (String(agentForm.commission_rate).trim() === "" || !(Number(agentForm.commission_rate) >= 0) || Number(agentForm.commission_rate) > 100) {
+      setError("Enter the commission rate, between 0 and 100."); return;
+    }
+    setSubmitting(true);
     try {
       const payload = { ...agentForm, b_id: branchId, commission_rate: Number(agentForm.commission_rate) };
       if (editingAgent) await updateAgent(editingAgent.agent_id, payload);
@@ -107,11 +112,13 @@ export default function CommissionAgents() {
   };
 
   // Record CRUD
-  const openNewRecord = () => { setRecordForm(BLANK_RECORD); setEditingRecord(null); setError(""); setShowRecordModal(true); };
-  const openEditRecord = (r) => { setRecordForm({ commission_amount:r.commission_amount, record_date:r.record_date?.slice(0,10), notes:r.notes||"", status:r.status, order_id:r.order_id||"" }); setEditingRecord(r); setError(""); setShowRecordModal(true); };
+  const openNewRecord = () => { setRecordForm(blankRecord()); setEditingRecord(null); setError(""); setShowRecordModal(true); };
+  const openEditRecord = (r) => { setRecordForm({ commission_amount:r.commission_amount, record_date:dayKey(r.record_date), notes:r.notes||"", status:r.status, order_id:r.order_id||"" }); setEditingRecord(r); setError(""); setShowRecordModal(true); };
 
   const handleRecordSubmit = async (e) => {
-    e.preventDefault(); setSubmitting(true); setError("");
+    e.preventDefault(); setError("");
+    if (!(Number(recordForm.commission_amount) > 0)) { setError("Enter the commission amount."); return; }
+    setSubmitting(true);
     try {
       const payload = { ...recordForm, agent_id: selectedAgent.agent_id, commission_amount: Number(recordForm.commission_amount), order_id: recordForm.order_id ? Number(recordForm.order_id) : null };
       if (editingRecord) await updateCommissionRecord(editingRecord.record_id, payload);
@@ -269,7 +276,7 @@ export default function CommissionAgents() {
                             const b = sb(r.status);
                             return (
                               <tr key={r.record_id} style={{ borderTop:"1px solid #F1F5F9" }}>
-                                <td style={{ padding:"12px 16px", color:"#475569" }}>{r.record_date?.slice(0,10)}</td>
+                                <td style={{ padding:"12px 16px", color:"#475569" }}>{dayKey(r.record_date)}</td>
                                 <td style={{ padding:"12px 16px", fontWeight:700, color:"#1E293B" }}>LKR {fmt2(r.commission_amount)}</td>
                                 <td style={{ padding:"12px 16px", color:"#94A3B8" }}>
                                   {r.booking_ref ? (
@@ -322,7 +329,10 @@ export default function CommissionAgents() {
                 { key:"commission_rate", label:"Commission Rate (%)", placeholder:"10", type:"number" },
               ].map(f => (
                 <label key={f.key} style={{ fontSize:12, fontWeight:600, color:"#64748B" }}>{f.label}
-                  <input type={f.type} placeholder={f.placeholder} value={agentForm[f.key]} required={f.required}
+                  <input type={f.type} placeholder={f.placeholder} value={agentForm[f.key]}
+                    required={f.required || f.key === "commission_rate"}
+                    min={f.type === "number" ? 0 : undefined} max={f.type === "number" ? 100 : undefined}
+                    step={f.type === "number" ? "0.01" : undefined}
                     onChange={e => setAgentForm(p => ({...p, [f.key]: e.target.value}))}
                     style={{ display:"block", width:"100%", marginTop:4, padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:8, fontSize:14, boxSizing:"border-box" }} />
                 </label>

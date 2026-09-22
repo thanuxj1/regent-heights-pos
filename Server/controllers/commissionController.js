@@ -2,6 +2,10 @@ import pool from "../config/database.js";
 import { syncBookingCommission } from "../utils/commission.js";
 import { branchClause, writeBranchId, assertInScope } from "../utils/scope.js";
 import { logActivity } from "../utils/activityLog.js";
+import { hotelToday } from "../utils/hotelTime.js";
+import { pctField, moneyField, textField, emailField, dateField, oneOf, invalid } from "../utils/validate.js";
+
+const has = (body, key) => Object.prototype.hasOwnProperty.call(body, key);
 
 // ─── Agents ──────────────────────────────────────────────────────────────────
 
@@ -50,13 +54,17 @@ export async function getAgentById(req, res, next) {
 
 export async function createAgent(req, res, next) {
   try {
-    const { agent_name, agent_phone, agent_email, commission_rate, notes } = req.body;
     const b_id = writeBranchId(req);
-    if (!agent_name?.trim()) { res.status(400); return next(new Error("agent_name is required")); }
+    const name = textField(req.body.agent_name, "Agent name", 100, { required: true });
+    const phone = textField(req.body.agent_phone, "Phone", 30);
+    const email = emailField(req.body.agent_email);
+    // A typed 0 is a real rate. `commission_rate || 10` turned it into ten percent.
+    const rate = pctField(req.body.commission_rate, "Commission rate", 0);
+    const notes = textField(req.body.notes, "Notes", 500);
     const { rows } = await pool.query(
       `INSERT INTO "COMMISSION_AGENT" (agent_name, agent_phone, agent_email, b_id, commission_rate, notes)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [agent_name.trim(), agent_phone||null, agent_email||null, b_id||null, commission_rate||10, notes||null]
+      [name, phone, email, b_id||null, rate, notes]
     );
     logActivity(req, { action: "create", entity: "commission_agent", entity_id: rows[0].agent_id, b_id,
       summary: `Added commission agent ${rows[0].agent_name} at ${rows[0].commission_rate}%` });
@@ -68,24 +76,30 @@ export async function updateAgent(req, res, next) {
   try {
     const id = Number(req.params.id);
     await assertInScope(req, res, { table: "COMMISSION_AGENT", idColumn: "agent_id", id });
-    const { agent_name, agent_phone, agent_email, commission_rate, notes } = req.body;
+    const cur = await pool.query('SELECT * FROM "COMMISSION_AGENT" WHERE agent_id = $1', [id]);
+    if (!cur.rows.length) { res.status(404); return next(new Error("Agent not found")); }
+    const was = cur.rows[0];
     const b_id = writeBranchId(req);
+
+    // What is sent replaces what is there, blanks included; a 0% rate is a rate.
+    // COALESCE kept the old value for both, so neither could be changed.
+    const name = has(req.body, "agent_name") ? textField(req.body.agent_name, "Agent name", 100, { required: true }) : was.agent_name;
+    const phone = has(req.body, "agent_phone") ? textField(req.body.agent_phone, "Phone", 30) : was.agent_phone;
+    const email = has(req.body, "agent_email") ? emailField(req.body.agent_email) : was.agent_email;
+    const rate = has(req.body, "commission_rate") ? pctField(req.body.commission_rate, "Commission rate", Number(was.commission_rate)) : Number(was.commission_rate);
+    const notes = has(req.body, "notes") ? textField(req.body.notes, "Notes", 500) : was.notes;
+
     const { rows } = await pool.query(
       `UPDATE "COMMISSION_AGENT"
-       SET agent_name      = COALESCE($1, agent_name),
-           agent_phone     = COALESCE($2, agent_phone),
-           agent_email     = COALESCE($3, agent_email),
-           b_id            = COALESCE($4, b_id),
-           commission_rate = COALESCE($5, commission_rate),
-           notes           = COALESCE($6, notes)
+       SET agent_name = $1, agent_phone = $2, agent_email = $3, b_id = COALESCE($4, b_id),
+           commission_rate = $5, notes = $6
        WHERE agent_id = $7 RETURNING *`,
-      [agent_name||null, agent_phone||null, agent_email||null, b_id||null, commission_rate||null, notes||null, id]
+      [name, phone, email, b_id||null, rate, notes, id]
     );
-    if (!rows.length) { res.status(404); return next(new Error("Agent not found")); }
 
     // A new rate applies to everything not yet paid out. Records already marked
     // paid keep the figure the money was actually sent against.
-    if (commission_rate != null) {
+    if (has(req.body, "commission_rate")) {
       const pending = await pool.query(
         `SELECT booking_id FROM "COMMISSION_RECORD"
          WHERE agent_id = $1 AND booking_id IS NOT NULL AND status = 'pending'`, [id]
@@ -145,16 +159,19 @@ export async function getRecords(req, res, next) {
 
 export async function createRecord(req, res, next) {
   try {
-    const { agent_id, order_id, commission_amount, record_date, notes, status } = req.body;
-    if (!agent_id || commission_amount === undefined) {
-      res.status(400); return next(new Error("agent_id and commission_amount are required"));
-    }
+    const { agent_id, order_id } = req.body;
+    if (!agent_id) { res.status(400); return next(new Error("Choose the agent this commission is for.")); }
     // A record can only hang off an agent this branch owns.
     await assertInScope(req, res, { table: "COMMISSION_AGENT", idColumn: "agent_id", id: agent_id });
+    const amount = moneyField(req.body.commission_amount, "Commission amount", { min: 0.01, max: 99999999.99 });
+    if (!(amount > 0)) invalid("Enter the commission amount.");
+    const date = dateField(req.body.record_date, "Date") || hotelToday();
+    const status = oneOf(req.body.status, "Status", ["pending", "paid"], "pending");
+    const notes = textField(req.body.notes, "Notes", 500);
     const { rows } = await pool.query(
       `INSERT INTO "COMMISSION_RECORD" (agent_id, order_id, commission_amount, record_date, notes, status)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [Number(agent_id), order_id||null, Number(commission_amount), record_date||new Date().toISOString().split("T")[0], notes||null, status||"pending"]
+      [Number(agent_id), order_id||null, amount, date, notes, status]
     );
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
@@ -169,15 +186,21 @@ export async function updateRecord(req, res, next) {
     );
     if (!owner.rows.length) { res.status(404); return next(new Error("Record not found")); }
     await assertInScope(req, res, { table: "COMMISSION_AGENT", idColumn: "agent_id", id: owner.rows[0].agent_id });
-    const { commission_amount, record_date, notes, status } = req.body;
+    const cur = await pool.query('SELECT * FROM "COMMISSION_RECORD" WHERE record_id = $1', [id]);
+    const was = cur.rows[0];
+    let amount = was.commission_amount;
+    if (has(req.body, "commission_amount")) {
+      amount = moneyField(req.body.commission_amount, "Commission amount", { min: 0.01, max: 99999999.99 });
+      if (!(amount > 0)) invalid("Enter the commission amount.");
+    }
+    const date = has(req.body, "record_date") ? dateField(req.body.record_date, "Date") : null;
+    const status = has(req.body, "status") ? oneOf(req.body.status, "Status", ["pending", "paid"], was.status) : was.status;
+    const notes = has(req.body, "notes") ? textField(req.body.notes, "Notes", 500) : was.notes;
     const { rows } = await pool.query(
       `UPDATE "COMMISSION_RECORD"
-       SET commission_amount = COALESCE($1, commission_amount),
-           record_date       = COALESCE($2, record_date),
-           notes             = COALESCE($3, notes),
-           status            = COALESCE($4, status)
+       SET commission_amount = $1, record_date = COALESCE($2, record_date), notes = $3, status = $4
        WHERE record_id = $5 RETURNING *`,
-      [commission_amount||null, record_date||null, notes||null, status||null, id]
+      [amount, date, notes, status, id]
     );
     if (!rows.length) { res.status(404); return next(new Error("Record not found")); }
     res.json(rows[0]);

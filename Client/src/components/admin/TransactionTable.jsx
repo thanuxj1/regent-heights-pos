@@ -52,14 +52,14 @@ export default function TransactionTable({ data = [], loading = false, pageSize 
         </thead>
         <tbody className="divide-y divide-slate-100 bg-white">
           {paged.map((row) => {
-            const isSale = row.type === "sale";
+            const isSale = row.type === "sale" || (row.type === "hotel" && row.direction !== "out");
             const methodName = String(row.paymentMethod || "").toLowerCase();
             const isCash = methodName.includes("cash");
 
             return (
               <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
                 <td className="p-4 pl-6 font-mono text-xs font-semibold text-slate-900">{row.txId}</td>
-                <td className="p-4 font-medium text-slate-700">#{row.invoiceNo}</td>
+                <td className="p-4 font-medium text-slate-700">{row.type === "hotel" ? "" : "#"}{row.invoiceNo}</td>
                 <td className="p-4">
                   <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-800">
                     {row.branchLabel ?? row.branchId ?? "-"}

@@ -27,7 +27,9 @@ import {
   getCategories,
   getRoomGrid,
   createRoomServiceOrder,
+  chargeOrderToRoom,
   getOrders,
+  getKitchenBoard,
   getOrderItemsByOrderId,
   updateOrderStatus,
   updateOrder,
@@ -43,6 +45,7 @@ import OrderReadyAlerts from "../../components/cashier/OrderReadyAlerts";
 import CashDrawerModal from "../../components/cashier/CashDrawerModal";
 import { printKot } from "../../utils/printKot";
 import { withRetry, isTransient } from "../../utils/retryRequest";
+import { stockOf } from "../../utils/stockLabel";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import {
@@ -167,8 +170,13 @@ const CashierPos = () => {
   useEffect(() => { refreshDrawer(); }, [refreshDrawer]);
 
   const [waiterOrders, setWaiterOrders] = useState([]);
-  const [showWaiterOrdersModal, setShowWaiterOrdersModal] = useState(false);
   const [loadingWaiterOrders, setLoadingWaiterOrders] = useState(false);
+  // What the kitchen is working on. The same board the kitchen screen and the
+  // waiters read, so the counter is never guessing what is still to come out.
+  const [kitchenBoard, setKitchenBoard] = useState([]);
+  const [showKitchenModal, setShowKitchenModal] = useState(false);
+  const [loadingKitchen, setLoadingKitchen] = useState(false);
+  const [kitchenFilter, setKitchenFilter] = useState("all");
   const [orderReadyAlerts, setOrderReadyAlerts] = useState([]);
   const [newWaiterToasts, setNewWaiterToasts] = useState([]);
 
@@ -176,13 +184,27 @@ const CashierPos = () => {
     try {
       setLoadingWaiterOrders(true);
       const allOrders = await getOrders(branchId ? { b_id: branchId } : {});
-      const activeDineIn = allOrders.filter(
-        (o) =>
-          o.or_type === "dine-in" &&
-          o.or_status !== "cancelled" &&
-          (!branchId || String(o.b_id) === String(branchId))
-      );
-      setWaiterOrders(activeDineIn);
+      // Only tickets that are still open, and only today's. This used to list
+      // every dine-in order the property had ever taken — settled ones and last
+      // week's included — each with a "Bill & Pay" button on it, which is how a
+      // ticket that had already been paid for could be billed a second time.
+      // A ticket counts as billed when it carries a tender, not when the
+      // kitchen marks it completed: the kitchen finishing the food and the
+      // customer paying are different moments.
+      const open = allOrders
+        .filter((o) => {
+          if (branchId && String(o.b_id) !== String(branchId)) return false;
+          if (o.or_type === "room_service") return false;  // those ride on the guest's bill
+          if (o.or_status === "cancelled") return false;
+          // Anything not yet billed, whatever day it was taken. A date rule here
+          // hid the lot: or_date comes back as UTC midnight of the hotel's day,
+          // so "today" never matched — and a ticket nobody has paid for is owed
+          // money however long it has been sitting there.
+          return !o.payment_method;
+        })
+        // Oldest first: that table has been waiting longest.
+        .sort((a, b) => a.or_id - b.or_id);
+      setWaiterOrders(open);
     } catch (err) {
       console.error("Failed to fetch waiter orders", err);
     } finally {
@@ -190,10 +212,40 @@ const CashierPos = () => {
     }
   };
 
-  const handleOpenWaiterOrders = () => {
-    fetchWaiterOrders();
-    setShowWaiterOrdersModal(true);
+  const fetchKitchenBoard = async () => {
+    try {
+      setLoadingKitchen(true);
+      const board = await getKitchenBoard({ scope: "till" });
+      setKitchenBoard(Array.isArray(board?.data) ? board.data : []);
+    } catch (err) {
+      console.error("Failed to read the kitchen board", err);
+    } finally {
+      setLoadingKitchen(false);
+    }
   };
+
+  const handleOpenKitchenBoard = () => {
+    fetchKitchenBoard();
+    setShowKitchenModal(true);
+  };
+
+  // Everything here is a kitchen order. A waiter sent it from the floor, or it
+  // was rung up at this counter; that is the whole difference between them.
+  const senderOf = (o) => (Number(o.placed_by_role) === 8 ? "floor" : "till");
+  const shownKitchenOrders = kitchenBoard.filter(
+    (o) => kitchenFilter === "all" || senderOf(o) === kitchenFilter,
+  );
+
+  // The count on the tab stays right without anyone opening it.
+  useEffect(() => {
+    if (!branchId) return undefined;
+    fetchKitchenBoard();
+    const tick = setInterval(() => {
+      if (document.visibilityState === "visible") fetchKitchenBoard();
+    }, 30000);
+    return () => clearInterval(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchId]);
 
   useEffect(() => {
     const loadPosData = async () => {
@@ -347,14 +399,19 @@ const CashierPos = () => {
         }, 6000);
       }
     };
-    const refreshWaiterCount = () => fetchWaiterOrders();
+    const refreshTill = () => {
+      fetchWaiterOrders();
+      fetchKitchenBoard();
+    };
     socket.on("order:new", handleNewOrder);
-    socket.on("order:updated", refreshWaiterCount);
+    socket.on("order:updated", refreshTill);
+    socket.on("order:deleted", refreshTill);
 
     return () => {
       socket.off("order:ready", handleOrderReady);
       socket.off("order:new", handleNewOrder);
-      socket.off("order:updated", refreshWaiterCount);
+      socket.off("order:updated", refreshTill);
+      socket.off("order:deleted", refreshTill);
     };
   }, [user?.u_id]);
 
@@ -419,7 +476,7 @@ const CashierPos = () => {
     [cart],
   );
   const itemTaxTotal = useMemo(
-    () => cart.reduce((sum, item) => sum + Number(item.unitPrice) * item.qty * ((item.taxGroup ?? 5) / 100), 0),
+    () => cart.reduce((sum, item) => sum + Number(item.unitPrice) * item.qty * ((item.taxGroup ?? 0) / 100), 0),
     [cart],
   );
   const effectiveTaxRate = subtotal > 0 ? (itemTaxTotal / subtotal) * 100 : 0;
@@ -455,7 +512,7 @@ const CashierPos = () => {
           unitPrice,
           originalPrice: discPct > 0 ? basePrice : null,
           discountPct: discPct,
-          taxGroup: Number(product.tax_group ?? 5),
+          taxGroup: Number(product.tax_group ?? 0),
           qty: 1,
         },
       ];
@@ -484,6 +541,13 @@ const CashierPos = () => {
    * preparing. Money is settled afterwards; the cart is kept so the cashier
    * can still take payment on the same order.
    */
+  const kitchenNoteText = () =>
+    [
+      allergies.trim() && `ALLERGY: ${allergies.trim()}`,
+      addons.trim() && `Add-ons: ${addons.trim()}`,
+      notes.trim() && `Note: ${notes.trim()}`,
+    ].filter(Boolean).join(" · ");
+
   const handleSendToKitchen = async () => {
     if (!cart.length || !user?.u_id) return;
     if (!branchId) {
@@ -505,54 +569,100 @@ const CashierPos = () => {
       setSubmitting(true);
       setError("");
 
-      const orderResponse = await createOrder({
-        or_tax: Number(effectiveTaxRate.toFixed(4)),
-        or_totalcost: Number(taxableBase.toFixed(2)),
-        or_totalCostWtax: Number(total.toFixed(2)),
-        or_status: "pending",
-        or_type: orderType,
-        cust_id: null,
-        u_id: user.u_id,
-        b_id: branchId,
-        table_id: null,
+      // One request, one transaction: the ticket reaches the kitchen whole or
+      // not at all. It used to create the order and then add the lines one by
+      // one, so a dish the kitchen could not make left half a ticket on its
+      // screen and the cashier sending it again made a second order.
+      const orderResponse = await createOrderWithItems({
+        order: {
+          or_tax: Number(effectiveTaxRate.toFixed(4)),
+          or_totalcost: Number(taxableBase.toFixed(2)),
+          or_totalCostWtax: Number(total.toFixed(2)),
+          or_status: "pending",
+          or_type: orderType,
+          cust_id: null,
+          u_id: user.u_id,
+          b_id: branchId,
+          table_id: null,
+          client_ref: newClientRef(),
+          discount_pct: Number(discountPct || 0),
+          service_fee: Number(serviceFee || 0),
+          kitchen_note: kitchenNoteText(),
+          ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
+        },
+        items: cart.map((item) => ({
+          Bpro_id: item.Bpro_id,
+          pro_quantity: item.qty,
+          unit_price: item.unitPrice,
+        })),
       });
 
       const orderId = orderResponse?.data?.or_id;
       if (!orderId) throw new Error("Order was created but no order id was returned");
 
-      await Promise.all(
-        cart.map((item) =>
-          createOrderItem({
-            Bpro_id: item.Bpro_id,
-            pro_quantity: item.qty,
-            unit_price: item.unitPrice,
-            order_id: orderId,
-          }),
-        ),
-      );
-
       printKot(
-        { or_id: orderId, or_type: orderType },
-        cart.map((i) => ({ name: i.pro_name, qty: i.qty, note: notes || "" })),
+        { or_id: orderId, or_type: orderType, allergies, addons, notes },
+        cart.map((i) => ({ name: i.pro_name, qty: i.qty })),
         {
           branchName,
           staffName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(),
         },
       );
 
-      // The order is now the kitchen's; keep editing it so Checkout settles
-      // this same ticket instead of raising a second one.
-      setEditingOrderId(orderId);
-      setEditingOrderCurrentStatus("pending");
-      setSentToKitchen(true);
+      // The order is now the kitchen's. Clear the cart immediately so the 
+      // cashier can serve the next customer. The order can still be opened
+      // from the Waiter Orders list to take payment later.
+      setCart([]);
+      setSentToKitchen(false);
+      setEditingOrderId(null);
+      setEditingOrderCurrentStatus(null);
+      setEditingOrderTableId(null);
     } catch (kotError) {
       setError(
+        kotError?.response?.data?.error ||
         kotError?.response?.data?.message ||
         kotError.message ||
         "Could not send the order to the kitchen",
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  /**
+   * Bring an order the kitchen already has in line with the cart: only what
+   * changed is touched (see the note where it is used to settle a sale).
+   */
+  const syncOrderLines = async (orderId) => {
+    const existingItems = (await getOrderItemsByOrderId(orderId)) || [];
+    const unchanged = (line, item) =>
+      Number(line.pro_quantity) === Number(item.qty) &&
+      Math.abs(Number(line.unit_price) - Number(item.unitPrice)) < 0.005;
+
+    const keep = new Set();
+    const toAdd = [];
+    for (const item of cart) {
+      const match = existingItems.find(
+        (line) =>
+          Number(line.Bpro_id) === Number(item.Bpro_id) &&
+          !keep.has(line.orderItem_id) &&
+          unchanged(line, item),
+      );
+      if (match) keep.add(match.orderItem_id);
+      else toAdd.push(item);
+    }
+    const toRemove = existingItems.filter((line) => !keep.has(line.orderItem_id));
+
+    // One at a time: several lines of the same dish draw on the same stock
+    // row, and sending them at once only makes them queue behind each other.
+    for (const line of toRemove) await deleteOrderItem(line.orderItem_id);
+    for (const item of toAdd) {
+      await createOrderItem({
+        Bpro_id: item.Bpro_id,
+        pro_quantity: item.qty,
+        unit_price: item.unitPrice,
+        order_id: orderId,
+      });
     }
   };
 
@@ -618,24 +728,39 @@ const CashierPos = () => {
         setSubmitting(true);
         setError("");
         const room = occupiedRooms.find((r) => String(r.room_id) === String(chargeRoomId));
-        const res = await createRoomServiceOrder({
-          room_id: Number(chargeRoomId),
-          tax_pct: Number((effectiveTaxRate * 100).toFixed(2)),
-          items: cart.map((item) => ({
-            Bpro_id: item.Bpro_id,
-            pro_quantity: item.qty,
-            unit_price: item.unitPrice,
-          })),
-        });
+        // An order that is already with the kitchen (sent as a KOT, or a waiter's) is
+        // put on the bill as it is. Charging it as a new room-service order made a
+        // second order — cooked and counted out twice.
+        const attaching = Boolean(editingOrderId);
+        let res;
+        if (attaching) {
+          await syncOrderLines(editingOrderId);
+          res = await chargeOrderToRoom({
+            order_id: editingOrderId,
+            room_id: Number(chargeRoomId),
+            tax_pct: Number((effectiveTaxRate * 100).toFixed(2)),
+          });
+        } else {
+          res = await createRoomServiceOrder({
+            room_id: Number(chargeRoomId),
+            tax_pct: Number((effectiveTaxRate * 100).toFixed(2)),
+            items: cart.map((item) => ({
+              Bpro_id: item.Bpro_id,
+              pro_quantity: item.qty,
+              unit_price: item.unitPrice,
+            })),
+          });
+        }
         // printKot(order, items, meta) — three arguments. Passing one object
         // left `items` undefined and printed a ticket with nothing on it.
-        printKot(
+        if (!attaching) printKot(
           {
             or_id: res?.order?.or_id,
             or_type: "room_service",
             table: `Room ${room?.room_number ?? ""}${room?.guest_name ? ` · ${room.guest_name}` : ""}`,
+            allergies, addons, notes,
           },
-          cart.map((i) => ({ name: i.pro_name, qty: i.qty, note: notes || "" })),
+          cart.map((i) => ({ name: i.pro_name, qty: i.qty })),
           {
             branchName,
             staffName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(),
@@ -643,6 +768,9 @@ const CashierPos = () => {
         );
         setCart([]);
         setSentToKitchen(false);
+        setEditingOrderId(null);
+        setEditingOrderCurrentStatus(null);
+        setEditingOrderTableId(null);
         setChargeRoomId("");
         setPaymentMethod("Cash");
         setError("");
@@ -687,7 +815,20 @@ const CashierPos = () => {
           await updateOrderStatus(editingOrderId, "preparing");
         }
 
-        // Update existing order (now at "preparing" or already "preparing")
+        // What the kitchen already has, set against what is being paid for.
+        //
+        // Settling used to mark the order completed and then delete every line
+        // and write them all back. A sale nobody had changed still gained three
+        // stock entries per line — taken, put back, taken again — and for a
+        // moment the count read high. It also required the server to allow a
+        // paid order's lines to be rewritten, which is how a settled sale could
+        // have items lifted off it afterwards. Only what actually changed is
+        // touched now, and it is touched while the ticket is still the
+        // kitchen's, before any money is called settled.
+        await syncOrderLines(editingOrderId);
+
+        // Only now is it a settled sale: the lines are final, and the tender is
+        // recorded against the drawer that took the money.
         await updateOrder(editingOrderId, {
           or_tax: roundedTaxRate,
           or_totalcost: Number(taxableBase.toFixed(2)),
@@ -698,25 +839,8 @@ const CashierPos = () => {
           u_id: user.u_id,
           b_id: branchId,
           table_id: editingOrderTableId ?? null,
+          payment_method: String(paymentMethod || "cash").toLowerCase(),
         });
-
-        // Fetch existing items to delete them
-        const existingItems = await getOrderItemsByOrderId(editingOrderId);
-        if (existingItems && existingItems.length > 0) {
-          await Promise.all(
-            existingItems.map((item) => deleteOrderItem(item.orderItem_id))
-          );
-        }
-        await Promise.all(
-          cart.map((item) =>
-            createOrderItem({
-              Bpro_id: item.Bpro_id,
-              pro_quantity: item.qty,
-              unit_price: item.unitPrice,
-              order_id: orderId,
-            }),
-          ),
-        );
       } else {
         // The sale gets its key here, before the first attempt. Everything after
         // this — a retry, a queued flush tomorrow morning — carries the same
@@ -739,6 +863,7 @@ const CashierPos = () => {
             // baked into a smaller number.
             discount_pct: Number(discountPct || 0),
             service_fee: Number(serviceFee || 0),
+            kitchen_note: kitchenNoteText(),
             // How it was paid, sent with the sale itself. Without this the
             // drawer cannot be counted at the end of the day: there is no way
             // to tell which takings were notes and which were card.
@@ -837,7 +962,7 @@ const CashierPos = () => {
           pro_name: item.pro_name,
           unitPrice: Number(item.unit_price || item.branch_price || 0),
           qty: Number(item.pro_quantity || 1),
-          taxGroup: Number(matchedProduct?.tax_group ?? item.tax_group ?? 5),
+          taxGroup: Number(matchedProduct?.tax_group ?? item.tax_group ?? 0),
         };
       });
 
@@ -847,7 +972,7 @@ const CashierPos = () => {
       setEditingOrderId(ao.or_id);
       setEditingOrderCurrentStatus(ao.or_status ?? "pending");
       setEditingOrderTableId(ao.table_id ?? null);
-      setShowWaiterOrdersModal(false);
+      setShowKitchenModal(false);
     } catch (err) {
       alert("Failed to load order for editing: " + err.message);
     } finally {
@@ -948,8 +1073,8 @@ const CashierPos = () => {
               <button type="button" onClick={() => setShowHeldOrdersModal(true)} style={headerBtn(false)}>
                 Held Orders ({heldOrders.length})
               </button>
-              <button type="button" onClick={handleOpenWaiterOrders} style={headerBtn(waiterOrders.length > 0)}>
-                Waiter Orders ({waiterOrders.length})
+              <button type="button" onClick={handleOpenKitchenBoard} style={headerBtn(kitchenBoard.length > 0)}>
+                Kitchen Orders ({kitchenBoard.length})
               </button>
               {/* Highlighted when no drawer is open — a cash sale with no shift
                   behind it cannot be counted at the end of the day. */}
@@ -1152,25 +1277,27 @@ const CashierPos = () => {
                     return { Icon: FaUtensils, chip: "bg-orange-50 text-orange-400", ring: "hover:border-orange-300" };
                   })();
 
-                  const stockCount = Number(product.pro_quantity ?? 0);
+                  const stock = stockOf(product);
                   const basePrice = Number(product.pro_price ?? 0);
                   const discPct = Number(product.discount_pct ?? 0);
                   const effectivePrice = discPct > 0
                     ? parseFloat((basePrice * (1 - discPct / 100)).toFixed(2))
                     : basePrice;
-                  const soldOut = stockCount <= 0;
-                  const lowStock = stockCount > 0 && stockCount <= 5;
+                  const soldOut = stock.soldOut;
+                  const lowStock = stock.low;
                   const hasPhoto = product.pro_image &&
                     (product.pro_image.startsWith("http") || product.pro_image.startsWith("data:"));
 
                   return (
                     <article
                       key={product.Bpro_id ?? index}
-                      onClick={() => (soldOut ? undefined : addToCart(product))}
-                      title={soldOut ? `${product.pro_name} — out of stock` : `Add ${product.pro_name}`}
+                      onClick={() => addToCart(product)}
+                      title={soldOut
+                        ? `${product.pro_name} — the stock count says none${product.limited_by ? ` (${product.limited_by})` : ""}. You can still sell it; the manager will see the count go below zero.`
+                        : `Add ${product.pro_name}`}
                       className={`group relative flex flex-col rounded-xl border bg-white p-2 transition duration-200 ${
                         soldOut
-                          ? "cursor-not-allowed border-slate-200 opacity-60"
+                          ? "cursor-pointer border-amber-300 bg-amber-50/40"
                           : "cursor-pointer border-slate-100 shadow-[0_1px_3px_rgba(15,23,42,0.06)] hover:-translate-y-1 hover:border-sky-200 hover:shadow-[0_14px_30px_rgba(15,23,42,0.12)]"
                       }`}
                     >
@@ -1181,7 +1308,7 @@ const CashierPos = () => {
                           <img
                             src={product.pro_image}
                             alt=""
-                            className={`h-full w-full object-cover transition duration-300 ${soldOut ? "grayscale" : "group-hover:scale-105"}`}
+                            className={`h-full w-full object-cover transition duration-300 group-hover:scale-105`}
                           />
                         ) : (
                           <span className={`flex h-full w-full items-center justify-center transition duration-300 ${soldOut ? "bg-slate-100 text-slate-300" : `${chip} group-hover:scale-105`}`}>
@@ -1189,7 +1316,7 @@ const CashierPos = () => {
                           </span>
                         )}
 
-                        {discPct > 0 && !soldOut && (
+                        {discPct > 0 && (
                           <span className="absolute left-1 top-1 rounded bg-rose-500 px-1 py-px text-[9px] font-bold text-white shadow-sm">
                             -{discPct}%
                           </span>
@@ -1198,13 +1325,13 @@ const CashierPos = () => {
                         <span
                           className={`absolute right-1 top-1 rounded-full px-1.5 py-px text-[9px] font-semibold shadow-sm ${
                             soldOut
-                              ? "bg-slate-600 text-white"
+                              ? "bg-amber-500 text-white"
                               : lowStock
                                 ? "bg-amber-400 text-amber-950"
                                 : "bg-white/90 text-slate-600"
                           }`}
                         >
-                          {soldOut ? "Sold out" : `${stockCount} left`}
+                          {stock.label}
                         </span>
 
                         {/* Quiet until the cashier is over the card. */}
@@ -1733,76 +1860,109 @@ const CashierPos = () => {
         </div>
       )}
 
-      {/* Waiter Orders Modal */}
-      {showWaiterOrdersModal && (
+      {/* Kitchen Orders — every ticket the kitchen has, whoever sent it */}
+      {showKitchenModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl relative max-h-[85vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6 border-b pb-4">
-              <h2 className="text-xl font-bold text-slate-800">Waiter Orders ({waiterOrders.length})</h2>
+          <div className="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl relative max-h-[85vh] overflow-y-auto">
+            <div className="flex flex-wrap justify-between items-center gap-3 mb-5 border-b pb-4">
+              <h2 className="text-xl font-bold text-slate-800">Kitchen Orders ({kitchenBoard.length})</h2>
               <div className="flex gap-2">
                 <button
-                  onClick={fetchWaiterOrders}
+                  onClick={fetchKitchenBoard}
                   className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200"
                 >
                   Refresh
                 </button>
                 <button
-                  onClick={() => setShowWaiterOrdersModal(false)}
-                  className="rounded-lg bg-slate-100 p-2 text-slate-500 hover:bg-slate-200"
+                  onClick={() => setShowKitchenModal(false)}
+                  className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900"
                 >
-                  ✕
+                  Close
                 </button>
               </div>
             </div>
 
-            <div className="flex flex-col gap-4">
-              {loadingWaiterOrders ? (
-                <div className="text-center py-6 text-slate-500">Loading orders...</div>
-              ) : waiterOrders.length === 0 ? (
-                <div className="text-center py-6 text-slate-500">No waiter orders available.</div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {waiterOrders.map((ao) => (
-                    <div key={ao.or_id} className="flex flex-col justify-between rounded-xl border p-4 shadow-sm hover:shadow-md transition">
-                      <div>
-                        <div className="flex justify-between items-start mb-2">
-                          <div className="font-semibold text-slate-800 text-lg">Order #{ao.or_id}</div>
-                          <span className={`text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide ${ao.or_status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                              ao.or_status === 'preparing' ? 'bg-orange-100 text-orange-700' :
-                                ao.or_status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                                  ao.or_status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                                    'bg-slate-100 text-slate-700'
-                            }`}>
-                            {ao.or_status?.replace(/_/g, ' ')}
-                          </span>
-                        </div>
-                        <div className="text-sm text-slate-500 space-y-1">
-                          <p><strong>Table:</strong> {ao.table_id ? `Table ${ao.table_id}` : '—'}</p>
-                          <p><strong>Type:</strong> {ao.or_type}</p>
-                          <p><strong>Total:</strong> LKR {Number(ao.or_totalCostWtax || ao.or_totalcost || 0).toFixed(2)}</p>
-                          {ao.or_notes && <p className="text-xs italic mt-2 text-red-500 line-clamp-2">{ao.or_notes}</p>}
-                        </div>
-                      </div>
-                      <div className="mt-4 pt-4 border-t flex flex-col gap-2">
-                        {ao.or_status === "cancelled" ? (
-                          <div className="w-full rounded-lg bg-red-50 border border-red-200 text-red-600 px-4 py-2 text-sm font-semibold text-center">
-                            Cancelled
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => handleEditWaiterOrder(ao)}
-                            disabled={loadingWaiterOrders}
-                            className="w-full rounded-lg bg-[#0A5BAE] text-white px-4 py-2 text-sm font-semibold hover:bg-[#094f96] transition"
-                          >
-                            Bill &amp; Pay at Terminal
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            {/* They are all kitchen orders. Only who sent them differs. */}
+            <div className="mb-5 flex flex-wrap gap-2">
+              {[
+                { key: "all", label: "All" },
+                { key: "floor", label: "From the floor" },
+                { key: "till", label: "From the till" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setKitchenFilter(tab.key)}
+                  className={"rounded-lg px-4 py-2 text-sm font-semibold transition " + (kitchenFilter === tab.key ? "bg-[#0A5BAE] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
+                >
+                  {tab.label} ({kitchenBoard.filter((o) => tab.key === "all" || senderOf(o) === tab.key).length})
+                </button>
+              ))}
             </div>
+
+            {loadingKitchen && kitchenBoard.length === 0 ? (
+              <div className="text-center py-6 text-slate-500">Reading the kitchen...</div>
+            ) : shownKitchenOrders.length === 0 ? (
+              <div className="text-center py-6 text-slate-500">Nothing here right now.</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {shownKitchenOrders.map((o) => (
+                  <div
+                    key={o.or_id}
+                    className={"rounded-xl border p-4 shadow-sm " + (o.or_status === "completed" ? "border-emerald-300 bg-emerald-50" : o.or_status === "preparing" ? "border-orange-200 bg-orange-50" : "border-amber-200 bg-amber-50")}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="font-semibold text-slate-800">Order #{o.or_id}</div>
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                        {o.or_status === "completed" ? "Ready" : o.or_status === "preparing" ? "Cooking" : "Waiting"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {o.table_number ? "Table " + o.table_number : o.room_number ? "Room " + o.room_number : o.or_type}
+                      {o.or_time ? " at " + String(o.or_time).slice(0, 5) : ""}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-400">
+                      {senderOf(o) === "floor" ? "Sent by the floor" : "Rung up at the till"}
+                      {o.placed_by ? " by " + o.placed_by : ""}
+                    </div>
+                    {o.kitchen_note && (
+                      <div className="mt-2 rounded-md bg-white/70 border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-800">
+                        {o.kitchen_note}
+                      </div>
+                    )}
+                    <ul className="mt-3 space-y-0.5 text-sm text-slate-700">
+                      {(o.items || []).slice(0, 5).map((it, i) => (
+                        <li key={i} className="flex gap-2">
+                          <span className="font-bold text-slate-500">{it.qty}x</span>
+                          <span className="truncate">{it.name}</span>
+                        </li>
+                      ))}
+                      {(o.items || []).length > 5 && (
+                        <li className="text-xs text-slate-400">and {(o.items || []).length - 5} more</li>
+                      )}
+                    </ul>
+                    <div className="mt-4 pt-3 border-t">
+                      {o.or_type === "room_service" ? (
+                        <div className="rounded-lg bg-sky-50 border border-sky-200 text-sky-700 px-3 py-2 text-xs font-semibold text-center">
+                          Charged to the room
+                        </div>
+                      ) : o.payment_method ? (
+                        <div className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 text-xs font-semibold text-center">
+                          Paid by {o.payment_method}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleEditWaiterOrder(o)}
+                          disabled={loadingWaiterOrders}
+                          className="w-full rounded-lg bg-[#0A5BAE] text-white px-4 py-2 text-sm font-semibold hover:bg-[#094f96] transition"
+                        >
+                          Bill &amp; Pay at Terminal
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

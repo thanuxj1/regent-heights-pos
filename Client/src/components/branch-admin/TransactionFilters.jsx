@@ -36,7 +36,7 @@ export default function TransactionFilters({ filters, setFilters }) {
               filters.tab === "income" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            Income (Sales)
+            Income
           </button>
           <button
             onClick={() => update({ tab: "expense" })}
@@ -44,7 +44,7 @@ export default function TransactionFilters({ filters, setFilters }) {
               filters.tab === "expense" ? "bg-white text-rose-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            Expenses (Purchases)
+            Expenses
           </button>
         </div>
       </div>

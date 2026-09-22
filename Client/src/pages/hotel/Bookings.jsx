@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
 import {
-  getBookings, createBooking, getAvailability, getMealPlans, getGuests, getAgents,
+  getBookings, createBooking, updateBooking, updateGuest, getAvailability, getGuests, getAgents, getStayPolicy,
 } from "../../services/api";
 import {
   card, input, label, btn, badge, th, td,
@@ -11,6 +11,27 @@ import {
   nightsBetween, initials, STATUS_STYLE,
 } from "./ui";
 import { COUNTRIES } from "../../constants/countries";
+
+/** A DATE from the API as "YYYY-MM-DD" for a date box. It arrives as a timestamp
+ *  ("2026-09-20T18:30:00.000Z" is the 21st in Sri Lanka), so read it in local time. */
+const dateInput = (v) => {
+  if (!v) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(v);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+/** "14:00" / "14:00:00" -> minutes since midnight, or null when there is no time. */
+const minutesOf = (t) => {
+  if (!t) return null;
+  const [h, m = "0"] = String(t).split(":");
+  const n = Number(h) * 60 + Number(m);
+  return Number.isFinite(n) ? n : null;
+};
+const prettyMinutes = (m) => {
+  const h = Math.floor(m / 60), mm = m % 60;
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(mm).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+};
 
 /** Matches the widths of the GUEST columns, so a long value is stopped here
  *  rather than 150 characters later by Postgres. */
@@ -69,7 +90,6 @@ export default function Bookings() {
   const [search, setSearch] = useState("");
 
   const [showNew, setShowNew] = useState(searchParams.get("new") === "1");
-  const [mealPlans, setMealPlans] = useState([]);
   const [guests, setGuests] = useState([]);
   const [agents, setAgents] = useState([]);
 
@@ -89,10 +109,9 @@ export default function Bookings() {
   useEffect(() => {
     if (!branchId) return;
     Promise.all([
-      getMealPlans({ b_id: branchId }),
       getGuests(),
       getAgents({ b_id: branchId }),
-    ]).then(([mp, g, a]) => { setMealPlans(mp); setGuests(g); setAgents(a); }).catch(() => {});
+    ]).then(([g, a]) => { setGuests(g); setAgents(a); }).catch(() => {});
   }, [branchId]);
 
   const closeNew = () => {
@@ -172,9 +191,8 @@ export default function Bookings() {
           </div>
 
       {showNew && (
-        <NewBookingModal
+        <BookingFormModal
           branchId={branchId}
-          mealPlans={mealPlans}
           guests={guests}
           agents={agents}
           onClose={closeNew}
@@ -272,79 +290,228 @@ function GuestPicker({ guests, value, onChange }) {
 
 // ─── New Booking ─────────────────────────────────────────────────────────────
 
-function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreated }) {
-  const [checkIn, setCheckIn]   = useState(today());
-  const [checkOut, setCheckOut] = useState(ymd(addDays(new Date(), 1)));
+/**
+ * The booking form — for a new reservation, or (with `initial`) for changing one.
+ *
+ * A guest who has already checked in has an open bill with the room charges on it,
+ * so for them only the guest's details, the arrival time and the notes can change
+ * here; the server refuses the rest for the same reason.
+ */
+export function BookingFormModal({ branchId, guests, agents, initial = null, onClose, onCreated }) {
+  const isEdit = Boolean(initial);
+  const inHouse = isEdit && initial.status === "checked_in";
+  const knownGuest = isEdit ? (guests || []).find(g => g.guest_id === initial.guest_id) : null;
+  const baseGuest = isEdit ? {
+    full_name: knownGuest?.full_name ?? initial.guest_name ?? "",
+    phone: knownGuest?.phone ?? initial.guest_phone ?? "",
+    email: knownGuest?.email ?? initial.guest_email ?? "",
+    country: knownGuest?.country ?? initial.guest_country ?? "",
+    nationality: knownGuest?.nationality ?? initial.guest_nationality ?? "",
+    passport_nic: knownGuest?.passport_nic ?? "",
+  } : null;
+
+  const [checkIn, setCheckIn]   = useState(isEdit ? dateInput(initial.check_in_date) : today());
+  const [checkOut, setCheckOut] = useState(isEdit ? dateInput(initial.check_out_date) : ymd(addDays(new Date(), 1)));
   const [avail, setAvail]       = useState(null);
   const [searching, setSearching] = useState(false);
 
-  const [picked, setPicked] = useState([]); // [{room_type_id,type_name,room_id,room_number,rate_per_night}]
-  const [adults, setAdults]     = useState(2);
-  const [children, setChildren] = useState(0);
-  const [mealPlanId, setMealPlanId] = useState("");
-  const [taxPct, setTaxPct]     = useState(10);
-  const [extras, setExtras]     = useState(0);
-  const [discount, setDiscount] = useState(0);
-  const [advance, setAdvance]   = useState(0);
+  const [picked, setPicked] = useState(() => isEdit
+    ? (initial.rooms || []).map(r => ({
+        room_type_id: r.room_type_id, type_name: r.type_name, room_id: r.room_id, room_number: r.room_number,
+        rate_per_night: Number(r.rate_per_night) || 0,
+      }))
+    : []); // [{room_type_id,type_name,room_id,room_number,rate_per_night}]
+  const [adults, setAdults]     = useState(isEdit ? initial.adults : 2);
+  const [children, setChildren] = useState(isEdit ? initial.children : 0);
+  const [taxPct, setTaxPct]     = useState(isEdit ? Number(initial.tax_pct) : 0);
+  // Set to the hotel's own rate once that is known — unless the desk has already typed one.
+  const taxTouched = useRef(false);
+  const [extras, setExtras]     = useState(isEdit ? Number(initial.extra_charges) || 0 : 0);
+  const [discount, setDiscount] = useState(isEdit ? Number(initial.discount) || 0 : 0);
+  const [advance, setAdvance]   = useState(isEdit ? Number(initial.paid_total) || 0 : 0);
   const [advanceMethod, setAdvanceMethod] = useState("cash");
-  const [source, setSource]     = useState("phone");
-  const [agentId, setAgentId]   = useState("");
-  const [arrivalTime, setArrivalTime] = useState("");
-  const [specialRequests, setSpecialRequests] = useState("");
-  const [remarks, setRemarks]   = useState("");
+  const [source, setSource]     = useState(isEdit ? initial.source : "phone");
+  const [agentId, setAgentId]   = useState(isEdit && initial.agent_id ? String(initial.agent_id) : "");
+  const [arrivalTime, setArrivalTime] = useState(isEdit ? (initial.arrival_time || "").slice(0, 5) : "");
+  const [specialRequests, setSpecialRequests] = useState(isEdit ? initial.special_requests || "" : "");
+  const [remarks, setRemarks]   = useState(isEdit ? initial.remarks || "" : "");
 
   const [existingGuest, setExistingGuest] = useState("");
   const [newGuestMode, setNewGuestMode]   = useState(true);
-  const [guest, setGuest] = useState({ full_name: "", phone: "", email: "", country: "", nationality: "", passport_nic: "" });
+  const [guest, setGuest] = useState(baseGuest || { full_name: "", phone: "", email: "", country: "", nationality: "", passport_nic: "" });
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const nights = Math.max(nightsBetween(checkIn, checkOut), 0);
 
+  const searchSeq = useRef(0);
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
+  const [droppedRooms, setDroppedRooms] = useState([]);
+  const [houseTimes, setHouseTimes] = useState(null);
+
   const doSearch = async () => {
-    setError(""); setSearching(true); setAvail(null);
+    if (!branchId || nightsBetween(checkIn, checkOut) < 1) return;
+    const seq = ++searchSeq.current;
+    setError(""); setSearching(true);
     try {
-      setAvail(await getAvailability({ b_id: branchId, check_in: checkIn, check_out: checkOut }));
+      const result = await getAvailability({
+        b_id: branchId, check_in: checkIn, check_out: checkOut,
+        ...(isEdit ? { exclude_booking: initial.booking_id } : {}),
+      });
+      if (seq !== searchSeq.current) return;   // the dates changed again while this was on its way
+      setAvail(result);
+      // A room picked for other dates may not be free for these ones.
+      const byId = new Map();
+      result.room_types.forEach(t => t.available_rooms.forEach(r => byId.set(r.room_id, { t, r })));
+      const gone = pickedRef.current.filter(x => !byId.has(x.room_id));
+      setDroppedRooms(gone.map(x => x.room_number));
+      // The rooms already chosen keep their rate, and learn what each includes and
+      // holds (for the extra-guest arithmetic) and who is leaving that morning.
+      setPicked(pickedRef.current.filter(x => byId.has(x.room_id)).map(x => {
+        const { t, r } = byId.get(x.room_id);
+        return {
+          ...x,
+          included_guests: t.included_guests == null ? null : Number(t.included_guests),
+          max_adults: t.max_adults == null ? null : Number(t.max_adults),
+          max_children: t.max_children == null ? null : Number(t.max_children),
+          extra_adult_rate: Number(t.extra_adult_rate) || 0,
+          extra_child_rate: Number(t.extra_child_rate) || 0,
+          leaving: r.leaving_that_day || null,
+        };
+      }));
     } catch (err) {
-      setError(err?.response?.data?.message || "Could not load availability");
-    } finally { setSearching(false); }
+      if (seq === searchSeq.current) setError(err?.response?.data?.message || "Could not load availability");
+    } finally {
+      if (seq === searchSeq.current) setSearching(false);
+    }
   };
 
-  useEffect(() => { if (branchId && nights > 0) doSearch(); /* eslint-disable-next-line */ }, [branchId]);
+  // The list follows the dates. It used to be fetched once, when the form opened
+  // (today to tomorrow), and again only on the button — so after the dates were
+  // changed the screen went on showing the old answer, "Fully booked" for a room
+  // that was free on the new dates.
+  useEffect(() => {
+    if (!branchId || nights < 1 || inHouse) return undefined;
+    const t = setTimeout(doSearch, avail ? 300 : 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [branchId, checkIn, checkOut]);
+
+  // Check-in and check-out times, for the note about same-day hand-overs.
+  useEffect(() => {
+    // Only the hotel's own saved times are quoted; until then the note stays general.
+    getStayPolicy().then(p => {
+      if (!isEdit && !taxTouched.current) setTaxPct(Number(p.default_tax_pct) || 0);
+      return p;
+    }).then(p => setHouseTimes(p.policy_saved
+      ? { in: p.check_in_pretty, out: p.check_out_pretty,
+          inMin: minutesOf(p.check_in_time), outMin: minutesOf(p.check_out_time) }
+      : null)).catch(() => {});
+  }, []);
+
+  // Results that belong to other dates (or are still arriving) are shown faded and cannot be clicked.
+  const stale = searching || (avail && (avail.check_in !== checkIn || avail.check_out !== checkOut));
 
   const addRoom = (type, room) => {
     if (picked.some(p => p.room_id === room.room_id)) return;
+    setDroppedRooms([]);
     setPicked(p => [...p, {
       room_type_id: type.room_type_id, type_name: type.type_name,
       room_id: room.room_id, room_number: room.room_number,
+      leaving: room.leaving_that_day || null,
       rate_per_night: Number(type.base_rate) || 0,
-      max_occupancy: Number(type.max_occupancy) || 0,
+      // Carried through so the summary can seat the party and price the guests
+      // past what the rate covers, exactly as the server will.
+      included_guests: type.included_guests == null ? null : Number(type.included_guests),
+      max_adults: type.max_adults == null ? null : Number(type.max_adults),
+      max_children: type.max_children == null ? null : Number(type.max_children),
+      extra_adult_rate: Number(type.extra_adult_rate) || 0,
+      extra_child_rate: Number(type.extra_child_rate) || 0,
     }]);
   };
   const removeRoom = (roomId) => setPicked(p => p.filter(x => x.room_id !== roomId));
   const setRate = (roomId, rate) =>
     setPicked(p => p.map(x => x.room_id === roomId ? { ...x, rate_per_night: rate } : x));
 
-  const plan = mealPlans.find(m => String(m.plan_id) === String(mealPlanId));
-
   // How many people the selected rooms hold, and how much of the bill can be
   // given away — the same two ceilings the server enforces, shown while typing
   // rather than thrown back after Create.
-  const capacity = picked.reduce((s, r) => s + (r.max_occupancy || 0), 0);
+  const capacity = picked.reduce(
+    (s, r) => s + (r.max_adults == null ? 0 : Number(r.max_adults))
+                + (r.max_children == null ? 0 : Number(r.max_children)), 0);
   const people   = numOr(adults, 0) + numOr(children, 0);
+
+  // The same seating the server does, so the desk sees the extra-guest charge
+  // while it types rather than after Create.
+  const seated = useMemo(() => {
+    const seats = picked.map(r => ({ ...r, seatAdults: 0, seatChildren: 0 }));
+    if (!seats.length) return seats;
+    let a = numOr(adults, 0), c = numOr(children, 0);
+    for (const seat of seats) {
+      if (a <= 0) break;
+      const room = seat.max_adults == null ? a : Math.max(0, Number(seat.max_adults));
+      const take = Math.min(a, room); seat.seatAdults += take; a -= take;
+    }
+    for (const seat of seats) {
+      if (c <= 0) break;
+      const room = seat.max_children == null ? c : Math.max(0, Number(seat.max_children));
+      const take = Math.min(c, room); seat.seatChildren += take; c -= take;
+    }
+    if (a > 0 || c > 0) {
+      const last = seats[seats.length - 1];
+      last.seatAdults += a; last.seatChildren += c;
+    }
+    return seats;
+  }, [picked, adults, children]);
+
+  const extraGuests = useMemo(() => {
+    let amount = 0, extraAdults = 0, extraChildren = 0;
+    for (const r of seated) {
+      if (r.included_guests == null) continue;
+      const included = Math.max(0, Number(r.included_guests));
+      const aIn = Math.min(r.seatAdults, included);
+      const cIn = Math.min(r.seatChildren, included - aIn);
+      const ea = r.seatAdults - aIn, ec = r.seatChildren - cIn;
+      extraAdults += ea; extraChildren += ec;
+      amount += (ea * Number(r.extra_adult_rate || 0) + ec * Number(r.extra_child_rate || 0)) * nights;
+    }
+    return { amount: +amount.toFixed(2), extraAdults, extraChildren };
+  }, [seated, nights]);
 
   const totals = useMemo(() => {
     const room = picked.reduce((s, r) => s + Number(r.rate_per_night || 0) * nights, 0);
-    const meal = plan
-      ? (Number(adults) * Number(plan.supplement_per_adult || 0) +
-         Number(children) * Number(plan.supplement_per_child || 0)) * nights
-      : 0;
     const tax = room * (Number(taxPct) || 0) / 100;
-    const beforeDiscount = room + tax + meal + numOr(extras);
+    const beforeDiscount = room + tax + extraGuests.amount + numOr(extras);
     const grand = beforeDiscount - numOr(discount);
-    return { room, meal, tax, beforeDiscount, grand, balance: grand - numOr(advance) };
-  }, [picked, nights, plan, adults, children, taxPct, extras, discount, advance]);
+    return { room, tax, guests: extraGuests.amount, beforeDiscount, grand,
+             balance: grand - numOr(advance) };
+  }, [picked, nights, adults, children, taxPct, extras, discount, advance, extraGuests]);
+
+  // Does the arrival time make sense for the rooms picked? Advice, never a block:
+  // the desk may well have arranged an early check-in, or a room that is already
+  // clean. Nothing was checking it at all, so an 8 AM arrival went into a room
+  // whose guest was not due to leave until 11.
+  const arrivalNotes = useMemo(() => {
+    const at = minutesOf(arrivalTime);
+    if (at == null) return [];
+    const notes = [];
+    for (const r of picked) {
+      if (!r.leaving) continue;
+      if (houseTimes?.outMin != null) {
+        if (at < houseTimes.outMin) {
+          notes.push({ level: "warn", text: `Room ${r.room_number} will still be occupied at ${prettyMinutes(at)}: ${r.leaving.guest_name} checks out by ${houseTimes.out}. Ask this guest to arrive after that, or pick another room.` });
+        }
+      } else {
+        notes.push({ level: "warn", text: `Room ${r.room_number} has a guest checking out that morning (${r.leaving.guest_name}). Make sure they have left before this guest arrives at ${prettyMinutes(at)}.` });
+      }
+    }
+    if (!notes.length && houseTimes?.inMin != null && at < houseTimes.inMin) {
+      notes.push({ level: "info", text: `${prettyMinutes(at)} is earlier than your check-in time (${houseTimes.in}). The room may not be ready yet — arrange an early check-in, or let the guest know they may have to wait.` });
+    }
+    return notes;
+  }, [arrivalTime, picked, houseTimes]);
 
   // Over the nominal occupancy is the desk's call, not ours — a cot or a shared
   // bed is an everyday answer. Say so, and let them book it.
@@ -353,11 +520,55 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
   const overDiscount = numOr(discount) > totals.beforeDiscount + 0.001;
   // While the discount is out of range the grand total is meaningless (it goes
   // negative), so judging the advance against it would flag even an advance of 0.
-  const overAdvance  = !overDiscount && numOr(advance) > totals.grand + 0.001;
+  const overAdvance  = !isEdit && !overDiscount && numOr(advance) > totals.grand + 0.001;
+
+  const submitEdit = async () => {
+    if (!guest.full_name.trim()) { setError("Guest name is required."); return; }
+    if (guest.email.trim() && !EMAIL_RE.test(guest.email.trim())) { setError("That doesn't look like an email address."); return; }
+    if (!inHouse) {
+      if (!picked.length)  { setError("Select at least one room."); return; }
+      if (nights < 1)      { setError("Check-out must be after check-in."); return; }
+      if (nights > 365)    { setError("A booking cannot run longer than 365 nights."); return; }
+      if (numOr(adults, 0) < 1) { setError("At least one adult is required."); return; }
+      if (source === "agent" && !agentId) { setError("Choose the agent this booking came through."); return; }
+      if (checkIn !== dateInput(initial.check_in_date) && checkIn < today()) {
+        setError("Check-in can't be moved to a date that has already passed."); return;
+      }
+      if (overDiscount) { setError(`Discount cannot be more than ${money(totals.beforeDiscount)}.`); return; }
+    }
+
+    setSubmitting(true);
+    try {
+      // The guest's own details first: if this fails nothing else has changed.
+      const changed = {};
+      GUEST_FIELDS.forEach(f => { if ((guest[f.k] || "") !== (baseGuest[f.k] || "")) changed[f.k] = guest[f.k]; });
+      if (Object.keys(changed).length) await updateGuest(initial.guest_id, changed);
+
+      try {
+        const saved = await updateBooking(initial.booking_id, inHouse
+          ? { arrival_time: arrivalTime, special_requests: specialRequests, remarks }
+          : {
+              check_in_date: checkIn, check_out_date: checkOut,
+              adults: numOr(adults, 1), children: numOr(children, 0),
+              tax_pct: numOr(taxPct, 0), extra_charges: numOr(extras), discount: numOr(discount),
+              source, agent_id: source === "agent" ? agentId : "",
+              arrival_time: arrivalTime, special_requests: specialRequests, remarks,
+              rooms: picked.map(p => ({ room_id: p.room_id, room_type_id: p.room_type_id, rate_per_night: p.rate_per_night })),
+            });
+        onCreated(saved);
+      } catch (err) {
+        setError(`${Object.keys(changed).length ? "The guest's details were updated, but the booking wasn't saved: " : ""}${
+          err?.response?.data?.message || "Could not save the booking"}`);
+      }
+    } catch (err) {
+      setError(err?.response?.data?.message || "Could not update the guest's details");
+    } finally { setSubmitting(false); }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     setError("");
+    if (isEdit) { await submitEdit(); return; }
     if (!picked.length)  { setError("Select at least one room."); return; }
     if (nights < 1)      { setError("Check-out must be after check-in."); return; }
     if (nights > 365)    { setError("A booking cannot run longer than 365 nights."); return; }
@@ -379,11 +590,11 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
         check_in_date: checkIn,
         check_out_date: checkOut,
         adults: numOr(adults, 1), children: numOr(children, 0),
-        meal_plan_id: mealPlanId || undefined,
+        meal_plan_id: undefined,
         arrival_time: arrivalTime || undefined,
         special_requests: specialRequests || undefined,
         remarks: remarks || undefined,
-        tax_pct: numOr(taxPct, 10),
+        tax_pct: numOr(taxPct, 0),
         extra_charges: numOr(extras), discount: numOr(discount),
         advance_payment: numOr(advance), advance_method: advanceMethod,
         rooms: picked.map(p => ({
@@ -400,11 +611,20 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
     <div style={modalWrap}>
       <div style={modalBox(860)}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: "#1E293B" }}>New Reservation</h2>
+          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: "#1E293B" }}>
+            {isEdit ? `Edit Booking ${initial.booking_ref}` : "New Reservation"}
+          </h2>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" }}>✕</button>
         </div>
 
         {error && <div style={errorBox}>{error}</div>}
+
+        {inHouse && (
+          <div style={{ ...errorBox, background: "#EFF6FF", borderColor: "#BFDBFE", color: "#1E40AF" }}>
+            This guest has checked in, so the bill is already open. Here you can correct the guest's details, the
+            arrival time and the notes. To add a night or a charge, use the bill on the booking page.
+          </div>
+        )}
 
         <form onSubmit={submit}>
           <datalist id="guest-countries">
@@ -414,19 +634,19 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
           <Section title="Stay Dates & Guests">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 12, alignItems: "end" }}>
               <label style={label}>Check-In
-                <input type="date" value={checkIn} min={today()}
+                <input type="date" value={checkIn} min={isEdit ? undefined : today()} disabled={inHouse}
                   onChange={e => { setCheckIn(e.target.value); if (e.target.value >= checkOut) setCheckOut(ymd(addDays(new Date(e.target.value), 1))); }}
                   style={{ ...input, marginTop: 4 }} />
               </label>
               <label style={label}>Check-Out
-                <input type="date" value={checkOut} min={ymd(addDays(new Date(checkIn), 1))}
+                <input type="date" value={checkOut} min={ymd(addDays(new Date(checkIn), 1))} disabled={inHouse}
                   onChange={e => setCheckOut(e.target.value)} style={{ ...input, marginTop: 4 }} />
               </label>
               <div style={{ padding: "9px 14px", background: "#EFF6FF", borderRadius: 8, fontWeight: 700, color: "#1565C0", fontSize: 13 }}>
                 {nights} night{nights === 1 ? "" : "s"}
               </div>
-              <button type="button" onClick={doSearch} disabled={searching} style={btn("primary")}>
-                {searching ? "Checking…" : "Check Availability"}
+              <button type="button" onClick={doSearch} disabled={searching || inHouse} style={btn("primary")}>
+                {searching ? "Checking…" : "Refresh"}
               </button>
             </div>
 
@@ -434,11 +654,11 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
                 room suitable, so the cashier has to set it before choosing one. */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12, marginTop: 12, alignItems: "end" }}>
               <label style={label}>Adults
-                <input type="number" min={1} max={99} step="1" required value={adults}
+                <input type="number" min={1} max={99} step="1" required value={adults} disabled={inHouse}
                   onChange={e => setAdults(e.target.value)} style={{ ...input, marginTop: 4 }} />
               </label>
               <label style={label}>Children
-                <input type="number" min={0} max={99} step="1" required value={children}
+                <input type="number" min={0} max={99} step="1" required value={children} disabled={inHouse}
                   onChange={e => setChildren(e.target.value)} style={{ ...input, marginTop: 4 }} />
               </label>
               <div style={{ fontSize: 12, color: "#64748B", paddingBottom: 10 }}>
@@ -453,14 +673,39 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
             </div>
           </Section>
 
-          {avail && (
+          {droppedRooms.length > 0 && (
+            <div style={{ ...errorBox, background: "#FFFBEB", borderColor: "#FDE68A", color: "#92400E" }}>
+              {droppedRooms.length === 1 ? `Room ${droppedRooms[0]} was` : `Rooms ${droppedRooms.join(", ")} were`} taken off
+              your selection — {droppedRooms.length === 1 ? "it isn't" : "they aren't"} free for the new dates. Pick again below.
+            </div>
+          )}
+
+          {avail && !inHouse && (
             <Section title="Available Rooms">
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 12, fontSize: 12, color: "#64748B" }}>
+                <span>
+                  For <strong style={{ color: "#1E293B" }}>{dmy(avail.check_in)} → {dmy(avail.check_out)}</strong>
+                  {" "}({avail.nights} night{avail.nights === 1 ? "" : "s"})
+                </span>
+                {stale && <span style={{ color: "#B45309", fontWeight: 600 }}>Updating for the new dates…</span>}
+              </div>
+              {avail.room_types.some(t => t.available_rooms.some(r => r.leaving_that_day)) && (
+                <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "#F0F9FF",
+                              border: "1px solid #BAE6FD", color: "#0C4A6E", fontSize: 12, lineHeight: 1.5 }}>
+                  <strong>Same-day hand-over.</strong> A room marked “checks out that morning” is free for this stay:
+                  {houseTimes ? ` guests leave by ${houseTimes.out} and the next guest arrives from ${houseTimes.in}.` : " the previous guest leaves that morning and the next one arrives that afternoon."}
+                </div>
+              )}
+              <div style={{ opacity: stale ? 0.5 : 1, pointerEvents: stale ? "none" : "auto", transition: "opacity .15s" }}>
               {avail.room_types.every(t => t.available_rooms.length === 0) ? (
                 <div style={{ padding: 20, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>
                   No rooms free for those dates.
                 </div>
               ) : avail.room_types.map(t => {
-                const holds  = Number(t.max_occupancy) || 0;
+                // What the room takes, adults and children counted separately now.
+                const holdsAdults = t.max_adults == null ? null : Number(t.max_adults);
+                const holdsKids   = t.max_children == null ? null : Number(t.max_children);
+                const holds = (holdsAdults ?? 0) + (holdsKids ?? 0);
                 // How many of this type it would take to seat the party. Never
                 // disable a "small" type — two Standard Doubles is a perfectly
                 // good answer for four guests.
@@ -471,7 +716,16 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
                     <span style={{ fontWeight: 700, fontSize: 13, color: "#1E293B" }}>
                       {t.type_name}
                       <span style={{ color: "#94A3B8", fontWeight: 400 }}>
-                        {" · sleeps "}{t.base_occupancy}{holds > t.base_occupancy ? `, up to ${holds}` : ""}
+                        {(() => {
+                          const who = [
+                            holdsAdults ? `${holdsAdults} adult${holdsAdults === 1 ? "" : "s"}` : null,
+                            holdsKids ? `${holdsKids} child${holdsKids === 1 ? "" : "ren"}` : null,
+                          ].filter(Boolean).join(" + ");
+                          const covers = t.included_guests == null
+                            ? " · rate covers the room"
+                            : ` · rate covers ${t.included_guests}`;
+                          return who ? ` · takes ${who}${covers}` : covers;
+                        })()}
                       </span>
                       {needed === 1 && (
                         <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#059669" }}>
@@ -506,25 +760,60 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {t.available_rooms.length === 0 ? (
-                      <span style={{ fontSize: 12, color: "#DC2626" }}>Fully booked ({t.total_rooms} rooms)</span>
+                      <span style={{ fontSize: 12, color: "#DC2626" }}>
+                        Fully booked for these dates ({t.total_rooms} room{t.total_rooms === 1 ? "" : "s"})
+                      </span>
                     ) : t.available_rooms.map(r => {
                       const on = picked.some(p => p.room_id === r.room_id);
                       return (
-                        <button key={r.room_id} type="button"
-                          onClick={() => on ? removeRoom(r.room_id) : addRoom(t, r)}
-                          style={{
-                            padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                            border: on ? "2px solid #1565C0" : "1px solid #E2E8F0",
-                            background: on ? "#1565C0" : "#fff", color: on ? "#fff" : "#475569",
-                          }}>
-                          {r.room_number} {on ? "✓" : ""}
-                        </button>
+                        <div key={r.room_id} style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+                          <button type="button"
+                            onClick={() => on ? removeRoom(r.room_id) : addRoom(t, r)}
+                            style={{
+                              padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                              border: on ? "2px solid #1565C0" : "1px solid #E2E8F0",
+                              background: on ? "#1565C0" : "#fff", color: on ? "#fff" : "#475569",
+                            }}>
+                            {r.room_number} {on ? "✓" : ""}
+                          </button>
+                          {r.leaving_that_day && (
+                            <span style={{ fontSize: 10.5, color: "#0369A1", lineHeight: 1.3 }}
+                                  title={`${r.leaving_that_day.guest_name} (${r.leaving_that_day.booking_ref}) leaves that morning`}>
+                              ↺ checks out that morning
+                            </span>
+                          )}
+                          {r.arriving_that_day && (
+                            <span style={{ fontSize: 10.5, color: "#B45309", lineHeight: 1.3 }}
+                                  title={`${r.arriving_that_day.guest_name} (${r.arriving_that_day.booking_ref}) arrives that day`}>
+                              next guest arrives {dmy(r.arriving_that_day.check_in)}
+                            </span>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
+
+                  {/* Why the rest are taken, so "booked" is never a bare word. */}
+                  {(t.unavailable_rooms || []).length > 0 && (
+                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
+                      {t.unavailable_rooms.map(r => (
+                        <span key={r.room_id} style={{ fontSize: 11.5, color: "#94A3B8" }}>
+                          Room {r.room_number} is taken
+                          {r.blocked_by
+                            ? (r.blocked_by.status === "checked_in"
+                              // Still in the room: they keep it until the desk checks them out,
+                              // whatever date they were due to leave.
+                              ? ` — ${r.blocked_by.guest_name} is in the room (due out ${dmy(r.blocked_by.due_out)}); it is free once they are checked out`
+                              : ` — ${r.blocked_by.guest_name}, ${dmy(r.blocked_by.check_in)} → ${dmy(r.blocked_by.check_out)}`)
+                            : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 );
               })}
+              </div>
             </Section>
           )}
 
@@ -539,18 +828,23 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
                     <span style={{ color: "#94A3B8" }}> · {p.type_name}</span>
                   </div>
                   <label style={{ ...label, fontSize: 11 }}>Rate / night
-                    <input type="number" min={0} step="0.01" value={p.rate_per_night}
+                    <input type="number" min={0} step="0.01" value={p.rate_per_night} disabled={inHouse}
                       onChange={e => setRate(p.room_id, e.target.value)}
                       style={{ ...input, marginTop: 2, padding: "6px 10px", fontSize: 13 }} />
                   </label>
-                  <button type="button" onClick={() => removeRoom(p.room_id)} style={btn("danger")}>Remove</button>
+                  {inHouse ? <span /> : <button type="button" onClick={() => removeRoom(p.room_id)} style={btn("danger")}>Remove</button>}
                 </div>
               ))}
             </Section>
           )}
 
-          <Section title="Guest">
-            <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
+          <Section title={isEdit ? "Guest details" : "Guest"}>
+            {isEdit && (
+              <div style={{ fontSize: 12, color: "#64748B", marginBottom: 10 }}>
+                These are the guest's own details, so a correction here shows on all of their bookings.
+              </div>
+            )}
+            <div style={{ display: isEdit ? "none" : "flex", gap: 16, marginBottom: 12 }}>
               {[[true, "New guest"], [false, "Existing guest"]].map(([mode, txt]) => (
                 <label key={txt} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", color: "#475569" }}>
                   <input type="radio" checked={newGuestMode === mode} onChange={() => setNewGuestMode(mode)} />
@@ -558,7 +852,7 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
                 </label>
               ))}
             </div>
-            {newGuestMode ? (
+            {newGuestMode || isEdit ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                 {GUEST_FIELDS.map(f => {
                   const badEmail = f.k === "email" && guest.email.trim() && !EMAIL_RE.test(guest.email.trim());
@@ -580,13 +874,7 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
           </Section>
 
           <Section title="Stay Details">
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
-              <label style={label}>Meal Plan
-                <select value={mealPlanId} onChange={e => setMealPlanId(e.target.value)} style={{ ...input, marginTop: 4 }}>
-                  <option value="">Room Only</option>
-                  {mealPlans.map(m => <option key={m.plan_id} value={m.plan_id}>{m.plan_name}</option>)}
-                </select>
-              </label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
               <label style={label}>Arrival Time
                 <input type="time" value={arrivalTime} onChange={e => setArrivalTime(e.target.value)} style={{ ...input, marginTop: 4 }} />
               </label>
@@ -619,13 +907,24 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
                   placeholder="e.g. Honeymoon decoration & cake" style={{ ...input, marginTop: 4 }} />
               </label>
             </div>
+            {arrivalNotes.map((n, i) => (
+              <div key={i} role="status" style={{
+                marginTop: 10, padding: "9px 12px", borderRadius: 8, fontSize: 12.5, lineHeight: 1.5,
+                background: n.level === "warn" ? "#FFFBEB" : "#F0F9FF",
+                border: `1px solid ${n.level === "warn" ? "#FDE68A" : "#BAE6FD"}`,
+                color: n.level === "warn" ? "#92400E" : "#0C4A6E",
+              }}>
+                {n.level === "warn" ? "⚠ " : "ℹ "}{n.text}
+              </div>
+            ))}
           </Section>
 
+          {!inHouse && (
           <Section title="Charges">
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isEdit ? "repeat(3,1fr)" : "repeat(4,1fr)", gap: 12, marginBottom: 14 }}>
               <label style={label}>Tax %
                 <input type="number" min={0} max={100} step="0.01" required value={taxPct}
-                  onChange={e => setTaxPct(e.target.value)} style={{ ...input, marginTop: 4 }} />
+                  onChange={e => { taxTouched.current = true; setTaxPct(e.target.value); }} style={{ ...input, marginTop: 4 }} />
               </label>
               <label style={label}>Extra Charges
                 <input type="number" min={0} max={MAX_MONEY} step="0.01" required value={extras}
@@ -637,12 +936,14 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
                   style={{ ...input, marginTop: 4, ...(overDiscount ? overStyle : null) }} />
                 {overDiscount && <span style={hint}>Most you can take off is {money(totals.beforeDiscount)}</span>}
               </label>
+              {!isEdit && (
               <label style={label}>Advance Payment
                 <input type="number" min={0} max={MAX_MONEY} step="0.01" required value={advance}
                   onChange={e => setAdvance(e.target.value)}
                   style={{ ...input, marginTop: 4, ...(overAdvance ? overStyle : null) }} />
                 {overAdvance && <span style={hint}>Grand total is only {money(totals.grand)}</span>}
               </label>
+              )}
             </div>
 
             <div style={{ background: "#F8FAFC", borderRadius: 10, padding: 16 }}>
@@ -666,7 +967,12 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
               {[
                 ...(picked.length > 1 ? [["Total Room Charges", money(totals.room), "#1E293B"]] : []),
                 [`Room Charges Tax (${taxPct}%)`, money(totals.tax), "#1E293B"],
-                ...(totals.meal ? [["Inclusions (meal plan)", money(totals.meal), "#1E293B"]] : []),
+                ...(totals.guests ? [[
+                  `Extra guests (${[extraGuests.extraAdults ? `${extraGuests.extraAdults} adult${extraGuests.extraAdults === 1 ? "" : "s"}` : null,
+                                    extraGuests.extraChildren ? `${extraGuests.extraChildren} child${extraGuests.extraChildren === 1 ? "" : "ren"}` : null]
+                                    .filter(Boolean).join(", ")} × ${nights} night${nights === 1 ? "" : "s"})`,
+                  money(totals.guests), "#1E293B"]] : []),
+
                 ...(Number(extras) ? [["Extra Charges", money(extras), "#1E293B"]] : []),
                 ...(Number(discount) ? [["Discount", `-${money(discount)}`, "#DC2626"]] : []),
               ].map(([k, v, c]) => (
@@ -684,10 +990,22 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 14, fontWeight: 700,
                             color: totals.balance > 0 ? "#DC2626" : "#059669" }}>
-                <span>Amount Due at Check-In</span><span>{money(totals.balance)}</span>
+                <span>{isEdit ? "Balance Due" : "Amount Due at Check-In"}</span><span>{money(Math.max(totals.balance, 0))}</span>
               </div>
+              {isEdit && totals.balance < -0.005 && (
+                <div style={{ padding: "6px 0 0", fontSize: 12.5, color: "#B45309" }}>
+                  The guest has already paid {money(advance)}, which is {money(-totals.balance)} more than the new total.
+                  That much is due back to them — record it as a refund from the booking page.
+                </div>
+              )}
+              {isEdit && (
+                <div style={{ padding: "6px 0 0", fontSize: 11.5, color: "#94A3B8" }}>
+                  Payments already taken are left as they are.
+                </div>
+              )}
             </div>
           </Section>
+          )}
 
           {overCapacity && (
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, padding: "11px 14px",
@@ -705,7 +1023,7 @@ function NewBookingModal({ branchId, mealPlans, guests, agents, onClose, onCreat
           <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
             <button type="button" onClick={onClose} style={{ ...btn("ghost"), flex: 1, padding: 12 }}>Cancel</button>
             <button type="submit" disabled={submitting} style={{ ...btn("primary"), flex: 2, padding: 12, opacity: submitting ? 0.7 : 1 }}>
-              {submitting ? "Creating…" : "Create Booking"}
+              {submitting ? (isEdit ? "Saving…" : "Creating…") : isEdit ? "Save Changes" : "Create Booking"}
             </button>
           </div>
         </form>

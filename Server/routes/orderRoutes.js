@@ -10,6 +10,7 @@ import {
   voidOrder,
   createOrderWithItems,
 } from "../controllers/orderController.js";
+import { getKitchenBoard } from "../controllers/kitchenBoardController.js";
 
 import {
   requireAuth,
@@ -75,6 +76,9 @@ const canVoidOrder = requireRole(
 
 // GET /orders
 router.get("/", requireAuth, canReadOrders, getAllOrders);
+
+// GET /orders/board — what the kitchen is working on now. Before "/:id".
+router.get("/board", requireAuth, canReadOrders, getKitchenBoard);
 
 // GET /orders/:id
 router.get("/:id", requireAuth, canReadOrders, getOrderById);

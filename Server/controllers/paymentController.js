@@ -2,6 +2,17 @@
 import { body, param, query, validationResult } from "express-validator";
 import pool from "../config/database.js";
 import { logActivity } from "../utils/activityLog.js";
+import { hotelToday } from "../utils/hotelTime.js";
+import { branchClause, assertInScope } from "../utils/scope.js";
+
+// A payment is only as visible as the order it pays for. Without this, any cashier
+// could list, read, record against, correct or delete another property's payments.
+async function paymentInScope(req, res, p_id) {
+  const { rows } = await pool.query('SELECT or_id FROM "Payment" WHERE p_id = $1', [p_id]);
+  if (!rows.length) return false; // the handler answers 404
+  await assertInScope(req, res, { table: "ORDER", idColumn: "or_id", id: rows[0].or_id });
+  return true;
+}
 
 // ─── DB-Aligned Constants ─────────────────────────────────────────────────────
 // Adjust these to match your Payment table CHECK constraints if you have them
@@ -186,6 +197,12 @@ export async function getPayments(req, res, next) {
       values.push(amount_max);
     }
 
+    const scope = branchClause(req, "o.b_id", values);
+    if (scope) {
+      conditions.push(`or_id IN (SELECT o.or_id FROM "ORDER" o WHERE ${scope})`);
+      idx = values.length + 1;
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const [
@@ -227,6 +244,7 @@ export const getPaymentByIdValidation = [v_pId, validate];
 
 export async function getPaymentById(req, res, next) {
   try {
+    await paymentInScope(req, res, req.params.id);
     const { rows } = await pool.query(
       'SELECT * FROM "Payment" WHERE p_id = $1',
       [req.params.id],
@@ -269,7 +287,7 @@ export const createPaymentValidation = [
     .isDate({ format: "YYYY-MM-DD" })
     .withMessage("pay_date must be a valid date (YYYY-MM-DD)")
     .custom((val) => {
-      if (new Date(val) > new Date()) {
+      if (val > hotelToday()) {
         throw new Error("pay_date cannot be a future date");
       }
       return true;
@@ -327,6 +345,35 @@ export async function createPayment(req, res, next) {
       pay_amount,
       or_id,
     } = req.body;
+
+    await assertInScope(req, res, { table: "ORDER", idColumn: "or_id", id: or_id });
+
+    // A ticket is paid once. Nothing compared what was being taken with what
+    // was owed, so the same order could be paid twice over without a murmur —
+    // 1,800 taken on a 900 sale in testing, and the second payment recorded as
+    // cleanly as the first.
+    const owed = await pool.query(
+      `SELECT COALESCE("or_totalCostWtax", or_totalcost, 0)::numeric AS due,
+              (SELECT COALESCE(SUM(pay_amount), 0) FROM "Payment" WHERE or_id = $1) AS taken
+         FROM "ORDER" WHERE or_id = $1`,
+      [or_id],
+    );
+    const due = Number(owed.rows[0]?.due ?? 0);
+    const taken = Number(owed.rows[0]?.taken ?? 0);
+    const asking = Number(pay_amount);
+
+    // Part payments are fine; more than the ticket is worth is not. Half a
+    // rupee of slack covers rounding between the till and the menu.
+    if (due > 0 && taken + asking > due + 0.5) {
+      return res.status(409).json({
+        success: false,
+        error:
+          taken >= due
+            ? `Order #${or_id} has already been paid in full — ${due.toFixed(2)} taken.`
+            : `That would take ${(taken + asking).toFixed(2)} for a ${due.toFixed(2)} ticket. `
+              + `${(due - taken).toFixed(2)} is outstanding.`,
+      });
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO "Payment" (pay_method, pay_status, pay_date, pay_amount, or_id)
@@ -406,7 +453,7 @@ export const updatePaymentValidation = [
     .isDate({ format: "YYYY-MM-DD" })
     .withMessage("pay_date must be YYYY-MM-DD")
     .custom((val) => {
-      if (new Date(val) > new Date())
+      if (val > hotelToday())
         throw new Error("pay_date cannot be a future date");
       return true;
     }),
@@ -455,6 +502,9 @@ export async function updatePayment(req, res, next) {
   try {
     const { id } = req.params;
     const { pay_method, pay_status, pay_date, pay_amount, or_id } = req.body;
+
+    await paymentInScope(req, res, id);
+    await assertInScope(req, res, { table: "ORDER", idColumn: "or_id", id: or_id });
 
     const { rows } = await pool.query(
       `UPDATE "Payment"
@@ -511,6 +561,7 @@ export const deletePaymentValidation = [
 
 export async function deletePayment(req, res, next) {
   try {
+    await paymentInScope(req, res, req.params.id);
     const { rows } = await pool.query(
       'DELETE FROM "Payment" WHERE p_id = $1 RETURNING p_id',
       [req.params.id],

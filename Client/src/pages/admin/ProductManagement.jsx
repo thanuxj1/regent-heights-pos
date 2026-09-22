@@ -1,3 +1,4 @@
+import { API_URL, IMAGE_BASE_URL } from "../../config";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -13,8 +14,8 @@ import Button from "../../components/admin/Button";
 import ProductItemsTable from "../../components/branch-admin/ProductItemsTable";
 import { getProducts, updateProduct } from "../../services/api";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-const IMAGE_BASE_URL = API_BASE_URL.replace(/\/api\/?$/i, "");
+const API_BASE_URL = API_URL;
+
 const cardBaseStyle = {
   flex: "0 1 calc((100% - 60px) / 3)",
   borderRadius: "18px",
@@ -115,9 +116,13 @@ const ProductManagement = () => {
       try {
         setLoading(true);
         setError("");
-        const response = await getProducts();
+        const response = await getProducts().catch((err) => {
+          if (err?.response?.status === 404) return [];
+          throw err;
+        });
         if (!isMounted) return;
-        setProducts(Array.isArray(response) ? response : []);
+        const safeData = response?.data || response || [];
+        setProducts(Array.isArray(safeData) ? safeData : []);
       } catch (err) {
         if (!isMounted) return;
         setError(err?.response?.data?.message || "Failed to load products");

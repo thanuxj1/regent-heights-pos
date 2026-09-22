@@ -7,6 +7,7 @@ import {
   deleteRawMaterial,
   getLowStockMaterials,
   adjustStock,
+  countRawMaterial,
 } from "../controllers/rawMaterialController.js";
 import {
   requireAuth,
@@ -75,6 +76,13 @@ router.patch(
     "Kitchen Staff or Admin",
   ),
   adjustStock,
+);
+
+// Only a manager corrects the count, and every correction says why.
+router.post(
+  "/:id/count",
+  requireRole([ROLES.ADMIN, ROLES.BRANCH_ADMIN], "Admin or Branch Admin"),
+  countRawMaterial,
 );
 
 // Admin and Branch Admin can delete — destructive operation

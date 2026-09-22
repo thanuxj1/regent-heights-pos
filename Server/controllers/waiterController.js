@@ -1,7 +1,7 @@
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
-import { adjustStockForOrderItem } from "./orderItemController.js";
-import { emitOrderEvent } from "../utils/socket.js";
+import { returnStock } from "../utils/inventory.js";
+import { emitOrderEvent, emitSocketEvent, getKitchenSocketRoom } from "../utils/socket.js";
 
 const VALID_STATUSES = ["pending", "preparing", "completed", "cancelled"];
 
@@ -453,14 +453,20 @@ export async function deleteWaiterOrder(req, res, next) {
     try {
       await client.query("BEGIN");
 
-      // Restore branch product stock for each item before deleting
-      const itemsToRestore = await client.query(
-        `SELECT "Bpro_id", pro_quantity FROM public."ORDER_ITEM" WHERE order_id = $1`,
+      // Look again under a lock: the kitchen may have started it since it was
+      // read above, and a started order is cancelled, never deleted.
+      const now = await client.query(
+        `SELECT or_status FROM "ORDER" WHERE or_id = $1 FOR UPDATE`,
         [orderId],
       );
-      for (const item of itemsToRestore.rows) {
-        await adjustStockForOrderItem(client, item.Bpro_id, item.pro_quantity, "add");
+      if (!now.rows.length || ["preparing", "completed"].includes(now.rows[0].or_status)) {
+        await client.query("ROLLBACK");
+        res.status(409);
+        return next(new Error("The kitchen has already started this order. Cancel it instead."));
       }
+
+      // Put back exactly what the order took, before its lines go.
+      await returnStock(client, { order_id: orderId, u_id: req.user?.u_id ?? null });
 
       await client.query(
         `DELETE FROM public."ORDER_ITEM" WHERE order_id = $1`,
@@ -490,6 +496,12 @@ export async function deleteWaiterOrder(req, res, next) {
       }
 
       await client.query("COMMIT");
+      // Screens showing it drop it now, not at their next refresh.
+      if (deleted.rows[0]) {
+        const gone = { or_id: orderId, b_id: deleted.rows[0].b_id };
+        emitSocketEvent("order:deleted", gone, { room: getKitchenSocketRoom(gone.b_id) });
+        emitOrderEvent("order:deleted", gone).catch(() => {});
+      }
       res.json({
         success: true,
         message: "Order deleted successfully",

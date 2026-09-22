@@ -6,6 +6,9 @@ const EditMaterialModal = ({ material, onClose, onSuccess, setMaterials }) => {
     unit: material.unit,
     record_level: material.record_level,
     stock_qty: material.stock_qty, // Added stock_qty to initial state
+    item_category: material.item_category || 'ingredient',
+    yield_unit: material.yield_unit || '',
+    yield_amount: material.yield_amount || ''
   });
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -16,7 +19,7 @@ const EditMaterialModal = ({ material, onClose, onSuccess, setMaterials }) => {
     // Instant Frontend Check: 
     // If stock is > 0, show the error immediately without calling the API
     if (parseFloat(material.stock_qty) > 0) {
-      setDeleteError(`Cannot delete raw material while it still has stock. Set stock to 0 first.`);
+      setDeleteError(`Cannot delete raw material while it still has stock. Count it to 0 first.`);
       return;
     }
 
@@ -37,7 +40,16 @@ const EditMaterialModal = ({ material, onClose, onSuccess, setMaterials }) => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(formData),
+        // The figure on the shelf changes only through a count, which asks why.
+        body: JSON.stringify({ 
+          rm_name: formData.rm_name, 
+          unit: formData.unit, 
+          record_level: formData.record_level,
+          stock_qty: formData.stock_qty,
+          item_category: formData.item_category,
+          yield_unit: formData.yield_unit || undefined,
+          yield_amount: Number(formData.yield_amount) || undefined
+        }),
       });
       if (!response.ok) {
         const error = await response.json();
@@ -97,6 +109,18 @@ const EditMaterialModal = ({ material, onClose, onSuccess, setMaterials }) => {
             />
           </div>
           
+          <div>
+            <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Item Category</label>
+            <select 
+              className="w-full border-gray-200 border rounded-xl p-3 mt-1 outline-none"
+              value={formData.item_category}
+              onChange={(e) => setFormData({...formData, item_category: e.target.value})}
+            >
+              <option value="ingredient">Ingredient</option>
+              <option value="supply">Hotel Supply</option>
+            </select>
+          </div>
+          
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Unit</label>
@@ -113,17 +137,51 @@ const EditMaterialModal = ({ material, onClose, onSuccess, setMaterials }) => {
                 <option value="units">units</option>
                 <option value="box">box</option>
                 <option value="pack">pack</option>
+                <option value="bottle">bottle</option>
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Stock Quantity</label>
+              <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Stock Qty (Edit if mistake)</label>
               <input 
                 type="number"
                 step="0.001"
                 className="w-full border-gray-200 border rounded-xl p-3 mt-1 outline-none focus:ring-2 focus:ring-blue-500"
                 value={formData.stock_qty}
                 onChange={(e) => setFormData({...formData, stock_qty: e.target.value})}
-                required
+                title="Edit stock directly to fix mistakes"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Yield Unit (Optional)</label>
+              <select 
+                className="w-full border-gray-200 border rounded-xl p-3 mt-1 outline-none"
+                value={formData.yield_unit || ""}
+                onChange={(e) => setFormData({...formData, yield_unit: e.target.value})}
+              >
+                <option value="">None</option>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="l">l</option>
+                <option value="ml">ml</option>
+                <option value="pcs">pcs</option>
+                <option value="units">units</option>
+                <option value="box">box</option>
+                <option value="pack">pack</option>
+                <option value="bottle">bottle</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Yield Amount (Optional)</label>
+              <input 
+                type="number"
+                step="0.001"
+                placeholder="e.g. 500"
+                className="w-full border-gray-200 border rounded-xl p-3 mt-1 outline-none focus:ring-2 focus:ring-blue-500"
+                value={formData.yield_amount || ""}
+                onChange={(e) => setFormData({...formData, yield_amount: e.target.value})}
               />
             </div>
           </div>

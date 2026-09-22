@@ -1,6 +1,8 @@
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
 import { logActivity } from "../utils/activityLog.js";
+import { availabilityFor } from "../utils/inventory.js";
+import { HOTEL_TZ } from "../utils/hotelTime.js";
 
 function fieldOrNull(value) {
   // Convert `undefined` -> null (so COALESCE keeps the existing DB value).
@@ -52,7 +54,60 @@ function toResponseRow(row) {
     B_id: row.B_id,
     cat_name: row.cat_name,
     stations: stations || {},
+    // false = made to order: nothing to count, nothing to run out of.
+    track_inventory: row.track_inventory !== false,
+    // When the owner is told this item is running low. It is set per item on
+    // the product page; ten is only what an item gets when nobody has said
+    // otherwise. The screens used to decide it for themselves — the list at
+    // ten, the till at five — so the field on the form changed nothing.
+    low_stock: Number(row.low_stock) > 0 ? Number(row.low_stock) : 10,
+    // The till reads this per line to work out the tax on a sale. It was never
+    // sent, so every item quietly fell back to 5% and the Tax Group field on
+    // the product form decided nothing.
+    tax_group: row.tax_group != null ? Number(row.tax_group) : null,
+    // What is still in the storeroom, not yet moved onto the menu. Only the list asks for it.
+    storeroom_qty: row.storeroom_qty != null ? Number(row.storeroom_qty) : undefined,
   };
+}
+
+/**
+ * Menu rows with what can actually be sold right now: for a dish with a recipe,
+ * the portions its ingredients allow; for something counted, what is on the
+ * shelf; for something made to order, nothing — `available` comes back null and
+ * the screens read that as "always on the menu".
+ * pro_quantity is left as stored, so an edit form never mistakes one for the other.
+ *
+ * `made_today` rides along because a dish cooked to order has no other number.
+ * The owner cannot say in the morning how many kottu the kitchen has; what they
+ * can see is how many it has made since service began, and that is this.
+ */
+async function withAvailability(rows) {
+  const avail = await availabilityFor(pool, rows.map((r) => ({
+    Bpro_id: r.Bpro_id, pro_id: r.pro_id, B_id: r.B_id, pro_quantity: r.pro_quantity,
+    track_inventory: r.track_inventory,
+  })));
+
+  const ids = [...new Set(rows.map((r) => Number(r.Bpro_id)).filter(Number.isFinite))];
+  const made = new Map();
+  if (ids.length) {
+    const { rows: sold } = await pool.query(
+      `SELECT oi."Bpro_id" AS bpro_id, COALESCE(SUM(oi.pro_quantity), 0) AS qty
+         FROM "ORDER_ITEM" oi
+         JOIN "ORDER" o ON o.or_id = oi.order_id
+        WHERE oi."Bpro_id" = ANY($1::int[])
+          AND o.or_date = (NOW() AT TIME ZONE $2)::date
+          AND o.or_status <> 'cancelled'
+        GROUP BY oi."Bpro_id"`, [ids, HOTEL_TZ]);
+    for (const s of sold) made.set(Number(s.bpro_id), Number(s.qty));
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    made_today: made.get(Number(r.Bpro_id)) || 0,
+    ...(avail.get(Number(r.Bpro_id)) || {
+      stock_mode: "count", available: Math.floor(Number(r.pro_quantity ?? 0)), limited_by: null,
+    }),
+  }));
 }
 
 function isPositiveInt(value) {
@@ -65,71 +120,8 @@ function isNonNegativeNumber(value) {
   return Number.isFinite(n) && n >= 0;
 }
 
-// ─────────────────────────────────────────────
-// RECIPE INGREDIENT HELPERS
-// ─────────────────────────────────────────────
-
-/**
- * Converts a recipe quantity from recipe unit to raw-material stock unit.
- */
-function convertQty(recipeQty, recipeUnit, stockUnit) {
-  const rUnit = String(recipeUnit || "").toLowerCase().trim();
-  const sUnit = String(stockUnit || "").toLowerCase().trim();
-  if (rUnit === sUnit || !rUnit || !sUnit) return recipeQty;
-  if (rUnit === "g"     && sUnit === "kg")    return recipeQty / 1000;
-  if (rUnit === "mg"    && sUnit === "g")     return recipeQty / 1000;
-  if (rUnit === "mg"    && sUnit === "kg")    return recipeQty / 1_000_000;
-  if (rUnit === "kg"    && sUnit === "g")     return recipeQty * 1000;
-  if (rUnit === "ml"    && sUnit === "l")     return recipeQty / 1000;
-  if (rUnit === "l"     && sUnit === "ml")    return recipeQty * 1000;
-  if (rUnit === "pcs"   && sUnit === "dozen") return recipeQty / 12;
-  if (rUnit === "units" && sUnit === "dozen") return recipeQty / 12;
-  return recipeQty;
-}
-
-/**
- * Deducts or restores raw-material stock according to the product's recipe.
- * Called when a branch admin adds, updates, or removes pre-made product batches.
- *
- * @param {object} client    - pg transaction client (must be inside BEGIN)
- * @param {number} pro_id    - base product ID (used to look up RECIPE)
- * @param {number} b_id      - branch ID (scopes branch-level raw materials)
- * @param {number} quantity  - number of product units being added/removed
- * @param {"subtract"|"add"} operation
- */
-async function adjustRecipeIngredients(client, pro_id, b_id, quantity, operation) {
-  const recipesResult = await client.query(
-    `SELECT
-       r."rawmaterial_ID" AS "rawmaterial_id",
-       r."quantity_req",
-       COALESCE(r."unit", rm."unit") AS "recipe_unit",
-       rm."unit"                     AS "stock_unit"
-     FROM public."RECIPE"        r
-     JOIN public."Raw_Material"  rm ON rm."rm_id" = r."rawmaterial_ID"
-     WHERE r."pro_id" = $1
-     FOR UPDATE OF rm`,
-    [pro_id]
-  );
-
-  for (const recipe of recipesResult.rows) {
-    const totalQty     = recipe.quantity_req * quantity;
-    const convertedQty = convertQty(totalQty, recipe.recipe_unit, recipe.stock_unit);
-    const stockExpr    = operation === "subtract"
-      ? "GREATEST(0, stock_qty - $1)"
-      : "stock_qty + $1";
-
-    await client.query(
-      `UPDATE public."Raw_Material"
-         SET stock_qty = ${stockExpr}
-       WHERE rm_id = $2
-         AND (
-           b_id = $3
-           OR (b_id IS NULL AND $3::integer IS NULL)
-         )`,
-      [convertedQty, recipe.rawmaterial_id, b_id ?? null]
-    );
-  }
-}
+// Recipe ingredients are taken when a dish is sold, not when portions are
+// "prepared" here — see utils/inventory.js.
 
 // GET /api/branch_products
 export async function getBranchProducts(req, res, next) {
@@ -155,7 +147,11 @@ export async function getBranchProducts(req, res, next) {
         bp."pro_id",
         bp."B_id",
         c."cat_name",
-        p."stations"
+        p."stations",
+        COALESCE(p."track_inventory", TRUE) AS "track_inventory",
+        p."low_stock",
+        p."tax_group",
+        p."pro_qty" AS "storeroom_qty"
       FROM "public"."Branch_Product" bp
       LEFT JOIN "public"."category" c ON bp."Cat_id" = c."cat_id"
       LEFT JOIN "public"."Product"   p ON bp."pro_id" = p."pro_id"
@@ -188,7 +184,7 @@ export async function getBranchProducts(req, res, next) {
       Pragma: "no-cache",
       Expires: "0",
     });
-    res.json(result.rows.map(toResponseRow));
+    res.json(await withAvailability(result.rows.map(toResponseRow)));
   } catch (err) {
     next(err);
   }
@@ -218,7 +214,10 @@ export async function getBranchProductById(req, res, next) {
         bp."pro_id",
         bp."B_id",
         c."cat_name",
-        p."stations"
+        p."stations",
+        COALESCE(p."track_inventory", TRUE) AS "track_inventory",
+        p."low_stock",
+        p."tax_group"
       FROM "public"."Branch_Product" bp
       LEFT JOIN "public"."category" c ON bp."Cat_id" = c."cat_id"
       LEFT JOIN "public"."Product"   p ON bp."pro_id" = p."pro_id"
@@ -331,7 +330,8 @@ export async function createBranchProduct(req, res, next) {
 
     // Lock and check the base product stock
     const productStock = await client.query(
-      'SELECT "pro_qty" FROM "public"."Product" WHERE "pro_id" = $1 FOR UPDATE',
+      `SELECT "pro_qty", COALESCE("track_inventory", TRUE) AS track_inventory
+         FROM "public"."Product" WHERE "pro_id" = $1 FOR UPDATE`,
       [pro_id]
     );
     if (productStock.rows.length === 0) {
@@ -339,18 +339,27 @@ export async function createBranchProduct(req, res, next) {
       throw new Error("Base product not found");
     }
 
-    const currentBaseQty = Number(productStock.rows[0].pro_qty ?? 0);
-    const neededQty = Number(pro_quantity);
-    if (neededQty > currentBaseQty) {
-      res.status(400);
-      throw new Error(`Insufficient stock in main hotel: only ${currentBaseQty} available`);
-    }
+    // A dish cooked to order carries no stock anywhere, so there is nothing to
+    // move down from the main hotel and nothing to hold here. Without this it
+    // could not be put on a menu at all: the main count is zero, and asking for
+    // a single portion was refused as "Not enough in the storeroom: only 0
+    // available" — a count that should never have been consulted.
+    const madeToOrder = productStock.rows[0].track_inventory === false;
+    const openingQty = madeToOrder ? 0 : Number(pro_quantity);
 
-    // Deduct from main stock
-    await client.query(
-      'UPDATE "public"."Product" SET "pro_qty" = "pro_qty" - $1 WHERE "pro_id" = $2',
-      [neededQty, pro_id]
-    );
+    if (!madeToOrder) {
+      const currentBaseQty = Number(productStock.rows[0].pro_qty ?? 0);
+      if (openingQty > currentBaseQty) {
+        res.status(400);
+        throw new Error(`Not enough in the storeroom: only ${currentBaseQty} available`);
+      }
+
+      // Deduct from main stock
+      await client.query(
+        'UPDATE "public"."Product" SET "pro_qty" = "pro_qty" - $1 WHERE "pro_id" = $2',
+        [openingQty, pro_id]
+      );
+    }
 
     const result = await client.query(
       `
@@ -376,11 +385,8 @@ export async function createBranchProduct(req, res, next) {
       FROM inserted i
       LEFT JOIN "public"."Product" p ON i."pro_id" = p."pro_id"
       `,
-      [pro_name, pro_shortname, pro_image, pro_des, pro_quantity, pro_price, Cat_id, pro_id, B_id]
+      [pro_name, pro_shortname, pro_image, pro_des, openingQty, pro_price, Cat_id, pro_id, B_id]
     );
-
-    // Deduct raw-material ingredients via recipe mapper (pre-made product prep)
-    await adjustRecipeIngredients(client, Number(pro_id), Number(B_id), neededQty, "subtract");
 
     await client.query("COMMIT");
     const made = toResponseRow(result.rows[0]);
@@ -482,47 +488,37 @@ export async function updateBranchProduct(req, res, next) {
 
     const oldBranchQty = Number(existing.rows[0].pro_quantity ?? 0);
     const baseProId    = existing.rows[0].pro_id;
-    const branchId     = existing.rows[0].B_id;
 
-    if (pro_quantity !== undefined) {
-      const newBranchQty = Number(pro_quantity);
-      const diff = newBranchQty - oldBranchQty;
-
-      if (diff !== 0) {
-        // Lock and check the base product stock
-        const baseProductRes = await client.query(
-          'SELECT "pro_qty" FROM "public"."Product" WHERE "pro_id" = $1 FOR UPDATE',
-          [baseProId]
-        );
-        if (baseProductRes.rows.length === 0) {
-          res.status(404);
-          throw new Error("Base product not found");
-        }
-
-        const currentBaseQty = Number(baseProductRes.rows[0].pro_qty ?? 0);
-
-        if (diff > 0) {
-          if (diff > currentBaseQty) {
-            res.status(400);
-            throw new Error(`Insufficient stock in main hotel: only ${currentBaseQty} available`);
-          }
-          // Deduct from main stock
-          await client.query(
-            'UPDATE "public"."Product" SET "pro_qty" = "pro_qty" - $1 WHERE "pro_id" = $2',
-            [diff, baseProId]
-          );
-          // Deduct additional raw-material ingredients (more products prepped)
-          await adjustRecipeIngredients(client, baseProId, branchId, diff, "subtract");
-        } else {
-          // Return to main stock
-          await client.query(
-            'UPDATE "public"."Product" SET "pro_qty" = "pro_qty" + $1 WHERE "pro_id" = $2',
-            [Math.abs(diff), baseProId]
-          );
-          // Restore raw-material ingredients (fewer products → return ingredients)
-          await adjustRecipeIngredients(client, baseProId, branchId, Math.abs(diff), "add");
-        }
+    // This form edits what an item is called and what it costs. What is on the
+    // shelf changes only through a count, which records what was counted and
+    // why. The +/− stepper used to move the figure through here with no note,
+    // no ledger line and nothing in the activity log — so the count and the
+    // ledger drifted apart and nobody could see who had moved it, or why.
+    if (pro_quantity !== undefined && Number(pro_quantity) !== oldBranchQty) {
+      // A dish with a recipe is made to order: what limits it is its
+      // ingredients, counted on the Inventory page. A number typed here would
+      // mean nothing, so it is refused rather than quietly stored.
+      const hasRecipe = await client.query(
+        'SELECT 1 FROM "public"."RECIPE" WHERE "pro_id" = $1 LIMIT 1', [baseProId]);
+      if (hasRecipe.rows.length) {
+        res.status(400);
+        throw new Error(
+          "This dish is made from its recipe, so its stock is its ingredients — update those on the Inventory page.");
       }
+
+      // Sending them to Count would only get them refused again: there is
+      // nothing on a shelf to count.
+      const tracked = await client.query(
+        'SELECT COALESCE("track_inventory", TRUE) AS t FROM "public"."Product" WHERE pro_id = $1', [baseProId]);
+      if (tracked.rows[0]?.t === false) {
+        res.status(400);
+        throw new Error(
+          "This one is made to order, so it carries no stock. If the kitchen has started making it in batches, set it to counted stock on the product page first.");
+      }
+
+      res.status(400);
+      throw new Error(
+        "Change the stock with “Count” — it records what was counted and why.");
     }
 
     const result = await client.query(
@@ -562,7 +558,7 @@ export async function updateBranchProduct(req, res, next) {
         fieldOrNull(pro_shortname),
         fieldOrNull(pro_image),
         fieldOrNull(pro_des),
-        fieldOrNull(pro_quantity),
+        null, // pro_quantity: never written here — see the guard above
         fieldOrNull(pro_price),
         fieldOrNull(Cat_id),
         fieldOrNull(pro_id),
@@ -630,8 +626,6 @@ export async function deleteBranchProduct(req, res, next) {
         'UPDATE "public"."Product" SET "pro_qty" = "pro_qty" + $1 WHERE "pro_id" = $2',
         [remainingQty, baseProId]
       );
-      // Restore raw-material ingredients for remaining unsold units
-      await adjustRecipeIngredients(client, baseProId, branchBId, remainingQty, "add");
     }
 
     // Read the name before it is gone — an audit line needs to say what went.
@@ -656,6 +650,181 @@ export async function deleteBranchProduct(req, res, next) {
     res.status(204).send();
   } catch (err) {
     await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * POST /api/branch_products/:id/restock — bring more of a counted item down from
+ * the main store to this branch's shelf. It is a transfer: the main store goes
+ * down by what the branch goes up by, so the two never disagree, and the move is
+ * written to the stock ledger and the activity log.
+ */
+export async function restockBranchProduct(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id);
+    if (!isPositiveInt(id)) {
+      res.status(400);
+      throw new Error("Invalid branch product id");
+    }
+    const qty = Number(req.body?.qty);
+    if (req.body?.qty === "" || req.body?.qty == null || !Number.isInteger(qty) || qty < 1 || qty > 1000000) {
+      res.status(400);
+      throw new Error("Enter how many to bring across — a whole number, 1 or more.");
+    }
+
+    await client.query("BEGIN");
+    let q = `SELECT bp."Bpro_id", bp.pro_name, bp.pro_quantity, bp.pro_id, bp."B_id"
+               FROM "public"."Branch_Product" bp`;
+    const p = [id];
+    if (req.user.role_id !== ROLES.SUPER_ADMIN) {
+      q += ` JOIN "public"."Branch" b ON b."B_id" = bp."B_id" WHERE bp."Bpro_id" = $1 AND b."com_id" = $2`;
+      p.push(req.user.com_id);
+      if (req.user.b_id) {
+        q += ` AND bp."B_id" = $3`;
+        p.push(req.user.b_id);
+      }
+    } else {
+      q += ` WHERE bp."Bpro_id" = $1`;
+    }
+    const found = await client.query(q + " FOR UPDATE OF bp", p);
+    if (!found.rows.length) {
+      res.status(404);
+      throw new Error("Branch product not found");
+    }
+    const item = found.rows[0];
+
+    const recipe = await client.query(
+      'SELECT 1 FROM "public"."RECIPE" WHERE "pro_id" = $1 LIMIT 1', [item.pro_id]);
+    if (recipe.rows.length) {
+      res.status(400);
+      throw new Error("This dish is made from its recipe, so its stock is its ingredients — restock those on the Inventory page.");
+    }
+    const main = await client.query(
+      `SELECT pro_qty, COALESCE(track_inventory, TRUE) AS t FROM "public"."Product" WHERE pro_id = $1 FOR UPDATE`,
+      [item.pro_id]);
+    if (!main.rows.length) {
+      res.status(404);
+      throw new Error("Base product not found");
+    }
+    if (main.rows[0].t === false) {
+      res.status(400);
+      throw new Error("This one is made to order, so it carries no stock to bring across.");
+    }
+    const inMain = Number(main.rows[0].pro_qty ?? 0);
+    if (qty > inMain) {
+      res.status(400);
+      throw new Error(`The storeroom only has ${inMain}. Receive more from a supplier first (Inventory → Add Inventory Item).`);
+    }
+
+    const before = Number(item.pro_quantity ?? 0);
+    await client.query('UPDATE "public"."Product" SET "pro_qty" = "pro_qty" - $1 WHERE "pro_id" = $2', [qty, item.pro_id]);
+    await client.query('UPDATE "public"."Branch_Product" SET "pro_quantity" = "pro_quantity" + $1 WHERE "Bpro_id" = $2', [qty, id]);
+    await client.query(
+      `INSERT INTO "STOCK_MOVEMENT" (b_id, bpro_id, qty, reason, note, created_by)
+       VALUES ($1, $2, $3, 'transfer', 'From the storeroom', $4)`,
+      [item.B_id, id, qty, req.user?.u_id ?? null]);
+    await client.query("COMMIT");
+
+    logActivity(req, {
+      action: "update", entity: "product", entity_id: id, b_id: item.B_id,
+      summary: `Brought ${qty} ${item.pro_name} across from the storeroom (${before} → ${before + qty} on the shelf)`,
+      details: { qty, before, after: before + qty, main_before: inMain, main_after: inMain - qty },
+    });
+    res.json({ Bpro_id: id, pro_name: item.pro_name, pro_quantity: before + qty, main_qty: inMain - qty });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * POST /api/branch_products/:id/count — the manager counts a counted item on
+ * the shelf. It sets the figure; unlike the +/− buttons it moves nothing from
+ * main stock, because a correction is not a transfer. A dish made from a recipe
+ * has no count of its own — its stock is its ingredients, counted on the
+ * Inventory page.
+ */
+export async function countBranchProduct(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id);
+    if (!isPositiveInt(id)) {
+      res.status(400);
+      throw new Error("Invalid branch product id");
+    }
+    const counted = Number(req.body?.counted);
+    const note = String(req.body?.note ?? "").trim();
+    if (req.body?.counted === "" || req.body?.counted == null
+        || !Number.isInteger(counted) || counted < 0 || counted > 1000000) {
+      res.status(400);
+      throw new Error("Enter what you counted — a whole number, zero or more.");
+    }
+    if (note.length < 3 || note.length > 200) {
+      res.status(400);
+      throw new Error("Say why the count changed (3–200 characters) — it is kept on the record.");
+    }
+
+    await client.query("BEGIN");
+    let q = `SELECT bp."Bpro_id", bp.pro_name, bp.pro_quantity, bp.pro_id, bp."B_id"
+               FROM "public"."Branch_Product" bp`;
+    const p = [id];
+    if (req.user.role_id !== ROLES.SUPER_ADMIN) {
+      q += ` JOIN "public"."Branch" b ON b."B_id" = bp."B_id" WHERE bp."Bpro_id" = $1 AND b."com_id" = $2`;
+      p.push(req.user.com_id);
+      if (req.user.b_id) {
+        q += ` AND bp."B_id" = $3`;
+        p.push(req.user.b_id);
+      }
+    } else {
+      q += ` WHERE bp."Bpro_id" = $1`;
+    }
+    const found = await client.query(q + " FOR UPDATE OF bp", p);
+    if (!found.rows.length) {
+      res.status(404);
+      throw new Error("Branch product not found");
+    }
+    const item = found.rows[0];
+    const recipe = await client.query(
+      'SELECT 1 FROM "public"."RECIPE" WHERE "pro_id" = $1 LIMIT 1', [item.pro_id]);
+    if (recipe.rows.length) {
+      res.status(400);
+      throw new Error(
+        "This dish is made from its recipe, so its stock is its ingredients — count those on the Inventory page.");
+    }
+    const tracked = await client.query(
+      'SELECT COALESCE("track_inventory", TRUE) AS t FROM "public"."Product" WHERE pro_id = $1', [item.pro_id]);
+    if (tracked.rows[0]?.t === false) {
+      res.status(400);
+      throw new Error(
+        "This one is made to order, so there is nothing on a shelf to count. If it is something you make in batches, set it to counted on the product page.");
+    }
+
+    const before = Number(item.pro_quantity ?? 0);
+    const change = counted - before;
+    await client.query(
+      'UPDATE "public"."Branch_Product" SET "pro_quantity" = $1 WHERE "Bpro_id" = $2', [counted, id]);
+    if (change !== 0) {
+      await client.query(
+        `INSERT INTO "STOCK_MOVEMENT" (b_id, bpro_id, qty, reason, note, created_by)
+         VALUES ($1, $2, $3, 'adjust', $4, $5)`,
+        [item.B_id, id, change, note, req.user?.u_id ?? null]);
+    }
+    await client.query("COMMIT");
+
+    logActivity(req, {
+      action: "update", entity: "product", entity_id: id, b_id: item.B_id,
+      summary: `Counted ${item.pro_name}: ${counted} on the shelf (the system said ${before}) — ${note}`,
+      details: { before, after: counted, change, note },
+    });
+    res.json({ Bpro_id: id, pro_name: item.pro_name, pro_quantity: counted, before, change });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
     next(err);
   } finally {
     client.release();

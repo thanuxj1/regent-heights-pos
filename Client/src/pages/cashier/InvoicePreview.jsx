@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { FaPrint, FaTimes } from "react-icons/fa";
 import { printReceipt } from "../../utils/printReceipt";
 import { createPayment } from "../../services/api";
+import { todayKey } from "../../utils/dates";
 
 const defaultState = {
   orderId: "INV-0000000",
@@ -35,16 +36,18 @@ const InvoicePreview = () => {
   }), [location.state]);
   
   const [isPaid, setIsPaid] = useState(false);
+  const [printed, setPrinted] = useState(false);
   const [payError, setPayError] = useState("");
 
+  // Paid and printed: back to the till, ready for the next customer. It used to
+  // wait a flat five seconds whatever happened, which is a long time to stand
+  // at a counter with the next person waiting. If the bill did not print, the
+  // longer pause stays so the cashier can press Print Bill.
   useEffect(() => {
-    if (isPaid) {
-      const timer = setTimeout(() => {
-        navigate("/cashier/pos");
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [isPaid, navigate]);
+    if (!isPaid) return undefined;
+    const timer = setTimeout(() => navigate("/cashier/pos"), printed ? 0 : 3000);
+    return () => clearTimeout(timer);
+  }, [isPaid, printed, navigate]);
 
   const grandTotal = Number(invoice.total ?? 0).toFixed(2);
   const subtotalNum = Number(invoice.subtotal ?? 0);
@@ -56,6 +59,7 @@ const InvoicePreview = () => {
 
   const handlePrint = () => {
     printReceipt(invoice);
+    setPrinted(true);
   };
 
   const handlePay = async () => {
@@ -67,13 +71,23 @@ const InvoicePreview = () => {
       await createPayment({
         pay_method: validMethods.includes(rawMethod) ? rawMethod : "cash",
         pay_status: "paid",
-        pay_date: new Date().toISOString().slice(0, 10),
+        pay_date: todayKey(),
         pay_amount: Number(grandTotal),
         or_id: Number.isFinite(numericOrderId) ? numericOrderId : null,
       });
       setIsPaid(true);
+      // The bill prints itself the moment the payment is recorded. A sale the
+      // customer has paid for and holds no receipt for is the one thing a till
+      // must not do, and nobody should have to remember a second button for it.
+      try {
+        printReceipt(invoice);
+        setPrinted(true);
+      } catch {
+        setPayError("The payment went through, but the bill did not print. Use Print Bill.");
+      }
     } catch (err) {
-      setPayError(err?.response?.data?.error || err?.message || "Payment recording failed");
+      const d = err?.response?.data;
+      setPayError(d?.error || d?.errors?.[0]?.message || d?.message || err?.message || "Payment recording failed");
     }
   };
 
@@ -88,13 +102,19 @@ const InvoicePreview = () => {
           <h1 className="text-lg font-semibold text-slate-900 sm:text-xl">Invoice Preview</h1>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={handlePrint}
-              className="inline-flex items-center gap-2 rounded-xl bg-linear-to-r from-[#0A5BAE] to-[#19A4E5] px-3 py-2 text-xs font-semibold text-white shadow-md shadow-sky-200 transition hover:-translate-y-px sm:text-sm"
-            >
-              <FaPrint className="h-3.5 w-3.5" />
-              Print Bill
-            </button>
+            {/* Paying prints the bill, so there is no button for it in the
+                ordinary run of things. One appears only if that print did not
+                happen — a jammed printer should not cost the customer a
+                receipt. */}
+            {isPaid && !printed && (
+              <button
+                onClick={handlePrint}
+                className="inline-flex items-center gap-2 rounded-xl bg-linear-to-r from-[#0A5BAE] to-[#19A4E5] px-3 py-2 text-xs font-semibold text-white shadow-md shadow-sky-200 transition hover:-translate-y-px sm:text-sm"
+              >
+                <FaPrint className="h-3.5 w-3.5" />
+                Print Bill
+              </button>
+            )}
 
             <button
               onClick={() => navigate("/cashier/pos")}
@@ -213,6 +233,9 @@ const InvoicePreview = () => {
             <div>
               <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Payment Method</div>
               <div className="mt-1 text-sm font-semibold text-emerald-600 sm:text-base">{invoice.paymentMethod} Payment</div>
+              {printed && (
+                <div className="mt-0.5 text-[11px] text-slate-500">Bill sent to the printer</div>
+              )}
             </div>
             <button
               type="button"
