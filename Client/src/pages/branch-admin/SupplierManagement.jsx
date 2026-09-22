@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import ToastMessage from "../../components/branch-admin/ToastMessage";
+import { useAuth } from "../../context/AuthContext";
 import {
   getSuppliers,
   createSupplier,
@@ -10,7 +11,9 @@ import {
   getPaymentsBySupplier,
   receivePurchaseOrder,
   recordSupplierPayment,
+  getBranchById,
 } from "../../services/api";
+import { printSupplierInvoice } from "../../utils/printSupplierInvoice";
 
 const money = (v) =>
   `LKR ${Number(v || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -53,6 +56,7 @@ const field = {
  * be paid later, in as many parts as it takes.
  */
 function SupplierDetailView({ supplier, onBack, showToast }) {
+  const { user } = useAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState(null); // { mode: "receive" | "pay", order }
@@ -61,6 +65,20 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
   const [method, setMethod] = useState("cash");
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState("");
+  // The invoice for whatever payment was just recorded — set only when money
+  // actually moved (never for "receive on credit"), cleared once dismissed.
+  const [receipt, setReceipt] = useState(null);
+  const [branchName, setBranchName] = useState("");
+  const recordedBy = [user?.u_fname, user?.u_lname].filter(Boolean).join(" ") || user?.u_email || "";
+
+  useEffect(() => {
+    const id = user?.b_id ?? user?.B_id;
+    if (!id) return;
+    getBranchById(id)
+      .then((b) => setBranchName(b?.B_name ?? b?.data?.B_name ?? ""))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.b_id, user?.B_id]);
 
   const load = async () => {
     setLoading(true);
@@ -101,6 +119,7 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
 
   const confirm = async () => {
     const { mode, order } = dialog;
+    const paid = mode === "pay" || payNow; // money actually changing hands this time
     setBusy(true);
     setDialogError("");
     try {
@@ -114,6 +133,27 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
           sup_id: supplier.sup_id, po_id: order.po_id, amount: Number(amount), method,
         });
         showToast(`Payment recorded against order #${order.po_id}`);
+      }
+      // An invoice only makes sense when a payment actually happened — not for
+      // goods taken on credit, where nothing has been paid yet to put on paper.
+      if (paid) {
+        setReceipt({
+          branchName,
+          supplierName: supplier.sup_name,
+          supplierContact: supplier.sup_contact,
+          poId: order.po_id,
+          items: order.items.map((i) => ({
+            name: i.pro_id ? i.pro_name : i.rm_name,
+            qty: i.qty,
+            unit: i.pro_id ? "units" : i.rm_unit,
+            lineTotal: i.price,
+          })),
+          orderTotal: order.total,
+          paidThisTime: Number(amount),
+          paidToDate: order.paid + Number(amount),
+          method,
+          recordedBy,
+        });
       }
       setDialog(null);
       await load();
@@ -192,6 +232,36 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
               <button onClick={confirm} disabled={busy || !amountOk}
                 style={{ ...primaryBtn, flex: 1, padding: "10px 16px", opacity: busy || !amountOk ? 0.6 : 1 }}>
                 {busy ? "Saving…" : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment recorded — offer the invoice, print it or move on. */}
+      {receipt && (
+        <div style={{
+          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex",
+          alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)",
+        }}>
+          <div style={{
+            background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px",
+            boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center",
+          }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
+            <h3 style={{ margin: "0 0 6px 0", color: "#101828" }}>Payment recorded</h3>
+            <p style={{ fontSize: "14px", color: "#667085", margin: "0 0 20px" }}>
+              {money(receipt.paidThisTime)} paid to {receipt.supplierName} against order #{receipt.poId}.
+              {receipt.paidToDate < receipt.orderTotal - 0.005
+                ? ` ${money(receipt.orderTotal - receipt.paidToDate)} still owed.`
+                : " Paid in full."}
+            </p>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button onClick={() => setReceipt(null)} style={{ ...ghostBtn, flex: 1 }}>
+                Done
+              </button>
+              <button onClick={() => printSupplierInvoice(receipt)} style={{ ...primaryBtn, flex: 1, padding: "10px 16px" }}>
+                🖨️ Print Invoice
               </button>
             </div>
           </div>
@@ -362,7 +432,17 @@ const SupplierManagement = () => {
       <Sidebar />
       <div style={{ flex: 1, marginLeft: "var(--sidebar-w, 240px)" }}>
         <Header title="Suppliers" role="Branch Admin" />
-        {toast.show && <ToastMessage message={toast.message} type={toast.type} />}
+        {toast.show && (
+          <ToastMessage
+            message={toast.message}
+            type={toast.type}
+            // ToastMessage's own auto-dismiss timer calls this 4s after it
+            // mounts; with nothing passed, that was a guaranteed crash on
+            // every single toast — success or error — a few seconds after
+            // it showed. Also wires up its ✕ button, equally dead before this.
+            onClose={() => setToast((t) => ({ ...t, show: false }))}
+          />
+        )}
         
         {/* Add Supplier Modal */}
         {showAddModal && (

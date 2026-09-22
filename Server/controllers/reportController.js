@@ -238,9 +238,11 @@ export async function getTransactions(req, res, next) {
     if (kind === "all" || kind === "restaurant") {
       const r = await pool.query(
         `SELECT o.or_id, o.or_date AS at, COALESCE(o."or_totalCostWtax", o.or_totalcost, 0) AS amount,
-                o.or_type, c.cust_name AS party
+                o.or_type, o.u_id AS handled_by_id, c.cust_name AS party,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "ORDER" o
          LEFT JOIN "CUSTOMER" c ON c.cust_id = o.cust_id
+         LEFT JOIN "User" u     ON u.u_id = o.u_id
          WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
            AND o.or_date BETWEEN $2::date AND $3::date
          ORDER BY o.or_date DESC, o.or_id DESC`,
@@ -249,12 +251,14 @@ export async function getTransactions(req, res, next) {
       r.rows.forEach(x => out.push({
         at: x.at, type: `Restaurant (${x.or_type || "order"})`, direction: "in",
         amount: num(x.amount), method: "—", reference: `#${x.or_id}`, party: x.party,
+        handled_by: x.handled_by || null, handled_by_id: x.handled_by_id ?? null,
+        or_id: x.or_id,
       }));
     }
 
     if (kind === "all" || kind === "expense") {
       const r = await pool.query(
-        `SELECT exp_date AS at, exp_amount AS amount, exp_category, exp_description
+        `SELECT exp_id, exp_date AS at, exp_amount AS amount, exp_category, exp_description
          FROM "EXPENSE"
          WHERE b_id = $1 AND exp_date BETWEEN $2::date AND $3::date
          ORDER BY exp_date DESC`,
@@ -263,12 +267,13 @@ export async function getTransactions(req, res, next) {
       r.rows.forEach(x => out.push({
         at: x.at, type: `Expense (${x.exp_category})`, direction: "out",
         amount: num(x.amount), method: "—", reference: "", party: x.exp_description,
+        exp_id: x.exp_id,
       }));
     }
 
     if (kind === "all" || kind === "commission") {
       const r = await pool.query(
-        `SELECT r.record_date AS at, r.commission_amount AS amount, r.status, a.agent_name
+        `SELECT r.record_id, r.record_date AS at, r.commission_amount AS amount, r.status, a.agent_name
          FROM "COMMISSION_RECORD" r
          JOIN "COMMISSION_AGENT" a ON a.agent_id = r.agent_id
          WHERE a.b_id = $1 AND r.record_date BETWEEN $2::date AND $3::date
@@ -278,6 +283,29 @@ export async function getTransactions(req, res, next) {
       r.rows.forEach(x => out.push({
         at: x.at, type: `Commission (${x.status})`, direction: "out",
         amount: num(x.amount), method: "—", reference: "", party: x.agent_name,
+        record_id: x.record_id,
+      }));
+    }
+
+    // Money paid to suppliers — recorded against a purchase order, never typed
+    // in as an "expense", so a ledger that stopped at the four kinds above
+    // left the single biggest kind of money-out invisible here (getSummary
+    // counts it; this list, the one meant to be complete, did not).
+    if (kind === "all" || kind === "supplier") {
+      const r = await pool.query(
+        `SELECT sp.pay_id, sp.po_id, sp.payment_date AS at, sp.amount, sp.method,
+                s.sup_name AS party
+         FROM supplier_payment sp
+         JOIN purchase_order po ON po.po_id = sp.po_id
+         JOIN "SUPPLIER" s ON s.sup_id = sp.sup_id
+         WHERE po.b_id = $1 AND sp.payment_date BETWEEN $2::date AND $3::date
+         ORDER BY sp.payment_date DESC`,
+        [b_id, from, to]
+      );
+      r.rows.forEach(x => out.push({
+        at: x.at, type: "Supplier payment", direction: "out",
+        amount: num(x.amount), method: x.method, reference: `PO#${x.po_id}`, party: x.party,
+        pay_id: x.pay_id, po_id: x.po_id,
       }));
     }
 

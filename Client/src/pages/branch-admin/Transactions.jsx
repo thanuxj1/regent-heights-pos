@@ -4,21 +4,21 @@ import Sidebar from "../../components/branch-admin/Sidebar";
 import TransactionFilters from "../../components/branch-admin/TransactionFilters";
 import TransactionTable from "../../components/admin/TransactionTable";
 import TransactionDetailsModal from "../../components/admin/TransactionDetailsModal";
-import {
-  getOrders,
-  getSupplierPayments,
-  getPayments,
-  getPurchaseOrders,
-  getBranches,
-  getReportTransactions,
-} from "../../services/api";
+import { getBranchById, getReportTransactions } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { dayKey } from "../../utils/dates";
 
-// An order is stored as a date and a time of day. Reading only the date put every
-// sale at 12:00 AM, and made same-day sales impossible to tell apart.
-const whenOrdered = (date, time) =>
-  date && time ? new Date(`${dayKey(date)}T${String(time).slice(0, 8)}`) : date;
+// The report endpoint's `type` string sorts a row into one of the ledger's
+// five kinds. Doing it here, once, is what lets the table and the details
+// modal stay generic instead of each re-deriving it their own way.
+function ledgerType(reportType) {
+  if (reportType === "Hotel payment") return "hotel";
+  if (reportType.startsWith("Restaurant")) return "sale";
+  if (reportType.startsWith("Expense")) return "expense";
+  if (reportType.startsWith("Commission")) return "commission";
+  if (reportType === "Supplier payment") return "purchase";
+  return "other";
+}
 
 export default function Transactions() {
   const [filters, setFilters] = useState({
@@ -30,150 +30,71 @@ export default function Transactions() {
   });
 
   const { user } = useAuth();
+  const branchFromUser = user?.b_id ?? user?.B_id ?? user?.branchId ?? null;
 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [transactions, setTransactions] = useState([]);
   const [selected, setSelected] = useState(null);
   const [pageSize] = useState(10);
+  const [branchName, setBranchName] = useState(null);
+
+  useEffect(() => {
+    if (!branchFromUser) return;
+    getBranchById(branchFromUser)
+      .then((b) => setBranchName(b?.B_name ?? b?.data?.B_name ?? null))
+      .catch(() => {});
+  }, [branchFromUser]);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setLoadError('');
       try {
-        const orderParams = {}; // load all statuses so branch admin can see pending/in-progress too
+        if (!branchFromUser) { setTransactions([]); return; }
 
-        // Branch filter: branch-admin must only see their branch.
-        const branchFromUser = user?.b_id ?? user?.B_id ?? user?.branchId ?? null;
-        const isBranchAdmin = user?.role_id === 1;
-        const branchFilter = isBranchAdmin ? branchFromUser : null;
-
-        if (branchFilter) orderParams.b_id = branchFilter;
-
-        const [sales, paymentsList, supplierPayments, purchaseOrders, branches, hotel] =
-          await Promise.all([
-            getOrders(orderParams).catch(() => []),
-            getPayments().catch(() => []),
-            getSupplierPayments().catch(() => []),
-            getPurchaseOrders().catch(() => []),
-            getBranches().catch(() => []),
-            // Money taken at the front desk: booking advances, settlements and refunds.
-            // This ledger only ever listed restaurant sales and purchases, so a hotel that
-            // had taken LKR 60,000 in room payments showed "no transactions".
-            branchFromUser
-              ? getReportTransactions({ b_id: branchFromUser, kind: "hotel", from: "2000-01-01", to: "2100-12-31" }).catch(() => null)
-              : Promise.resolve(null),
-          ]);
-
-        const paymentsByOrder = {};
-        (paymentsList || []).forEach((p) => {
-          const oid = p.or_id;
-          if (!oid) return;
-          const existing = paymentsByOrder[oid];
-          const curDate = p.pay_date ? new Date(p.pay_date) : new Date();
-          const existingDate =
-            existing && existing.pay_date ? new Date(existing.pay_date) : null;
-          if (!existing || (existingDate && curDate > existingDate) || !existingDate) {
-            paymentsByOrder[oid] = p;
-          }
+        // One source for every kind of money movement — sales, supplier
+        // payments, hotel payments, expenses and agent commissions — so this
+        // ledger can't drift out of sync with what Reports/Accounting count.
+        // It used to reassemble the same picture from four separate raw
+        // endpoints, and left out expenses and commissions entirely because
+        // nothing here ever fetched them.
+        const report = await getReportTransactions({
+          b_id: branchFromUser, kind: "all", from: "2000-01-01", to: "2100-12-31",
         });
 
-        const purchaseOrdersById = {};
-        (purchaseOrders || []).forEach((po) => {
-          if (po && po.po_id !== undefined && po.po_id !== null) {
-            purchaseOrdersById[po.po_id] = po;
-          }
-        });
-
-        const branchById = {};
-        (branches || []).forEach((b) => {
-          if (b && (b.B_id !== undefined && b.B_id !== null)) {
-            branchById[b.B_id] = b;
-          }
-        });
-
-        const normalizedSales = (sales || []).map((o) => {
-          const pay = paymentsByOrder[o.or_id];
-          const payMethod = pay?.pay_method ?? pay?.method ?? null;
-          const branchName =
-            branchById[o.b_id]?.B_name ?? o.B_name ?? o.b_name ?? null;
+        const rows = (report?.transactions || []).map((t, i) => {
+          const type = ledgerType(t.type);
+          const invoiceNo = type === "sale" ? t.or_id
+            : type === "purchase" ? t.po_id
+            : type === "expense" ? t.exp_id
+            : type === "commission" ? t.record_id
+            : t.reference;
+          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM" }[type] || "TX";
 
           return {
-            id: `sale-${o.or_id}`,
-            type: "sale",
-            txId: `POS#${o.or_id}`,
-            invoiceNo: o.or_id,
-            branchId: o.b_id,
+            id: `${type}-${invoiceNo ?? i}-${t.at}`,
+            type,
+            direction: t.direction,
+            txId: `${txPrefix}#${invoiceNo ?? t.reference ?? i}`,
+            invoiceNo,
+            branchId: branchFromUser,
             branchLabel: branchName,
-            cashierId: o.u_id,
-            cashierLabel: o.u_name ?? null,
-            date: whenOrdered(o.or_date, o.or_time) ?? o.or_time ?? o.created_at,
-            paymentMethod:
-              payMethod ? String(payMethod) : (o.or_paymentmethod ?? null) ?? "Cash",
-            amount: Number(o.or_totalCostWtax ?? o.or_totalcost ?? 0),
-            raw: o,
+            cashierId: t.handled_by_id ?? null,
+            // For a sale or a hotel payment this is the staff member who took
+            // it; the ledger reused the same column for "who the money went
+            // to or came from" on the other three kinds (a supplier, an
+            // expense's description, a commission agent) rather than leaving
+            // it blank.
+            cashierLabel: t.handled_by || t.party || null,
+            date: t.at,
+            paymentMethod: t.method,
+            amount: Number(t.amount ?? 0),
+            raw: t,
           };
         });
 
-        let normalizedPayments = (supplierPayments || []).map((p) => {
-          const po = purchaseOrdersById[p.po_id];
-
-          // branchId may be stored as b_id or B_id in different endpoints
-          const branchId = po?.b_id ?? po?.B_id ?? p.b_id ?? p.B_id ?? null;
-          const branchName =
-            po?.B_name ??
-            po?.b_name ??
-            branchById[branchId]?.B_name ??
-            p.B_name ??
-            p.b_name ??
-            null;
-
-          return {
-            id: `pay-${p.pay_id}`,
-            type: "purchase",
-            txId: `PAY#${p.pay_id}`,
-            invoiceNo: p.po_id,
-            branchId,
-            branchLabel: branchName,
-            cashierId: p.sup_id,
-            cashierLabel: p.sup_name,
-            date: p.payment_date,
-            paymentMethod: p.method,
-            amount: Number(p.amount ?? 0),
-            raw: p,
-          };
-        });
-
-        // If branch-admin, apply branch filter to purchases too
-        if (branchFilter) {
-          normalizedPayments = normalizedPayments.filter(
-            (p) => p.branchId !== null && Number(p.branchId) === Number(branchFilter),
-          );
-        }
-
-        const hotelRows = ((hotel && hotel.transactions) || []).map((h, i) => ({
-          id: `hotel-${i}-${h.reference}-${h.at}`,
-          type: "hotel",
-          direction: h.direction,
-          txId: `HOTEL#${h.reference}`,
-          invoiceNo: h.reference,
-          branchId: branchFromUser,
-          branchLabel: branchById[branchFromUser]?.B_name ?? null,
-          cashierId: null,
-          // "Handled by" is the staff member who took the payment, as it is for a sale.
-          cashierLabel: h.handled_by || null,
-          date: h.at,
-          paymentMethod: h.method,
-          amount: Number(h.amount ?? 0),
-          raw: h,
-        }));
-
-        setTransactions(
-          [...normalizedSales, ...normalizedPayments, ...hotelRows].sort(
-            (a, b) => new Date(b.date) - new Date(a.date),
-          ),
-        );
+        setTransactions(rows.sort((a, b) => new Date(b.date) - new Date(a.date)));
       } catch (err) {
         console.error("Ledger load error:", err);
         setLoadError('Failed to load transactions. Check your connection and try again.');
@@ -183,7 +104,10 @@ export default function Transactions() {
     };
 
     load();
-  }, [filters, user]);
+    // Filtering happens client-side in `filtered` below — changing a filter
+    // must not re-fetch the whole ledger from the server.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchFromUser, branchName]);
 
   const filtered = useMemo(() => {
     return transactions.filter((t) => {

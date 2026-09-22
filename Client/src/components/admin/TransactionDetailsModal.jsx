@@ -25,8 +25,12 @@ export default function TransactionDetailsModal({ item, onClose }) {
     if (!item) return;
     setFetchError('');
     const load = async () => {
-      // A hotel payment has no order or purchase behind it to fetch; the ledger row is the record.
-      if (item.type === 'hotel') { setDetails(null); return; }
+      // A hotel payment, an expense and a commission record are each already
+      // the whole thing — a single row, not an order with lines to fetch.
+      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission') {
+        setDetails(null);
+        return;
+      }
       setLoading(true);
       try {
         const idToken = Number(item.invoiceNo);
@@ -89,6 +93,8 @@ export default function TransactionDetailsModal({ item, onClose }) {
             <h3 className="text-base font-bold text-slate-900">
               {item.type === 'sale' ? 'Sales Transaction Receipt'
                 : item.type === 'hotel' ? (item.direction === 'out' ? 'Hotel Refund' : 'Hotel Payment Receipt')
+                : item.type === 'expense' ? 'Expense Record'
+                : item.type === 'commission' ? 'Agent Commission'
                 : 'Purchase Expense Ledger'}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">Reference: {item.txId}</p>
@@ -121,7 +127,12 @@ export default function TransactionDetailsModal({ item, onClose }) {
 
           <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-4 text-xs">
             <div>
-              <span className="block text-slate-400 font-medium uppercase tracking-wider">{item.type === 'hotel' ? 'Booking Reference' : 'Invoice / PO Number'}</span>
+              <span className="block text-slate-400 font-medium uppercase tracking-wider">
+                {item.type === 'hotel' ? 'Booking Reference'
+                  : item.type === 'expense' ? 'Expense Record #'
+                  : item.type === 'commission' ? 'Commission Record #'
+                  : 'Invoice / PO Number'}
+              </span>
               <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.type === 'hotel' ? '' : '#'}{item.invoiceNo}</span>
             </div>
             <div>
@@ -164,6 +175,24 @@ export default function TransactionDetailsModal({ item, onClose }) {
                   <p className="mt-3 text-slate-500">
                     {item.direction === 'out' ? 'Money returned to the guest' : 'Money received from the guest'} for hotel booking {item.invoiceNo}.
                     Open the booking for the full bill.
+                  </p>
+                </div>
+              )}
+              {item.type === 'expense' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Description</span>
+                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                  <p className="mt-3 text-slate-500">{item.raw?.type || 'Expense'}, recorded on the Accounting page.</p>
+                </div>
+              )}
+              {item.type === 'commission' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Agent</span>
+                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || item.cashierLabel || '—'}</span>
+                  <p className="mt-3 text-slate-500">
+                    {item.raw?.type?.includes('paid')
+                      ? 'Paid out to this agent.'
+                      : 'Owed to this agent, not yet paid — counted as a cost against this period regardless.'}
                   </p>
                 </div>
               )}
