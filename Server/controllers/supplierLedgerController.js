@@ -103,54 +103,12 @@ export async function getSupplierHistory(req, res, next) {
   }
 }
 
-// ─── POST /api/suppliers/:id/pay ──────────────────────────────────────────────
-// Record a new payment against the supplier's balance
-export async function makeSupplierPayment(req, res, next) {
-  try {
-    const sup_id = Number(req.params.id);
-    const { role_id, com_id } = req.user;
-    const { amount, method } = req.body;
-
-    if (!amount || Number(amount) <= 0) {
-      res.status(400);
-      throw new Error("Payment amount must be greater than zero");
-    }
-
-    const payMethod = method || "cash";
-    const VALID_METHODS = ["cash", "card", "bank_transfer", "cheque", "online"];
-    if (!VALID_METHODS.includes(payMethod)) {
-      res.status(400);
-      throw new Error("Invalid payment method");
-    }
-
-    // 1. Verify supplier
-    let supQuery = `SELECT sup_id FROM "SUPPLIER" WHERE sup_id = $1`;
-    const supParams = [sup_id];
-    if (role_id !== ROLES.SUPER_ADMIN) {
-      supQuery += ` AND "Com_id" = $2`;
-      supParams.push(com_id);
-    }
-    const supCheck = await pool.query(supQuery, supParams);
-    if (supCheck.rows.length === 0) {
-      res.status(404);
-      throw new Error("Supplier not found");
-    }
-
-    // 2. Insert payment
-    // We link the payment to the supplier, but not a specific PO for generic payments
-    // Wait, the schema in schema.sql for supplier_payment says:
-    // po_id INTEGER NOT NULL REFERENCES purchase_order(po_id)
-    // If we make a generic payment, we don't have a po_id!
-    // Let's check if po_id is really NOT NULL in the database.
-    const result = await pool.query(
-      `INSERT INTO supplier_payment (amount, payment_date, method, sup_id, po_id)
-       VALUES ($1, CURRENT_DATE, $2, $3, NULL)
-       RETURNING *`,
-      [Number(amount), payMethod, sup_id]
-    );
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    next(err);
-  }
-}
+// A third payment-recording path used to live here (POST /api/suppliers/:id/pay),
+// inserting supplier_payment rows with po_id left NULL. Every other place that
+// reads this table — the main supplier ledger, Accounting, Reports, the
+// Financial Ledger — joins through purchase_order to get there, an INNER JOIN,
+// so a NULL-po_id payment was invisible everywhere except the one screen that
+// created it: money left the books here and simply never appeared in a P&L, a
+// report or an export. Removed. The client now records every payment through
+// POST /api/supplier-payments (createSupplierPayment), which requires a real
+// po_id and validates it against what that order actually still owes.

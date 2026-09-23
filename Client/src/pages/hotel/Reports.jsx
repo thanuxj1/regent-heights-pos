@@ -5,6 +5,7 @@ import { getReportSummary, getReportTransactions } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
+import { exportCsv as downloadCsv, dateCell } from "../../utils/exportCsv";
 
 const PRESETS = [
   ["Today",        () => [today(), today()]],
@@ -56,18 +57,11 @@ export default function Reports() {
     if (!ledger?.transactions?.length) return;
     const head = ["Date", "Time", "Type", "Direction", "Amount", "Method", "Reference", "Party", "Handled by"];
     const clock = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? "" : d.toTimeString().slice(0, 5); };
-    // Excel turns a bare 2026-09-21 into a date wider than a default column and shows
-    // ######## — the day was in the file but not on screen. Written as text it stays legible.
     const rows = ledger.transactions.map(t => [
-      `="${dayKey(t.at)}"`, clock(t.at), t.type, t.direction,
+      dateCell(dayKey(t.at)), clock(t.at), t.type, t.direction,
       t.amount, t.method || "", t.reference || "", t.party || "", t.handled_by || "",
     ]);
-    const cell = (c) => (typeof c === "string" && c.startsWith('="') ? c : `"${String(c).replace(/"/g, '""')}"`);
-    const csv = "\uFEFF" + [head, ...rows].map(r => r.map(cell).join(",")).join("\r\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
-    const a = document.createElement("a");
-    a.href = url; a.download = `report_${from}_to_${to}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(`report_${from}_to_${to}`, head, rows);
   };
 
   const maxDay = useMemo(() => {

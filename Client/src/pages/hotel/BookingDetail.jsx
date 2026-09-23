@@ -298,7 +298,10 @@ export default function BookingDetail() {
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#F8FAFC" }}>
-                  {["Date", "Type", "Description", "Qty", "Unit", "Amount", ""].map(h => <th key={h} style={th}>{h}</th>)}
+                  {["Date", "Type", "Description", "Qty", "Unit", "Amount"].map(h => <th key={h} style={th}>{h}</th>)}
+                  {/* Never printed — this table doubles as the paper bill, and a
+                      guest's copy must not carry a "delete this charge" button. */}
+                  <th className="no-print" style={th}></th>
                 </tr></thead>
                 <tbody>
                   {folio.items.map(i => (
@@ -309,7 +312,7 @@ export default function BookingDetail() {
                       <td style={td}>{Number(i.qty)}</td>
                       <td style={td}>{money(i.unit_price)}</td>
                       <td style={{ ...td, fontWeight: 700, color: Number(i.amount) < 0 ? "#059669" : "#1E293B" }}>{money(i.amount)}</td>
-                      <td style={td}>
+                      <td className="no-print" style={td}>
                         {folio.status === "open" && (
                           <button onClick={() => run("delete", () => deleteFolioItem(id, i.item_id))} style={btn("danger")}>Del</button>
                         )}
@@ -320,17 +323,20 @@ export default function BookingDetail() {
                 <tfoot>
                   <tr style={{ background: "#F8FAFC", borderTop: "2px solid #E2E8F0" }}>
                     <td colSpan={5} style={{ ...td, fontWeight: 700, color: "#1E293B", textAlign: "right" }}>Total Charges</td>
-                    <td style={{ ...td, fontWeight: 700, color: "#1E293B" }}>{money(folio.total_charges)}</td><td />
+                    <td style={{ ...td, fontWeight: 700, color: "#1E293B" }}>{money(folio.total_charges)}</td>
+                    <td className="no-print" />
                   </tr>
                   <tr style={{ background: "#F8FAFC" }}>
                     <td colSpan={5} style={{ ...td, textAlign: "right" }}>Total Paid</td>
-                    <td style={{ ...td, color: "#059669", fontWeight: 600 }}>{money(folio.total_paid)}</td><td />
+                    <td style={{ ...td, color: "#059669", fontWeight: 600 }}>{money(folio.total_paid)}</td>
+                    <td className="no-print" />
                   </tr>
                   <tr style={{ background: "#F8FAFC", borderTop: "2px solid #CBD5E1" }}>
                     <td colSpan={5} style={{ ...td, fontWeight: 700, color: "#1E293B", textAlign: "right", fontSize: 15 }}>Balance Due</td>
                     <td style={{ ...td, fontWeight: 700, fontSize: 15, color: folio.balance_due > 0.01 ? "#DC2626" : "#059669" }}>
                       {money(folio.balance_due)}
-                    </td><td />
+                    </td>
+                    <td className="no-print" />
                   </tr>
                 </tfoot>
               </table>

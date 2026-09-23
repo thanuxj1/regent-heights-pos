@@ -7,6 +7,7 @@ import {
   getAgents, createAgent, updateAgent, deleteAgent,
   getCommissionRecords, createCommissionRecord, updateCommissionRecord, deleteCommissionRecord,
 } from "../../services/api";
+import { exportCsv, dateCell } from "../../utils/exportCsv";
 
 function initials(name) {
   return (name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
@@ -135,6 +136,16 @@ export default function CommissionAgents() {
     catch { alert("Could not delete record"); }
   };
 
+  const handleExportRecords = () => {
+    if (!agentRecords.length || !selectedAgent) return;
+    const head = ["Date", "Amount (LKR)", "Status", "Booking Ref", "Guest", "Order #", "Notes"];
+    const rows = agentRecords.map(r => [
+      dateCell(dayKey(r.record_date)), r.commission_amount, r.status,
+      r.booking_ref || "", r.guest_name || "", r.order_id ?? "", r.notes || "",
+    ]);
+    exportCsv(`commissions_${selectedAgent.agent_name.replace(/\s+/g, "-")}_${dayKey(new Date())}`, head, rows);
+  };
+
   const statusBadge = (s) => ({
     pending: { bg:"#FEF9C3", color:"#92400E", label:"Pending" },
     paid:    { bg:"#D1FAE5", color:"#065F46", label:"Paid" },
@@ -257,8 +268,12 @@ export default function CommissionAgents() {
                   <div style={{ background:"#fff", borderRadius:12, border:"1px solid #E2E8F0", overflow:"hidden" }}>
                     <div style={{ padding:"14px 20px", borderBottom:"1px solid #F1F5F9", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                       <span style={{ fontWeight:700, fontSize:14, color:"#1E293B" }}>Commission Records ({agentRecords.length})</span>
-                      <button onClick={openNewRecord}
-                        style={{ padding:"7px 16px", background:"#1565C0", color:"#fff", border:"none", borderRadius:8, fontWeight:600, cursor:"pointer", fontSize:13 }}>+ Add Record</button>
+                      <div style={{ display:"flex", gap:8 }}>
+                        <button onClick={handleExportRecords} disabled={!agentRecords.length}
+                          style={{ padding:"7px 16px", background:"#fff", color:"#475569", border:"1px solid #E2E8F0", borderRadius:8, fontWeight:600, cursor: agentRecords.length ? "pointer" : "not-allowed", opacity: agentRecords.length ? 1 : 0.5, fontSize:13 }}>Export CSV</button>
+                        <button onClick={openNewRecord}
+                          style={{ padding:"7px 16px", background:"#1565C0", color:"#fff", border:"none", borderRadius:8, fontWeight:600, cursor:"pointer", fontSize:13 }}>+ Add Record</button>
+                      </div>
                     </div>
                     {agentRecords.length === 0 ? (
                       <div style={{ padding:32, textAlign:"center", color:"#94A3B8" }}>No commission records yet</div>

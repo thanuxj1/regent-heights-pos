@@ -4,6 +4,7 @@ import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
 import { getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense } from "../../services/api";
 import { dayKey, todayKey } from "../../utils/dates";
+import { exportCsv, dateCell } from "../../utils/exportCsv";
 
 const CATEGORIES = [
   { key:"utilities",    label:"Utilities",       icon:"💡" },
@@ -117,6 +118,17 @@ export default function Accounting() {
 
   const openNew = () => { setForm(blankExpense()); setEditingId(null); setError(""); setShowModal(true); };
   const openEdit = (e) => { setForm({ exp_category:e.exp_category, exp_amount:e.exp_amount, exp_description:e.exp_description||"", exp_date:dayKey(e.exp_date) }); setEditingId(e.exp_id); setError(""); setShowModal(true); };
+
+  // Whatever the current filters show — same rows as the table beneath it.
+  const handleExport = () => {
+    if (!expenses.length) return;
+    const head = ["Date", "Category", "Amount (LKR)", "Description", "Added By"];
+    const rows = expenses.map(e => [
+      dateCell(dayKey(e.exp_date)), CAT_MAP[e.exp_category]?.label || e.exp_category,
+      e.exp_amount, e.exp_description || "", e.created_by_name || "",
+    ]);
+    exportCsv(`expenses_${dayKey(new Date())}`, head, rows);
+  };
 
   const handleSubmit = async (ev) => {
     ev.preventDefault(); setError("");
@@ -262,6 +274,8 @@ export default function Accounting() {
                   <button onClick={() => { setFilterCat("all"); setFilterFrom(""); setFilterTo(""); }}
                     style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor:"pointer", fontSize:13, color:"#64748B" }}>Clear</button>
                   <div style={{ flex:1 }} />
+                  <button onClick={handleExport} disabled={!expenses.length}
+                    style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor: expenses.length ? "pointer" : "not-allowed", opacity: expenses.length ? 1 : 0.5, fontSize:13, color:"#475569", fontWeight:600 }}>Export CSV</button>
                   <button onClick={openNew}
                     style={{ padding:"9px 18px", background:"#1565C0", color:"#fff", border:"none", borderRadius:9, fontWeight:700, cursor:"pointer", fontSize:13 }}>+ Add Expense</button>
                 </div>

@@ -9,7 +9,6 @@ import {
 import {
   getSupplierLedger,
   getSupplierHistory,
-  makeSupplierPayment
 } from "../controllers/supplierLedgerController.js";
 import {
   requireAuth,
@@ -23,7 +22,6 @@ router.use(requireAuth, requireBranchAdminOrAdmin);
 
 router.get("/ledger", getSupplierLedger);
 router.get("/:id/history", getSupplierHistory);
-router.post("/:id/pay", makeSupplierPayment);
 
 router.get("/",       getSuppliers);
 router.get("/:id",    getSupplierById);

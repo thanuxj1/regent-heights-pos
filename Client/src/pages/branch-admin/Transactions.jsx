@@ -7,6 +7,7 @@ import TransactionDetailsModal from "../../components/admin/TransactionDetailsMo
 import { getBranchById, getReportTransactions } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { dayKey } from "../../utils/dates";
+import { exportCsv, dateCell } from "../../utils/exportCsv";
 
 // The report endpoint's `type` string sorts a row into one of the ledger's
 // five kinds. Doing it here, once, is what lets the table and the details
@@ -143,6 +144,23 @@ export default function Transactions() {
     });
   }, [transactions, filters]);
 
+  // Whatever is on screen — filters and all — not the whole unfiltered ledger,
+  // so a filtered view and its export always agree.
+  const handleExport = () => {
+    if (!filtered.length) return;
+    const head = ["Date", "Time", "Type", "Direction", "Branch", "Handled by", "Payment Method", "Amount (LKR)", "Reference"];
+    const rows = filtered.map((t) => {
+      const d = new Date(t.date);
+      const time = Number.isNaN(d.getTime()) ? "" : d.toTimeString().slice(0, 5);
+      return [
+        dateCell(dayKey(t.date)), time, t.type, t.direction,
+        t.branchLabel || "", t.cashierLabel || "", t.paymentMethod || "",
+        t.amount, t.invoiceNo ?? "",
+      ];
+    });
+    exportCsv(`financial-ledger_${dayKey(new Date())}`, head, rows);
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-800 antialiased">
       <Sidebar />
@@ -157,6 +175,14 @@ export default function Transactions() {
                 <h1 className="text-2xl font-bold tracking-tight text-slate-900">Financial Ledger</h1>
                 <p className="text-sm text-slate-500">Audit, inspect, and trace branch transactions.</p>
               </div>
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={!filtered.length}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Export CSV
+              </button>
             </div>
 
             <TransactionFilters filters={filters} setFilters={setFilters} />
