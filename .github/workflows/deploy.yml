@@ -1,0 +1,77 @@
+name: Deploy to production
+
+# Pushing to main builds the client and ships both server and client to the
+# DigitalOcean droplet, then restarts the app. There is no automatic rollback
+# on a failed health check — the previous version is kept as a timestamped
+# backup on the server; see regent-heights-ops/RUNBOOK.md for how to restore it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  DEPLOY_HOST: 134.209.150.215
+  DEPLOY_USER: appuser
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build client
+        working-directory: Client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Load deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Trust host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload server (excluding node_modules and .env — the live copies are kept)
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf /home/appuser/app-new && mkdir -p /home/appuser/app-new"
+          tar --exclude node_modules --exclude .env -czf - -C Server . \
+            | ssh "$DEPLOY_USER@$DEPLOY_HOST" "tar -xzf - -C /home/appuser/app-new"
+
+      - name: Upload client
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf /home/appuser/app-web-new && mkdir -p /home/appuser/app-web-new"
+          tar -czf - -C Client/dist . \
+            | ssh "$DEPLOY_USER@$DEPLOY_HOST" "tar -xzf - -C /home/appuser/app-web-new"
+
+      - name: Install server dependencies, swap, restart
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -e
+            TS=$(date +%Y%m%d-%H%M%S)
+            cp /home/appuser/app/.env /home/appuser/app-new/.env
+            cd /home/appuser/app-new && npm ci --omit=dev
+            mv /home/appuser/app "/home/appuser/app-backup-$TS"
+            mv /home/appuser/app-new /home/appuser/app
+            mv /home/appuser/app-web "/home/appuser/app-web-backup-$TS"
+            mv /home/appuser/app-web-new /home/appuser/app-web
+            chmod -R o+rX /home/appuser/app /home/appuser/app-web
+            pm2 restart regent-heights
+          '
+
+      - name: Health check
+        run: |
+          sleep 3
+          curl -sf https://134-209-150-215.sslip.io/api/health
