@@ -64,6 +64,39 @@ export default function Reports() {
     downloadCsv(`report_${from}_to_${to}`, head, rows);
   };
 
+  const exportSummaryCsv = () => {
+    if (!data) return;
+    const pct = (v) => `${v}%`;
+    const head = ["Metric", "Value"];
+    const section = (title) => [`— ${title} —`, ""];
+    const rows = [
+      ["Report period", `${from} to ${to} (${data.range.days} day${data.range.days === 1 ? "" : "s"})`],
+      [],
+      section("REVENUE"),
+      ["Hotel (rooms, meals, room service)", money(data.revenue.hotel)],
+      ["Restaurant (walk-in)", money(data.revenue.restaurant)],
+      ["Total revenue", money(data.revenue.total)],
+      [],
+      section("EXPENSES"),
+      ...data.expenses.by_category.map(c => [CAT_LABEL[c.exp_category] || c.exp_category, money(Number(c.total))]),
+      ["Agent commissions", money(data.expenses.commissions)],
+      ["Total expenses", money(data.expenses.total + data.expenses.commissions)],
+      [],
+      section("PROFIT"),
+      ["Net profit (revenue − expenses)", money(data.profit.net)],
+      ["Profit margin (net profit ÷ revenue)", pct(data.profit.margin_pct)],
+      [],
+      section("HOTEL PERFORMANCE"),
+      ["Occupancy rate", pct(data.occupancy.occupancy_pct)],
+      ["Room-nights sold", data.occupancy.rooms_sold],
+      ["Room-nights available", data.occupancy.rooms_available],
+      ["ADR — average daily rate per room sold", money(data.occupancy.adr)],
+      ["RevPAR — revenue per available room", money(data.occupancy.revpar)],
+      ["Restaurant orders", data.restaurant_orders],
+    ];
+    downloadCsv(`profit_summary_${from}_to_${to}`, head, rows);
+  };
+
   const maxDay = useMemo(() => {
     if (!data?.daily?.length) return 0;
     return Math.max(...data.daily.map(d => Math.max(d.revenue, d.expenses)));
@@ -100,8 +133,11 @@ export default function Reports() {
             style={{ ...input, width: 150 }} />
         </div>
         <div style={{ flex: 1 }} />
+        <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>
+          Export Profit Summary
+        </button>
         <button onClick={exportCsv} disabled={!ledger?.transactions?.length} style={btn("ghost")}>
-          Export CSV
+          Export Transactions
         </button>
       </div>
 
