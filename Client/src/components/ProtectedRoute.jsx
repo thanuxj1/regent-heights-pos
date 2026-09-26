@@ -13,14 +13,23 @@ import { roleHome } from "../utils/roleHome";
  * where it came from: if even a person's own screen will not have them, they
  * are told so instead.
  */
-export default function ProtectedRoute({ children, allowedRoles = [] }) {
-  const { user } = useAuth();
+export default function ProtectedRoute({ children, allowedRoles = [], orCapability }) {
+  const { user, capabilities, capabilitiesLoaded } = useAuth();
   const location = useLocation();
 
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
 
   const role = Number(user.role_id);
-  if (allowedRoles.length && !allowedRoles.map(Number).includes(role)) {
+  const roleOk = !allowedRoles.length || allowedRoles.map(Number).includes(role);
+
+  // The role check alone doesn't let this person through, but a capability
+  // grant might — don't decide (and redirect them away) on the empty Set
+  // that exists before that grant has even been fetched.
+  if (!roleOk && orCapability && !capabilitiesLoaded) return null;
+
+  const capOk = orCapability && capabilities?.has(orCapability);
+
+  if (!roleOk && !capOk) {
     const home = roleHome(role);
     if (home && home !== location.pathname) return <Navigate to={home} replace />;
     return <NoAccess />;

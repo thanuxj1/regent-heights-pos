@@ -9,18 +9,21 @@ import {
 import {
   getSupplierLedger,
   getSupplierHistory,
+  getSpendTrend,
 } from "../controllers/supplierLedgerController.js";
 import {
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr,
+  CAPABILITIES,
 } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 // Apply auth + role to ALL routes at once
-router.use(requireAuth, requireBranchAdminOrAdmin);
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.SUPPLIER_MANAGEMENT));
 
 router.get("/ledger", getSupplierLedger);
+router.get("/spend-trend", getSpendTrend);
 router.get("/:id/history", getSupplierHistory);
 
 router.get("/",       getSuppliers);

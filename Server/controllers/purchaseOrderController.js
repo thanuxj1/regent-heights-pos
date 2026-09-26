@@ -128,6 +128,50 @@ export async function getPurchaseOrdersBySupplier(req, res, next) {
   }
 }
 
+// ─── GET /api/purchase-orders/most-purchased-items ────────────────────────────
+// Top 10 raw materials/supplies/products by total spend, across every
+// received purchase order. A purchase_item names exactly one of rm_id/pro_id
+// (enforced by a CHECK constraint — migrations/028_product_purchase.sql), so
+// the two are combined here via COALESCE rather than queried separately.
+export async function getMostPurchasedItems(req, res, next) {
+  try {
+    const { role_id, com_id, b_id } = req.user;
+
+    const conditions = [`po.status = 'received'`];
+    const params = [];
+    if (role_id !== ROLES.SUPER_ADMIN) {
+      params.push(com_id);
+      conditions.push(`b.com_id = $${params.length}`);
+      if (b_id) {
+        params.push(b_id);
+        conditions.push(`po.b_id = $${params.length}`);
+      }
+    }
+
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(rm.rm_name, p.pro_name) AS name,
+         CASE WHEN pi.pro_id IS NOT NULL THEN 'product' ELSE COALESCE(rm.item_category, 'ingredient') END AS kind,
+         COALESCE(rm.unit, 'units') AS unit,
+         SUM(pi.qty) AS total_qty,
+         SUM(pi.price) AS total_spend
+       FROM purchase_order po
+       JOIN purchase_item pi     ON pi.po_id = po.po_id
+       JOIN "Branch" b           ON b."B_id" = po.b_id
+       LEFT JOIN "Raw_Material" rm ON rm.rm_id = pi.rm_id
+       LEFT JOIN "Product" p       ON p.pro_id = pi.pro_id
+       WHERE ${conditions.join(" AND ")}
+       GROUP BY 1, 2, 3
+       ORDER BY total_spend DESC
+       LIMIT 10`,
+      params
+    );
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ─── GET /api/purchase-orders/:id ─────────────────────────────────────────────
 export async function getPurchaseOrderById(req, res, next) {
   try {
@@ -584,7 +628,7 @@ export async function updatePurchaseOrderStatus(req, res, next) {
         // Ordered by material so a sale drawing on the same rows at the same
         // moment queues behind this instead of deadlocking with it.
         const items = await client.query(
-          `SELECT rm_id, pro_id, qty FROM purchase_item WHERE po_id = $1 ORDER BY COALESCE(rm_id, 0), COALESCE(pro_id, 0)`,
+          `SELECT rm_id, pro_id, qty, unit_price FROM purchase_item WHERE po_id = $1 ORDER BY COALESCE(rm_id, 0), COALESCE(pro_id, 0)`,
           [id],
         );
 
@@ -605,13 +649,16 @@ export async function updatePurchaseOrderStatus(req, res, next) {
               throw new Error(`Product with id ${it.pro_id} not found`);
             }
           } else {
-            // Kitchen ingredient — add to Raw Material stock (existing behaviour)
+            // Kitchen ingredient — add to Raw Material stock (existing behaviour),
+            // and keep its unit cost current so anything pricing a quantity of
+            // this item (e.g. Waste Tracking) has a real figure to read.
             const updateRes = await client.query(
               `UPDATE "Raw_Material"
-               SET stock_qty = COALESCE(stock_qty, 0) + $1::numeric
+               SET stock_qty = COALESCE(stock_qty, 0) + $1::numeric,
+                   unit_price = COALESCE($3::numeric, unit_price)
                WHERE rm_id = $2
                RETURNING rm_id`,
-              [it.qty, it.rm_id],
+              [it.qty, it.rm_id, it.unit_price],
             );
             if (updateRes.rows.length === 0) {
               res.status(404);

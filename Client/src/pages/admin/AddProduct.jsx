@@ -7,6 +7,7 @@ import Sidebar from "../../components/admin/Sidebar";
 import Header from "../../components/admin/Header";
 import { createProduct, getCategories } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { readImageFile } from "../../utils/readImageFile";
 
 const cardStyle = {
   border: "1px solid #D9E4F2",
@@ -122,12 +123,18 @@ const AddProduct = () => {
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setForm((prev) => ({ ...prev, pro_image: ev.target.result }));
-    reader.readAsDataURL(file);
+    try {
+      // Downscaled here rather than stored as-is — a raw phone photo is
+      // 3-5 MB, and this only ever renders as a small tile.
+      const dataUrl = await readImageFile(file, { maxWidth: 800 });
+      setForm((prev) => ({ ...prev, pro_image: dataUrl }));
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   const toggleModifier = (group, key) => {

@@ -9,8 +9,12 @@ import FormSelect from "../../components/admin/FormSelect";
 import PasswordField from "../../components/admin/PasswordField";
 import profileImage from "../../assets/images/Ellipse 11.png";
 import plusImage from "../../assets/images/Plus circle.png";
-import { getBranches, getRoles, getUserById, updateUser } from "../../services/api";
-import { staffRoles } from "../../constants/roles";
+import {
+    getBranches, getRoles, getUserById, updateUser,
+    getCapabilityCatalog, getUserCapabilities, updateUserCapabilities,
+} from "../../services/api";
+import { staffRoles, isAdminRole } from "../../constants/roles";
+import ToggleSwitch from "../../components/super-admin/ToggleSwitch";
 
 const EditUser = () => {
     const { userId } = useParams();
@@ -35,6 +39,18 @@ const EditUser = () => {
     const [errorMessage, setErrorMessage] = useState("");
     const [showSuccessToast, setShowSuccessToast] = useState(false);
     const fileInputRef = useRef(null);
+
+    // Permissions — independent of the main "Edit User Details" form. Only
+    // meaningful for a non-admin user (Branch Admin/Owner already has
+    // everything); saves immediately per toggle rather than waiting for the
+    // page's Save Changes button.
+    const [capabilityCatalog, setCapabilityCatalog] = useState([]);
+    const [grantedCapabilities, setGrantedCapabilities] = useState(new Set());
+    const [capLoading, setCapLoading] = useState(false);
+    const [capError, setCapError] = useState("");
+    const [savingCapKey, setSavingCapKey] = useState(null);
+    const currentRoleId = formData.role ? Number(formData.role) : null;
+    const showPermissions = !isLoadingUser && currentRoleId != null && !isAdminRole(currentRoleId);
 
     const accessibleRoles = useMemo(() => {
         return staffRoles(roles);
@@ -108,6 +124,46 @@ const EditUser = () => {
 
         loadPageData();
     }, [resolvedUserId]);
+
+    useEffect(() => {
+        if (!resolvedUserId || isLoadingUser || currentRoleId == null || isAdminRole(currentRoleId)) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                setCapLoading(true);
+                setCapError("");
+                const [catalog, granted] = await Promise.all([
+                    getCapabilityCatalog(),
+                    getUserCapabilities(resolvedUserId),
+                ]);
+                if (cancelled) return;
+                setCapabilityCatalog(catalog || []);
+                setGrantedCapabilities(new Set(granted?.capabilities || []));
+            } catch (error) {
+                if (!cancelled) setCapError(error?.response?.data?.message || "Failed to load permissions");
+            } finally {
+                if (!cancelled) setCapLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resolvedUserId, isLoadingUser, currentRoleId]);
+
+    const toggleCapability = async (key, nextValue) => {
+        const next = new Set(grantedCapabilities);
+        if (nextValue) next.add(key); else next.delete(key);
+        setGrantedCapabilities(next); // optimistic
+        setSavingCapKey(key);
+        setCapError("");
+        try {
+            await updateUserCapabilities(resolvedUserId, [...next]);
+        } catch (error) {
+            setGrantedCapabilities(grantedCapabilities); // revert on failure
+            setCapError(error?.response?.data?.message || "Failed to update permission");
+        } finally {
+            setSavingCapKey(null);
+        }
+    };
 
     const roleOptions = useMemo(() => {
         if (!accessibleRoles.length) {
@@ -450,6 +506,47 @@ const EditUser = () => {
                                             </div>
                                         </div>
                                     </form>
+                                )}
+
+                                {showPermissions && (
+                                    <>
+                                        <div style={{ height: "1px", background: "#edf1f8", margin: "24px 0" }} />
+                                        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "4px" }}>
+                                            <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#1e2d4e" }}>Permissions</h3>
+                                            {capLoading && <span style={{ fontSize: "12px", color: "#94a3b8" }}>Loading…</span>}
+                                        </div>
+                                        <p style={{ margin: "0 0 14px", fontSize: "12px", color: "#8a94ab" }}>
+                                            Grant this account extra access beyond their role. Each toggle takes effect immediately.
+                                        </p>
+                                        {capError && <p style={{ margin: "0 0 14px", color: "#C62828", fontSize: "13px" }}>{capError}</p>}
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 24px" }}>
+                                            {capabilityCatalog.map((cap) => (
+                                                <div key={cap.key} style={{
+                                                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                                                    padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
+                                                    border: cap.sensitive ? "1px solid #fde68a" : "1px solid transparent",
+                                                }}>
+                                                    <span style={{ fontSize: "13px", color: "#334155", display: "flex", alignItems: "center", gap: "8px" }}>
+                                                        {cap.label}
+                                                        {cap.sensitive && (
+                                                            <span style={{
+                                                                fontSize: "10px", fontWeight: 700, color: "#92400e",
+                                                                background: "#fef3c7", padding: "2px 7px", borderRadius: "999px",
+                                                                textTransform: "uppercase", letterSpacing: "0.4px",
+                                                            }} title="Grants significant access — review before enabling">
+                                                                Sensitive
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                    <ToggleSwitch
+                                                        checked={grantedCapabilities.has(cap.key)}
+                                                        disabled={savingCapKey === cap.key}
+                                                        onChange={(next) => toggleCapability(cap.key, next)}
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
                                 )}
                             </div>
                         </div>

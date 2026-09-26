@@ -369,20 +369,26 @@ export async function availabilityFor(db, items) {
 
   for (const it of items) {
     const recipe = byPro.get(Number(it.pro_id)) || [];
+    const isCounted = tracked.get(Number(it.pro_id)) !== false;
+
+    // Made to order wins even when a recipe is mapped — kottu and fried rice
+    // are exactly the dishes that have both: a recipe so the ingredients still
+    // come off the shelf at sale time (planFor/takeStock deduct it either way,
+    // unconditionally), and "made to order" so the tile never reads "X left"
+    // or goes "out of stock" while the kitchen could still make more. Recipe
+    // mapping used to override this choice silently; the explicit setting on
+    // the product now always wins over whether a recipe happens to exist.
+    if (!isCounted) {
+      out.set(Number(it.Bpro_id), { stock_mode: "made_to_order", available: null, limited_by: null });
+      continue;
+    }
+
     if (!recipe.length) {
-      const isCounted = tracked.get(Number(it.pro_id)) !== false;
-      out.set(Number(it.Bpro_id), isCounted
-        ? {
-          stock_mode: "count",
-          available: Math.floor(Number(it.pro_quantity ?? 0)),
-          limited_by: null,
-        }
-        : {
-          // Made to order: there is nothing to be out of.
-          stock_mode: "made_to_order",
-          available: null,
-          limited_by: null,
-        });
+      out.set(Number(it.Bpro_id), {
+        stock_mode: "count",
+        available: Math.floor(Number(it.pro_quantity ?? 0)),
+        limited_by: null,
+      });
       continue;
     }
     let best = Infinity;

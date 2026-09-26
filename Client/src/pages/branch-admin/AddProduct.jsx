@@ -22,6 +22,7 @@ import {
   getProducts,
 } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { readImageFile } from "../../utils/readImageFile";
 
 const pageStyle = {
   display: "flex",
@@ -227,6 +228,20 @@ const AddProduct = () => {
     // one click from saying otherwise.
     counted: true,
   });
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      // Downscaled here rather than stored as-is — a raw phone photo is
+      // 3-5 MB, and this only ever renders as a small tile.
+      const dataUrl = await readImageFile(file, { maxWidth: 800 });
+      setNewProduct((p) => ({ ...p, pro_image: dataUrl }));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const handleCreateProduct = async (e, addToBranch) => {
     if (e) e.preventDefault();
@@ -1167,12 +1182,22 @@ const AddProduct = () => {
                 )}
               </div>
 
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748B" }}>Image URL
-                <input value={newProduct.pro_image}
-                  onChange={(e) => setNewProduct((p) => ({ ...p, pro_image: e.target.value }))}
-                  placeholder="https://.../dish.jpg"
-                  style={{ display: "block", width: "100%", marginTop: 4, padding: "9px 12px",
-                           border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 14, boxSizing: "border-box" }} />
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748B" }}>Image
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+                  {newProduct.pro_image && (
+                    <img src={newProduct.pro_image} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", border: "1px solid #E2E8F0", flexShrink: 0 }} />
+                  )}
+                  <input value={newProduct.pro_image}
+                    onChange={(e) => setNewProduct((p) => ({ ...p, pro_image: e.target.value }))}
+                    placeholder="https://.../dish.jpg, or upload a photo →"
+                    style={{ flex: 1, padding: "9px 12px",
+                             border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 14, boxSizing: "border-box" }} />
+                  <label style={{ padding: "9px 14px", border: "1px solid #E2E8F0", borderRadius: 8,
+                    fontSize: 13, fontWeight: 600, color: "#1565C0", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                    Upload
+                    <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: "none" }} />
+                  </label>
+                </div>
               </label>
 
               <label style={{ fontSize: 12, fontWeight: 600, color: "#64748B" }}>Description

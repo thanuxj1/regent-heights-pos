@@ -22,6 +22,7 @@ const CAT_MAP = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
 const EXTRA_CAT = {
   supplier_payments: { label:"Paid to suppliers", icon:"🚛" },
   agent_commission:  { label:"Agent commission",  icon:"🤝" },
+  waste:             { label:"Waste / spoilage",  icon:"🗑️" },
 };
 
 function fmt(v) { return Number(v||0).toLocaleString("en-LK", { minimumFractionDigits:2, maximumFractionDigits:2 }); }
@@ -92,22 +93,29 @@ export default function Accounting() {
   // as a cost, as the Reports page does. It was left out here, so the two pages
   // showed different profits for the same year.
   const commissionTotal = Number(summary.commissionTotal || 0);
-  const moneyOut      = totalExpenses + supplierPayments + commissionTotal;
+  // Wasted raw materials, priced at each item's current unit cost — money out
+  // the same as an expense, just never typed in on this page.
+  const wasteTotal    = Number(summary.wasteTotal || 0);
+  const moneyOut      = totalExpenses + supplierPayments + commissionTotal + wasteTotal;
   const totalRevenue  = Number(summary.totalRevenue  || 0);
   const netProfit     = totalRevenue - moneyOut;
   const commPending   = Number(summary.commissionPending || 0);
+  // Cash a delivery partner (PickMe, Uber Eats...) is holding for us, not yet
+  // settled — a receivable, not a cost, so it never enters moneyOut/netProfit.
+  const codOutstanding = Number(summary.codOutstanding || 0);
 
   const byCategory = useMemo(() => {
     const rows = [...(summary.byCategory || [])];
     if (supplierPayments > 0) rows.push({ exp_category:"supplier_payments", total: supplierPayments });
     if (commissionTotal > 0)  rows.push({ exp_category:"agent_commission",  total: commissionTotal });
+    if (wasteTotal > 0)       rows.push({ exp_category:"waste",             total: wasteTotal });
     rows.sort((a, b) => Number(b.total) - Number(a.total));
     return rows.map(r => ({
       ...r,
       cat: CAT_MAP[r.exp_category] || EXTRA_CAT[r.exp_category] || { label: r.exp_category, icon:"📋" },
       pct: moneyOut > 0 ? (Number(r.total) / moneyOut * 100).toFixed(1) : 0,
     }));
-  }, [summary, moneyOut, supplierPayments, commissionTotal]);
+  }, [summary, moneyOut, supplierPayments, commissionTotal, wasteTotal]);
 
   // Money out per month — expenses, supplier payments and commission together, so
   // the bars add up to the "Money out" figure above them.
@@ -170,12 +178,13 @@ export default function Accounting() {
           )}
 
           {/* Stats Row */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:16, marginBottom:24 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:16, marginBottom:24 }}>
             {[
               { label:`Revenue (${year})`,  value:`LKR ${fmt(totalRevenue)}`,  color:"#065F46", bg:"#D1FAE5", border:"#A7F3D0" },
               { label:`Money out (${year})`, value:`LKR ${fmt(moneyOut)}`, color:"#9A3412", bg:"#FEF2F2", border:"#FECACA" },
               { label:"Net Profit",         value:`LKR ${fmt(netProfit)}`,     color: netProfit>=0?"#1565C0":"#DC2626", bg:"#EFF6FF", border:"#BFDBFE" },
               { label:"Commission Pending", value:`LKR ${fmt(commPending)}`,   color:"#92400E", bg:"#FEF9C3", border:"#FDE68A" },
+              { label:"COD Outstanding",    value:`LKR ${fmt(codOutstanding)}`, color:"#7C3AED", bg:"#F5F3FF", border:"#DDD6FE" },
             ].map(s => (
               <div key={s.label} style={{ background:s.bg, border:`1px solid ${s.border}`, borderRadius:12, padding:"16px 20px" }}>
                 <div style={{ fontSize:11, fontWeight:600, color:"#64748B", textTransform:"uppercase", letterSpacing:1 }}>{s.label}</div>
@@ -246,6 +255,7 @@ export default function Accounting() {
                       ["Total Expenses", `(${fmt(totalExpenses)})`, "#DC2626"],
                       ["Paid to suppliers", `(${fmt(supplierPayments)})`, "#DC2626"],
                       ["Agent commission", `(${fmt(commissionTotal)})`, "#92400E"],
+                      ["Waste / spoilage", `(${fmt(wasteTotal)})`, "#DC2626"],
                       ["Net Profit", fmt(netProfit), netProfit>=0?"#1565C0":"#DC2626"],
                     ].map(([k,v,c], i, arr) => (
                       <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom: i<arr.length-1?"1px solid #E2E8F0":"2px solid #CBD5E1", fontWeight: i===arr.length-1?700:400, color:"#1E293B", fontSize:13 }}>

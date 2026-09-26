@@ -12,6 +12,8 @@ import {
 import {
   requireAuth,
   requireRole,
+  requireBranchAdminOr,
+  CAPABILITIES,
   ROLES,
 } from "../middleware/authMiddleware.js";
 
@@ -45,7 +47,7 @@ router.get(
 // Only admins can create new raw materials
 router.post(
   "/",
-  requireRole([ROLES.ADMIN, ROLES.BRANCH_ADMIN], "Admin or Branch Admin"),
+  requireBranchAdminOr(CAPABILITIES.RAW_MATERIALS),
   createRawMaterial,
 );
 
@@ -64,7 +66,7 @@ router.get(
 // Only admins can fully update a material's details
 router.put(
   "/:id",
-  requireRole([ROLES.ADMIN, ROLES.BRANCH_ADMIN], "Admin or Branch Admin"),
+  requireBranchAdminOr(CAPABILITIES.RAW_MATERIALS),
   updateRawMaterial,
 );
 
@@ -81,14 +83,14 @@ router.patch(
 // Only a manager corrects the count, and every correction says why.
 router.post(
   "/:id/count",
-  requireRole([ROLES.ADMIN, ROLES.BRANCH_ADMIN], "Admin or Branch Admin"),
+  requireBranchAdminOr(CAPABILITIES.RAW_MATERIALS),
   countRawMaterial,
 );
 
 // Admin and Branch Admin can delete — destructive operation
 router.delete(
   "/:id",
-  requireRole([ROLES.ADMIN, ROLES.BRANCH_ADMIN], "Admin or Branch Admin"),
+  requireBranchAdminOr(CAPABILITIES.RAW_MATERIALS),
   deleteRawMaterial
 );
 

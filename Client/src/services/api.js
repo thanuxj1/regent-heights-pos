@@ -248,6 +248,71 @@ export const getLowStockMaterials = async () => {
   return response.data;
 };
 
+export const getWaste = async () => {
+  const response = await api.get("/waste");
+  return response.data;
+};
+
+export const getWastePercentage = async () => {
+  const response = await api.get("/waste/percentage");
+  return response.data;
+};
+
+export const createWaste = async (payload) => {
+  const response = await api.post("/waste", payload);
+  return response.data;
+};
+
+export const updateWaste = async (wasteId, payload) => {
+  const response = await api.put(`/waste/${wasteId}`, payload);
+  return response.data;
+};
+
+export const deleteWaste = async (wasteId) => {
+  const response = await api.delete(`/waste/${wasteId}`);
+  return response.data;
+};
+
+export const getOutstandingCod = async () => {
+  const response = await api.get("/delivery-cod/outstanding");
+  return response.data;
+};
+
+export const getCodHistory = async () => {
+  const response = await api.get("/delivery-cod/history");
+  return response.data;
+};
+
+export const createCodSettlement = async (payload) => {
+  const response = await api.post("/delivery-cod/settle", payload);
+  return response.data;
+};
+
+export const getDeliveryPartners = async (params) => {
+  const response = await api.get("/delivery-partners", { params });
+  return response.data;
+};
+
+export const createDeliveryPartner = async (payload) => {
+  const response = await api.post("/delivery-partners", payload);
+  return response.data;
+};
+
+export const updateDeliveryPartner = async (id, payload) => {
+  const response = await api.patch(`/delivery-partners/${id}`, payload);
+  return response.data;
+};
+
+export const deleteDeliveryPartner = async (id) => {
+  const response = await api.delete(`/delivery-partners/${id}`);
+  return response.data;
+};
+
+export const getDeliveryPartnerAnalytics = async (key, params) => {
+  const response = await api.get(`/delivery-partners/${encodeURIComponent(key)}/analytics`, { params });
+  return response.data;
+};
+
 export const createProduct = async (productData) => {
   const response = await api.post("/products", productData);
   return response.data;
@@ -353,6 +418,21 @@ export const deleteUserById = async (userId) => {
   await api.delete(`/users/${userId}`);
 };
 
+export const getCapabilityCatalog = async () => {
+  const response = await api.get("/capabilities");
+  return response.data;
+};
+
+export const getUserCapabilities = async (userId) => {
+  const response = await api.get(`/users/${userId}/capabilities`);
+  return response.data;
+};
+
+export const updateUserCapabilities = async (userId, capabilities) => {
+  const response = await api.put(`/users/${userId}/capabilities`, { capabilities });
+  return response.data;
+};
+
 export const createBranch = async (branchData) => {
   const res = await api.post(`/branches`, branchData);
   return res.data;
@@ -427,6 +507,24 @@ export const getOrderById = async (orderId) => {
 
 export const getSuppliers = async (params = {}) => {
   const res = await api.get("/suppliers", { params });
+  return res.data?.data ?? res.data ?? [];
+};
+
+export const getSupplierLedger = async () => {
+  const res = await api.get("/suppliers/ledger");
+  return res.data?.data ?? res.data ?? [];
+};
+
+export const getSpendTrend = async (sup_id, months) => {
+  const params = {};
+  if (sup_id) params.sup_id = sup_id;
+  if (months) params.months = months;
+  const res = await api.get("/suppliers/spend-trend", { params });
+  return res.data?.data ?? res.data ?? [];
+};
+
+export const getMostPurchasedItems = async () => {
+  const res = await api.get("/purchase-orders/most-purchased-items");
   return res.data?.data ?? res.data ?? [];
 };
 
@@ -670,6 +768,23 @@ export const deleteRoomType = async (id) => {
   await api.delete(`/hotel/room-types/${id}`);
 };
 
+export const getMealPlans = async (params = {}) => {
+  const res = await api.get("/hotel/meal-plans", { params });
+  return res.data ?? [];
+};
+export const createMealPlan = async (payload) => {
+  const res = await api.post("/hotel/meal-plans", payload);
+  return res.data;
+};
+export const updateMealPlan = async (id, payload) => {
+  const res = await api.put(`/hotel/meal-plans/${id}`, payload);
+  return res.data;
+};
+export const getMealPlanStats = async (id) => {
+  const res = await api.get(`/hotel/meal-plans/${id}/stats`);
+  return res.data;
+};
+
 // The property's own list of room facilities
 export const getRoomFacilities = async (params = {}) => {
   const res = await api.get("/hotel/room-facilities", { params });
@@ -729,6 +844,10 @@ export const getGuests = async (params = {}) => {
 };
 export const createGuest = async (payload) => {
   const res = await api.post("/hotel/guests", payload);
+  return res.data;
+};
+export const getGuestById = async (id) => {
+  const res = await api.get(`/hotel/guests/${id}`);
   return res.data;
 };
 export const updateGuest = async (id, payload) => {

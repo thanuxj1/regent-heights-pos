@@ -8,12 +8,12 @@ import {
   updateTableStatus,
   deleteTable,
 } from "../controllers/tableController.js";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// Branch Admin (1) + Admin (2) only
-router.use(requireAuth, requireBranchAdminOrAdmin);
+// Branch Admin (1) + Admin (2), or a cashier granted the Tables capability
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.TABLES_MANAGEMENT));
 
 
 router.get("/", getTables);

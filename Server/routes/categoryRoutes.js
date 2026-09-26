@@ -1,5 +1,5 @@
 import express from "express";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
   getCategories,
   getCategoryById,
@@ -19,9 +19,9 @@ router.get("/:id", getCategoryById);
 
 // Changing it is the owner's job. It was open to every signed-in user, so a
 // waiter could have deleted a category mid-service.
-router.post("/", requireBranchAdminOrAdmin, createCategory);
-router.put("/:id", requireBranchAdminOrAdmin, updateCategory);
-router.delete("/:id", requireBranchAdminOrAdmin, deleteCategory);
+router.post("/", requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU), createCategory);
+router.put("/:id", requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU), updateCategory);
+router.delete("/:id", requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU), deleteCategory);
 
 export default router;
 

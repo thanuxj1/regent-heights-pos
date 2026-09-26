@@ -138,7 +138,16 @@ export async function getBranchProducts(req, res, next) {
         bp."Bpro_id",
         bp."pro_name",
         bp." pro_shortname" AS "pro_shortname",
-        bp." pro_image" AS "pro_image",
+        -- A branch that hasn't set its own image (blank, or the "N/A" placeholder
+        -- rows are seeded with) falls back to the product's own image, the same
+        -- way low_stock/track_inventory/tax_group already do below — editing the
+        -- product's image (branch-admin/ProductDetails.jsx) would otherwise never
+        -- show up here, since that screen writes Product, not Branch_Product.
+        CASE
+          WHEN bp." pro_image" IS NULL OR TRIM(bp." pro_image") = '' OR UPPER(TRIM(bp." pro_image")) = 'N/A'
+          THEN p." pro_image"
+          ELSE bp." pro_image"
+        END AS "pro_image",
         bp." pro_des" AS "pro_des",
         bp."pro_quantity",
         bp." Pro_Price" AS "pro_price",
@@ -205,7 +214,11 @@ export async function getBranchProductById(req, res, next) {
         bp."Bpro_id",
         bp."pro_name",
         bp." pro_shortname" AS "pro_shortname",
-        bp." pro_image" AS "pro_image",
+        CASE
+          WHEN bp." pro_image" IS NULL OR TRIM(bp." pro_image") = '' OR UPPER(TRIM(bp." pro_image")) = 'N/A'
+          THEN p." pro_image"
+          ELSE bp." pro_image"
+        END AS "pro_image",
         bp." pro_des" AS "pro_des",
         bp."pro_quantity",
         bp." Pro_Price" AS "pro_price",

@@ -20,6 +20,7 @@ const CAT_LABEL = {
   utilities: "Utilities", salary: "Salary", raw_materials: "Raw Materials",
   commission: "Commission", maintenance: "Maintenance", marketing: "Marketing",
   delivery: "Delivery", food_packets: "Food Packets", other: "Other",
+  waste: "Wasted raw materials",
 };
 
 export default function Reports() {

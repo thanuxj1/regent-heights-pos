@@ -4,10 +4,13 @@ import {
   FaBed,
   FaCalculator,
   FaCoffee,
+  FaChevronDown,
   FaDesktop,
   FaMinus,
+  FaMotorcycle,
   FaPlus,
   FaSearch,
+  FaShoppingBag,
   FaShoppingCart,
   FaSignOutAlt,
   FaStore,
@@ -34,6 +37,7 @@ import {
   updateOrderStatus,
   updateOrder,
   deleteOrderItem,
+  getDeliveryPartners,
 } from "../../services/api";
 import { connectSocket } from "../../services/socket";
 import { staleWhileRevalidate } from "../../services/localCache";
@@ -59,8 +63,9 @@ import {
 const ALL_ITEMS = { cat_id: "all", cat_name: "All Items" };
 
 // Mirrors DISCOUNT_APPROVAL_PCT on the server. Only decides when to ask for a
-// PIN — the server refuses regardless of what this file says.
-const DISCOUNT_LIMIT_PCT = 10;
+// PIN — the server refuses regardless of what this file says. 0 means every
+// discount needs a manager's PIN.
+const DISCOUNT_LIMIT_PCT = 0;
 /** Roles that are their own approval. */
 const MANAGER_ROLES = [1, 2, 6];
 
@@ -99,6 +104,14 @@ const CashierPos = () => {
   const [error, setError] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("Cash");
   const [orderType, setOrderType] = useState("takeaway");
+  // How a delivery order was paid — the rider collects it, not this till, so
+  // it's tracked separately from the Cash/Card/Room buttons above.
+  const [deliveryPartner, setDeliveryPartner] = useState("");
+  const [deliveryPaymentMethod, setDeliveryPaymentMethod] = useState("cod");
+  // Fetched, not hardcoded — a manager can add a partner and it's usable
+  // here immediately. See Client/src/pages/branch-admin/DeliveryCod.jsx.
+  const [deliveryPartners, setDeliveryPartners] = useState([]);
+  const [partnerPickerOpen, setPartnerPickerOpen] = useState(false);
   const [allergies, setAllergies] = useState("");
   const [addons, setAddons] = useState("");
   const [notes, setNotes] = useState("");
@@ -148,6 +161,18 @@ const CashierPos = () => {
       stopWatching();
       stopFlushing();
     };
+  }, []);
+
+  // The active partner list, fetched once — a manager adding one on the
+  // Delivery COD page is usable here on the next visit to this screen.
+  useEffect(() => {
+    getDeliveryPartners({ active: 1 })
+      .then((rows) => {
+        const list = Array.isArray(rows) ? rows : [];
+        setDeliveryPartners(list);
+        setDeliveryPartner((cur) => cur || list[0]?.key || "");
+      })
+      .catch(() => {});
   }, []);
 
   const sendQueuedNow = async () => {
@@ -569,6 +594,13 @@ const CashierPos = () => {
       setSubmitting(true);
       setError("");
 
+      // A delivery order's bill leaves with the rider at this exact moment —
+      // there is no later "customer pays when they're done" step the way
+      // dine-in has, so the tender is recorded here, at KOT time, not left
+      // for a separate Checkout the cashier would otherwise never make.
+      const isDelivery = orderType === "delivery";
+      const kotPaymentMethod = isDelivery ? deliveryPaymentMethod : null;
+
       // One request, one transaction: the ticket reaches the kitchen whole or
       // not at all. It used to create the order and then add the lines one by
       // one, so a dish the kitchen could not make left half a ticket on its
@@ -584,10 +616,12 @@ const CashierPos = () => {
           u_id: user.u_id,
           b_id: branchId,
           table_id: null,
+          delivery_partner: isDelivery ? deliveryPartner : null,
           client_ref: newClientRef(),
           discount_pct: Number(discountPct || 0),
           service_fee: Number(serviceFee || 0),
           kitchen_note: kitchenNoteText(),
+          ...(kotPaymentMethod ? { payment_method: kotPaymentMethod } : {}),
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         },
         items: cart.map((item) => ({
@@ -609,7 +643,45 @@ const CashierPos = () => {
         },
       );
 
-      // The order is now the kitchen's. Clear the cart immediately so the 
+      if (isDelivery) {
+        // The kitchen ticket alone isn't enough — the rider needs a bill to
+        // carry with the food, the same one a normal Checkout would print.
+        const invoiceItems = cart.map((item) => ({
+          Bpro_id: item.Bpro_id,
+          pro_name: item.pro_name,
+          unitPrice: item.unitPrice,
+          originalPrice: item.originalPrice || null,
+          discountPct: item.discountPct || 0,
+          qty: item.qty,
+          total: Number((item.unitPrice * item.qty).toFixed(2)),
+        }));
+        setCart([]);
+        setSentToKitchen(false);
+        setEditingOrderId(null);
+        setEditingOrderCurrentStatus(null);
+        setEditingOrderTableId(null);
+        navigate("/cashier/invoice-preview", {
+          state: {
+            orderId,
+            cashierName: `${user?.u_fname || "Cashier"} ${user?.u_lname || ""}`.trim(),
+            branchName,
+            branchLabel: `${branchName.split(" ")[0] || branchName}\nBranch`,
+            paymentMethod: kotPaymentMethod,
+            items: invoiceItems,
+            subtotal: Number(subtotal.toFixed(2)),
+            discount: Number(discountPct || 0),
+            serviceFee: Number(serviceFee || 0),
+            allergies,
+            addons,
+            notes,
+            tax: Number(tax.toFixed(2)),
+            total: Number(total.toFixed(2)),
+          },
+        });
+        return;
+      }
+
+      // The order is now the kitchen's. Clear the cart immediately so the
       // cashier can serve the next customer. The order can still be opened
       // from the Waiter Orders list to take payment later.
       setCart([]);
@@ -708,7 +780,7 @@ const CashierPos = () => {
     // changes hands now, the food goes to the kitchen, and the charge waits on
     // the folio until they check out. The hotel endpoint does all three, and
     // refuses a room whose guest has already left.
-    if (paymentMethod === "Room") {
+    if (paymentMethod === "Room" && orderType !== "delivery") {
       // Charging a room means answering a question only the server can: is this
       // guest still in house? Queueing it offline could put a meal on the bill
       // of someone who checked out an hour ago, and nobody would find it until
@@ -807,7 +879,11 @@ const CashierPos = () => {
 
       let orderId = editingOrderId;
       const roundedTaxRate = Number(effectiveTaxRate.toFixed(4));
-
+      // A delivery order's tender is how the customer paid the rider — cash on
+      // delivery or the partner's own card reader — never the till buttons above.
+      const isDelivery = orderType === "delivery";
+      const effectivePaymentMethod = isDelivery ? deliveryPaymentMethod : paymentMethod;
+      const effectiveDeliveryPartner = isDelivery ? deliveryPartner : null;
 
       if (editingOrderId) {
         // Auto-advance pending → preparing so that preparing → completed is valid
@@ -839,7 +915,8 @@ const CashierPos = () => {
           u_id: user.u_id,
           b_id: branchId,
           table_id: editingOrderTableId ?? null,
-          payment_method: String(paymentMethod || "cash").toLowerCase(),
+          payment_method: String(effectivePaymentMethod || "cash").toLowerCase(),
+          delivery_partner: effectiveDeliveryPartner,
         });
       } else {
         // The sale gets its key here, before the first attempt. Everything after
@@ -857,6 +934,7 @@ const CashierPos = () => {
             u_id: user.u_id,
             b_id: branchId,
             table_id: null,
+            delivery_partner: effectiveDeliveryPartner,
             client_ref: newClientRef(),
             // The server works the total out again from its own menu, so the
             // discount has to travel with the sale rather than being quietly
@@ -866,8 +944,9 @@ const CashierPos = () => {
             kitchen_note: kitchenNoteText(),
             // How it was paid, sent with the sale itself. Without this the
             // drawer cannot be counted at the end of the day: there is no way
-            // to tell which takings were notes and which were card.
-            payment_method: String(paymentMethod || "cash").toLowerCase(),
+            // to tell which takings were notes and which were card. For a
+            // delivery order this is COD/card as paid to the rider, not the till.
+            payment_method: String(effectivePaymentMethod || "cash").toLowerCase(),
             ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
           },
           items: cart.map((item) => ({
@@ -986,6 +1065,8 @@ const CashierPos = () => {
       cart: [...cart],
       paymentMethod,
       orderType,
+      deliveryPartner,
+      deliveryPaymentMethod,
       allergies,
       addons,
       notes,
@@ -1011,6 +1092,8 @@ const CashierPos = () => {
     setCart([]);
     setPaymentMethod("Cash");
     setOrderType("takeaway");
+    setDeliveryPartner("pickme_food");
+    setDeliveryPaymentMethod("cod");
     setAllergies("");
     setAddons("");
     setNotes("");
@@ -1030,6 +1113,8 @@ const CashierPos = () => {
         cart: [...cart],
         paymentMethod,
         orderType,
+        deliveryPartner,
+        deliveryPaymentMethod,
         allergies,
         addons,
         notes,
@@ -1042,6 +1127,8 @@ const CashierPos = () => {
     setCart(orderToResume.cart);
     setPaymentMethod(orderToResume.paymentMethod);
     setOrderType(orderToResume.orderType);
+    setDeliveryPartner(orderToResume.deliveryPartner || "pickme_food");
+    setDeliveryPaymentMethod(orderToResume.deliveryPaymentMethod || "cod");
     setAllergies(orderToResume.allergies || "");
     setAddons(orderToResume.addons || "");
     setNotes(orderToResume.notes || "");
@@ -1366,7 +1453,7 @@ const CashierPos = () => {
             </div>
           </section>
 
-          <aside className="flex flex-col rounded-3xl bg-white shadow-[0_10px_30px_rgba(15,23,42,0.09)] ring-1 ring-slate-200/70 lg:min-h-0 lg:overflow-hidden">
+          <aside className="flex flex-col rounded-3xl bg-white shadow-[0_10px_30px_rgba(15,23,42,0.09)] ring-1 ring-slate-200/70 lg:min-h-0 lg:overflow-y-auto">
             <div className="shrink-0 rounded-t-3xl bg-linear-to-r from-[#0A5BAE] to-[#19A4E5] px-5 py-4 text-white">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -1389,7 +1476,7 @@ const CashierPos = () => {
               </div>
             </div>
 
-            <div className="space-y-4 p-4 sm:p-5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+            <div className="space-y-4 p-4 sm:p-5 lg:min-h-[220px] lg:flex-1 lg:overflow-y-auto">
               {cart.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
                   Add products from the left panel to build the order.
@@ -1495,116 +1582,212 @@ const CashierPos = () => {
                 Kept deliberately tight — every pixel this takes is a pixel the
                 cashier cannot use to see what they have rung up. Order type and
                 payment sit side by side rather than in two stacked cards. */}
-            <div className="shrink-0 space-y-2.5 border-t border-slate-200 px-4 pb-4 pt-3 sm:px-5">
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+            <div className="sticky bottom-0 z-10 shrink-0 space-y-2 border-t border-slate-200 bg-white px-4 pb-3 pt-2.5 sm:px-5">
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                 <div className="flex items-center justify-between text-[13px] text-slate-500">
                   <span>Subtotal</span>
                   <span className="font-semibold text-slate-900">LKR {subtotal.toFixed(2)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    Discount
+                    <input
+                      type="number" min={0} max={100} step="0.5"
+                      value={discountPct || ""}
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                        setDiscountPct(v);
+                      }}
+                      placeholder="0"
+                      className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-right text-xs outline-none focus:border-[#0A5BAE]"
+                    />
+                    <span>%</span>
+                  </span>
+                  <span className="font-semibold text-slate-900">
+                    {discountAmount > 0 ? `-LKR ${discountAmount.toFixed(2)}` : "LKR 0.00"}
+                  </span>
+                </div>
+                {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && (
+                  <p className="mt-0.5 text-[11px] text-amber-600">A manager's PIN will be needed at checkout.</p>
+                )}
+                <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
                   <span>Tax {effectiveTaxRate > 0 ? `(${effectiveTaxRate.toFixed(1)}%)` : ""}</span>
                   <span className="font-semibold text-slate-900">LKR {tax.toFixed(2)}</span>
                 </div>
-                <div className="my-2 h-px bg-slate-200" />
+                <div className="my-1.5 h-px bg-slate-200" />
                 <div className="flex items-baseline justify-between font-semibold text-slate-900">
                   <span className="text-sm">Total</span>
                   <span className="text-xl tracking-tight">LKR {total.toFixed(2)}</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="space-y-2">
+                {/* Full width, three icons — each one clear enough to read at
+                    a glance, since the label alone truncated once a third
+                    option had to share a squeezed half-width column. */}
                 <div>
                   <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Order Type</h3>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {[["takeaway", "Takeaway"], ["dine-in", "Dine-in"]].map(([value, text]) => (
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      ["takeaway", "Takeaway", FaShoppingBag],
+                      ["dine-in", "Dine-in", FaUtensils],
+                      ["delivery", "Delivery", FaMotorcycle],
+                    ].map(([value, text, Icon]) => (
                       <button
                         key={value}
                         type="button"
                         onClick={() => setOrderType(value)}
-                        className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
+                        className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2 text-xs font-medium transition ${
                           orderType === value
                             ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
                             : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
                         }`}
                       >
+                        <Icon size={16} className={orderType === value ? "text-[#1F9254]" : "text-slate-400"} />
                         {text}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                <div>
-                  <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</h3>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {["Cash", "Card", "Room"].map((method) => (
+                {/* One full-width block below: the delivery panel when
+                    Delivery is selected, the normal till Payment row
+                    otherwise — never both at once, so nothing looks dimmed
+                    or redundant. */}
+                {orderType === "delivery" ? (
+                  <div>
+                    <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Delivery Partner</h3>
+                    <div className="relative">
                       <button
-                        key={method}
                         type="button"
-                        onClick={() => {
-                          setPaymentMethod(method);
-                          // Choosing "Room" is a question — which room? — so ask
-                          // it straight away instead of leaving a second tap
-                          // between the cashier and the answer.
-                          if (method === "Room" && !chargeRoomId) {
-                            setRoomQuery("");
-                            setRoomPickerOpen(true);
-                          }
-                        }}
-                        className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition ${
-                          paymentMethod === method
-                            ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
-                            : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
-                        }`}
+                        onClick={() => setPartnerPickerOpen((o) => !o)}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-xs text-slate-700 transition hover:border-sky-300"
                       >
-                        <span className={`h-2 w-2 rounded-full ${paymentMethod === method ? "bg-[#00B67A]" : "bg-slate-300"}`} />
-                        {method}
+                        <span className="truncate font-medium">
+                          {deliveryPartners.find((p) => p.key === deliveryPartner)?.name || "Select a partner…"}
+                        </span>
+                        <FaChevronDown size={10} className="shrink-0 text-slate-400" />
                       </button>
-                    ))}
-                  </div>
-
-                  {/* Charging to a room is not a way of paying — it is a way of
-                      deferring payment onto the guest's folio, so the room has
-                      to be named before the order can go anywhere. */}
-                  {paymentMethod === "Room" && (
-                    <div className="mt-2">
-                      {inHouseCount === 0 ? (
-                        <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-amber-200">
-                          No guests are checked in, so there is no room to charge. Take payment instead.
-                        </p>
-                      ) : (
+                      {partnerPickerOpen && (
                         <>
-                          {/* A button, not a dropdown. A property with eighty rooms
-                              cannot be scrolled through in a 340px sidebar, and the
-                              cashier usually already knows the number or the name. */}
-                          <button
-                            type="button"
-                            onClick={() => setRoomPickerOpen(true)}
-                            className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition ${
-                              chargeRoom
-                                ? "border-emerald-300 bg-emerald-50 text-slate-900"
-                                : "border-slate-200 bg-white text-slate-500 hover:border-sky-300"
-                            }`}
-                          >
-                            {chargeRoom ? (
-                              <span className="min-w-0">
-                                <span className="font-semibold">Room {chargeRoom.room_number}</span>
-                                <span className="block truncate text-[11px] text-slate-500">{chargeRoom.guest_name}</span>
-                              </span>
-                            ) : (
-                              <span>Choose the guest&apos;s room…</span>
-                            )}
-                            <span className="shrink-0 text-[11px] font-semibold text-[#0A5BAE]">
-                              {chargeRoom ? "Change" : `${inHouseCount} in house`}
-                            </span>
-                          </button>
-                          <p className="mt-1 text-[10.5px] leading-relaxed text-slate-500">
-                            Goes to the kitchen and onto the guest&apos;s bill. Nothing is collected now.
-                          </p>
+                          <div className="fixed inset-0 z-10" onClick={() => setPartnerPickerOpen(false)} />
+                          <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                            {deliveryPartners.length === 0 ? (
+                              <div className="px-3 py-2 text-xs text-slate-400">No partners yet — add one on Delivery COD.</div>
+                            ) : deliveryPartners.map((p) => (
+                              <button
+                                key={p.key}
+                                type="button"
+                                onClick={() => { setDeliveryPartner(p.key); setPartnerPickerOpen(false); }}
+                                className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${
+                                  p.key === deliveryPartner ? "font-semibold text-[#0A5BAE]" : "text-slate-700"
+                                }`}
+                              >
+                                {p.name}
+                              </button>
+                            ))}
+                          </div>
                         </>
                       )}
                     </div>
-                  )}
-                </div>
+
+                    <h3 className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Collected By Rider As</h3>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[["cod", "COD"], ["card", "Card"]].map(([value, text]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setDeliveryPaymentMethod(value)}
+                          className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
+                            deliveryPaymentMethod === value
+                              ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
+                          }`}
+                        >
+                          {text}
+                        </button>
+                      ))}
+                    </div>
+                    {deliveryPaymentMethod === "cod" && (
+                      <p className="mt-1 text-[10.5px] leading-relaxed text-slate-500">
+                        Cash the partner collects and owes back — tracked on Delivery COD, not this drawer.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</h3>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {["Cash", "Card", "Room"].map((method) => (
+                        <button
+                          key={method}
+                          type="button"
+                          onClick={() => {
+                            setPaymentMethod(method);
+                            // Choosing "Room" is a question — which room? — so ask
+                            // it straight away instead of leaving a second tap
+                            // between the cashier and the answer.
+                            if (method === "Room" && !chargeRoomId) {
+                              setRoomQuery("");
+                              setRoomPickerOpen(true);
+                            }
+                          }}
+                          className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition ${
+                            paymentMethod === method
+                              ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
+                          }`}
+                        >
+                          <span className={`h-2 w-2 rounded-full ${paymentMethod === method ? "bg-[#00B67A]" : "bg-slate-300"}`} />
+                          {method}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Charging to a room is not a way of paying — it is a way of
+                        deferring payment onto the guest's folio, so the room has
+                        to be named before the order can go anywhere. */}
+                    {paymentMethod === "Room" && (
+                      <div className="mt-2">
+                        {inHouseCount === 0 ? (
+                          <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                            No guests are checked in, so there is no room to charge. Take payment instead.
+                          </p>
+                        ) : (
+                          <>
+                            {/* A button, not a dropdown. A property with eighty rooms
+                                cannot be scrolled through in a 340px sidebar, and the
+                                cashier usually already knows the number or the name. */}
+                            <button
+                              type="button"
+                              onClick={() => setRoomPickerOpen(true)}
+                              className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition ${
+                                chargeRoom
+                                  ? "border-emerald-300 bg-emerald-50 text-slate-900"
+                                  : "border-slate-200 bg-white text-slate-500 hover:border-sky-300"
+                              }`}
+                            >
+                              {chargeRoom ? (
+                                <span className="min-w-0">
+                                  <span className="font-semibold">Room {chargeRoom.room_number}</span>
+                                  <span className="block truncate text-[11px] text-slate-500">{chargeRoom.guest_name}</span>
+                                </span>
+                              ) : (
+                                <span>Choose the guest&apos;s room…</span>
+                              )}
+                              <span className="shrink-0 text-[11px] font-semibold text-[#0A5BAE]">
+                                {chargeRoom ? "Change" : `${inHouseCount} in house`}
+                              </span>
+                            </button>
+                            <p className="mt-1 text-[10.5px] leading-relaxed text-slate-500">
+                              Goes to the kitchen and onto the guest&apos;s bill. Nothing is collected now.
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Charging a room already tickets the kitchen and bills the guest in
@@ -1616,14 +1799,18 @@ const CashierPos = () => {
                 onClick={handleSendToKitchen}
                 hidden={paymentMethod === "Room"}
                 disabled={submitting || cart.length === 0 || sentToKitchen || paymentMethod === "Room"}
-                className={`mt-0.5 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+                className={`mt-0.5 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
                   sentToKitchen
                     ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
                     : "bg-slate-900 text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                 }`}
               >
                 <FaUtensils className="h-3.5 w-3.5" />
-                {sentToKitchen ? "Sent to Kitchen" : "Send to Kitchen (KOT)"}
+                {sentToKitchen
+                  ? "Sent to Kitchen"
+                  : orderType === "delivery"
+                    ? "Send to Kitchen + Print Bill"
+                    : "Send to Kitchen (KOT)"}
               </button>
 
               <div className="flex gap-2 pt-0.5">
@@ -1631,7 +1818,7 @@ const CashierPos = () => {
                   type="button"
                   onClick={handleHoldOrder}
                   disabled={submitting || cart.length === 0}
-                  className="inline-flex flex-1 items-center justify-center rounded-xl border border-[#0A5BAE] bg-white px-3 py-3 text-sm font-semibold text-[#0A5BAE] transition hover:bg-[#0A5BAE] hover:text-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  className="inline-flex flex-1 items-center justify-center rounded-xl border border-[#0A5BAE] bg-white px-3 py-2.5 text-sm font-semibold text-[#0A5BAE] transition hover:bg-[#0A5BAE] hover:text-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                 >
                   Hold
                 </button>
@@ -1639,7 +1826,7 @@ const CashierPos = () => {
                 <button
                   onClick={handleCheckout}
                   disabled={submitting || cart.length === 0 || !branchId}
-                  className="inline-flex flex-[2] items-center justify-center gap-2 rounded-xl bg-[#55C24A] px-3 py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(85,194,74,0.25)] transition hover:bg-[#49b03f] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                  className="inline-flex flex-[2] items-center justify-center gap-2 rounded-xl bg-[#55C24A] px-3 py-2.5 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(85,194,74,0.25)] transition hover:bg-[#49b03f] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                 >
                   <FaShoppingCart className="h-4 w-4" />
                   {submitting
@@ -1835,7 +2022,11 @@ const CashierPos = () => {
                         {ho.tableLabel ? `Table ${ho.tableLabel}` : "No Table"} — {ho.timestamp}
                       </div>
                       <div className="text-sm text-slate-500">
-                        {ho.cart.length} items • {ho.orderType} • {ho.paymentMethod}
+                        {ho.cart.length} items • {ho.orderType}
+                        {" • "}
+                        {ho.orderType === "delivery"
+                          ? `${ho.deliveryPartner || "delivery"} (${ho.deliveryPaymentMethod || "cod"})`
+                          : ho.paymentMethod}
                       </div>
                     </div>
                     <div className="flex gap-2">

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth, requireRole, ROLES } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
   getActivity, getActivitySummary, getRetention, runPrune,
 } from "../controllers/activityController.js";
@@ -8,7 +8,7 @@ const router = Router();
 router.use(requireAuth);
 
 // The audit trail is a management view — it shows every staff member's actions.
-const canAudit = requireRole([ROLES.BRANCH_ADMIN, ROLES.ADMIN], "Branch Admin or Admin");
+const canAudit = requireBranchAdminOr(CAPABILITIES.ACTIVITY_LOG);
 
 router.get("/",        canAudit, getActivity);
 router.get("/summary", canAudit, getActivitySummary);

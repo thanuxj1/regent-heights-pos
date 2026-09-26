@@ -347,6 +347,8 @@ The product itself is kept, so you can add it back later.`)) return;
 							<input
 								type="text"
 								placeholder="Search by Name or Code"
+								value={searchTerm}
+								onChange={(e) => setSearchTerm(e.target.value)}
 								style={{ border: "none", outline: "none", width: "100%", fontSize: "14px" }}
 							/>
 						</div>

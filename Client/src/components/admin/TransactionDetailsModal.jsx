@@ -25,9 +25,10 @@ export default function TransactionDetailsModal({ item, onClose }) {
     if (!item) return;
     setFetchError('');
     const load = async () => {
-      // A hotel payment, an expense and a commission record are each already
-      // the whole thing — a single row, not an order with lines to fetch.
-      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission') {
+      // A hotel payment, an expense, a commission record, a waste record, and
+      // a COD settlement are each already the whole thing — a single row,
+      // not an order with lines to fetch.
+      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission' || item.type === 'waste' || item.type === 'cod') {
         setDetails(null);
         return;
       }
@@ -95,13 +96,15 @@ export default function TransactionDetailsModal({ item, onClose }) {
                 : item.type === 'hotel' ? (item.direction === 'out' ? 'Hotel Refund' : 'Hotel Payment Receipt')
                 : item.type === 'expense' ? 'Expense Record'
                 : item.type === 'commission' ? 'Agent Commission'
+                : item.type === 'waste' ? 'Waste Record'
+                : item.type === 'cod' ? 'Delivery COD Settlement'
                 : 'Purchase Expense Ledger'}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">Reference: {item.txId}</p>
           </div>
           <div className="flex gap-2 no-print">
             <button
-              onClick={() => printElement(receiptRef.current, { title: `Receipt ${item.txId}` })}
+              onClick={() => printElement(receiptRef.current, { title: `Receipt ${item.txId}`, widthMm: 80 })}
               disabled={loading}
               title={loading ? 'Wait for the line items to load' : 'Print this receipt'}
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
@@ -131,6 +134,8 @@ export default function TransactionDetailsModal({ item, onClose }) {
                 {item.type === 'hotel' ? 'Booking Reference'
                   : item.type === 'expense' ? 'Expense Record #'
                   : item.type === 'commission' ? 'Commission Record #'
+                  : item.type === 'waste' ? 'Waste Record #'
+                  : item.type === 'cod' ? 'Settlement #'
                   : 'Invoice / PO Number'}
               </span>
               <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.type === 'hotel' ? '' : '#'}{item.invoiceNo}</span>
@@ -147,7 +152,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
             </div>
             <div>
               <span className="block text-slate-400 font-medium uppercase tracking-wider">Total Value Gross</span>
-              <span className={`text-sm font-bold font-mono mt-0.5 block ${item.type === 'sale' || (item.type === 'hotel' && item.direction !== 'out') ? 'text-emerald-600' : 'text-rose-600'}`}>
+              <span className={`text-sm font-bold font-mono mt-0.5 block ${item.type === 'sale' || item.type === 'cod' || (item.type === 'hotel' && item.direction !== 'out') ? 'text-emerald-600' : 'text-rose-600'}`}>
                 LKR {formatAmount(item.amount)}
               </span>
             </div>
@@ -193,6 +198,23 @@ export default function TransactionDetailsModal({ item, onClose }) {
                     {item.raw?.type?.includes('paid')
                       ? 'Paid out to this agent.'
                       : 'Owed to this agent, not yet paid — counted as a cost against this period regardless.'}
+                  </p>
+                </div>
+              )}
+              {item.type === 'waste' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Item</span>
+                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                  <p className="mt-3 text-slate-500">{item.raw?.reference || 'No reason recorded.'} — see Waste Tracking for the full record.</p>
+                </div>
+              )}
+              {item.type === 'cod' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Delivery Partner</span>
+                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                  <p className="mt-3 text-slate-500">
+                    Cash-on-delivery cash settled by this partner{item.raw?.reference ? ` — ${item.raw.reference}` : ''}.
+                    See Delivery COD for which orders it covered.
                   </p>
                 </div>
               )}

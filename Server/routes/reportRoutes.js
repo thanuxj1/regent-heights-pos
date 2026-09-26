@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { requireAuth } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import { getSummary, getTransactions } from "../controllers/reportController.js";
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.REPORTS_ACCOUNTING));
 
 router.get("/summary",      getSummary);
 router.get("/transactions", getTransactions);

@@ -11,7 +11,8 @@ import {
 
 import {
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr,
+  CAPABILITIES,
   requireWaiterOrAbove,
 } from "../middleware/authMiddleware.js";
 
@@ -49,13 +50,13 @@ router.get(
 // ─────────────────────────────────────────────
 
 // Create assignment
-router.post("/", requireAuth, requireBranchAdminOrAdmin, createTableAssignment);
+router.post("/", requireAuth, requireBranchAdminOr(CAPABILITIES.TABLES_MANAGEMENT), createTableAssignment);
 
 // Update assignment
 router.put(
   "/:id",
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr(CAPABILITIES.TABLES_MANAGEMENT),
   updateTableAssignment,
 );
 
@@ -63,7 +64,7 @@ router.put(
 router.delete(
   "/:id",
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr(CAPABILITIES.TABLES_MANAGEMENT),
   deleteTableAssignment,
 );
 

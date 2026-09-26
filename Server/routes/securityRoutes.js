@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
   getLoginLocations, addLoginLocation, setLoginLocationActive, removeLoginLocation,
   setApprovalPin, clearApprovalPin, getSecurityOverview,
@@ -9,7 +9,7 @@ const router = Router();
 
 // Deciding where staff may sign in, and holding an approval PIN, are the owner's
 // job. A till must never be able to widen its own fence.
-router.use(requireAuth, requireBranchAdminOrAdmin);
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.SECURITY_SETTINGS));
 
 router.get("/overview", getSecurityOverview);
 

@@ -65,6 +65,18 @@ const SOURCES = [
   ["agent", "Agent"], ["online", "Online"], ["ota", "OTA / booking.com"],
 ];
 
+// Same idea as Delivery Partners' and Meal Plans' avatar palette — a stable
+// hash of the type name always lands on the same color, without storing one.
+const TYPE_PALETTE = [
+  ["#EEF4FF", "#3538CD"], ["#ECFDF3", "#067647"], ["#FEF6EE", "#B93815"],
+  ["#FDF2FA", "#C11574"], ["#F0F9FF", "#026AA2"], ["#FEF3F2", "#B42318"],
+];
+const typeColors = (name) => {
+  let h = 0;
+  for (const ch of name || "") h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return TYPE_PALETTE[h % TYPE_PALETTE.length];
+};
+
 // Must live at module scope. Declaring it inside a component makes React treat it
 // as a brand-new component type on every render, which unmounts and remounts the
 // whole subtree — the inputs get rebuilt and lose focus after a single keystroke.
@@ -315,12 +327,26 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   const [avail, setAvail]       = useState(null);
   const [searching, setSearching] = useState(false);
 
-  const [picked, setPicked] = useState(() => isEdit
-    ? (initial.rooms || []).map(r => ({
-        room_type_id: r.room_type_id, type_name: r.type_name, room_id: r.room_id, room_number: r.room_number,
-        rate_per_night: Number(r.rate_per_night) || 0,
-      }))
-    : []); // [{room_type_id,type_name,room_id,room_number,rate_per_night}]
+  const [picked, setPicked] = useState(() => {
+    if (!isEdit) return [];
+    // A specific-room row stays its own entry; type-only rows (room_id null —
+    // a booking made without picking a room, assigned later at check-in)
+    // collapse into one entry per type with a qty, matching how they're now
+    // created and edited, rather than one indistinguishable entry per row.
+    const specific = [], byType = new Map();
+    for (const r of initial.rooms || []) {
+      if (r.room_id) {
+        specific.push({ room_type_id: r.room_type_id, type_name: r.type_name, room_id: r.room_id,
+                         room_number: r.room_number, rate_per_night: Number(r.rate_per_night) || 0 });
+      } else {
+        const existing = byType.get(r.room_type_id);
+        if (existing) existing.qty += 1;
+        else byType.set(r.room_type_id, { room_type_id: r.room_type_id, type_name: r.type_name, room_id: null,
+                                           qty: 1, rate_per_night: Number(r.rate_per_night) || 0 });
+      }
+    }
+    return [...specific, ...byType.values()];
+  }); // [{room_type_id,type_name,room_id,room_number,rate_per_night}] or [{...,room_id:null,qty}]
   const [adults, setAdults]     = useState(isEdit ? initial.adults : 2);
   const [children, setChildren] = useState(isEdit ? initial.children : 0);
   const [taxPct, setTaxPct]     = useState(isEdit ? Number(initial.tax_pct) : 0);
@@ -358,29 +384,60 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
     try {
       const result = await getAvailability({
         b_id: branchId, check_in: checkIn, check_out: checkOut,
+        // A reservation only ever books a room type, never a specific room —
+        // so a room whose occupant is due out the day being searched can
+        // count as available here, before the desk has actually checked them
+        // out. Assigning a real room at check-in is a separate call, and
+        // stays strict.
+        count_turnovers: "1",
         ...(isEdit ? { exclude_booking: initial.booking_id } : {}),
       });
       if (seq !== searchSeq.current) return;   // the dates changed again while this was on its way
       setAvail(result);
       // A room picked for other dates may not be free for these ones.
       const byId = new Map();
-      result.room_types.forEach(t => t.available_rooms.forEach(r => byId.set(r.room_id, { t, r })));
-      const gone = pickedRef.current.filter(x => !byId.has(x.room_id));
-      setDroppedRooms(gone.map(x => x.room_number));
-      // The rooms already chosen keep their rate, and learn what each includes and
-      // holds (for the extra-guest arithmetic) and who is leaving that morning.
-      setPicked(pickedRef.current.filter(x => byId.has(x.room_id)).map(x => {
-        const { t, r } = byId.get(x.room_id);
-        return {
-          ...x,
-          included_guests: t.included_guests == null ? null : Number(t.included_guests),
-          max_adults: t.max_adults == null ? null : Number(t.max_adults),
-          max_children: t.max_children == null ? null : Number(t.max_children),
-          extra_adult_rate: Number(t.extra_adult_rate) || 0,
-          extra_child_rate: Number(t.extra_child_rate) || 0,
-          leaving: r.leaving_that_day || null,
-        };
-      }));
+      const byType = new Map();
+      result.room_types.forEach(t => {
+        byType.set(t.room_type_id, t);
+        t.available_rooms.forEach(r => byId.set(r.room_id, { t, r }));
+      });
+      const dropped = [];
+      const survivors = [];
+      for (const x of pickedRef.current) {
+        if (x.room_id) {
+          // A specific room picked for other dates may not be free for these ones.
+          const hit = byId.get(x.room_id);
+          if (!hit) { dropped.push(`Room ${x.room_number}`); continue; }
+          const { t, r } = hit;
+          survivors.push({
+            ...x,
+            included_guests: t.included_guests == null ? null : Number(t.included_guests),
+            max_adults: t.max_adults == null ? null : Number(t.max_adults),
+            max_children: t.max_children == null ? null : Number(t.max_children),
+            extra_adult_rate: Number(t.extra_adult_rate) || 0,
+            extra_child_rate: Number(t.extra_child_rate) || 0,
+            leaving: r.leaving_that_day || null,
+          });
+        } else {
+          // A type-only reservation shrinks to however many of the type are
+          // still free for the new dates, rather than vanishing outright.
+          const t = byType.get(x.room_type_id);
+          const cap = t ? t.available_rooms.length : 0;
+          if (cap <= 0) { dropped.push(`${x.qty}× ${x.type_name}`); continue; }
+          const qty = Math.min(x.qty, cap);
+          if (qty < x.qty) dropped.push(`${x.qty - qty}× ${x.type_name}`);
+          survivors.push({
+            ...x, qty,
+            included_guests: t.included_guests == null ? null : Number(t.included_guests),
+            max_adults: t.max_adults == null ? null : Number(t.max_adults),
+            max_children: t.max_children == null ? null : Number(t.max_children),
+            extra_adult_rate: Number(t.extra_adult_rate) || 0,
+            extra_child_rate: Number(t.extra_child_rate) || 0,
+          });
+        }
+      }
+      setDroppedRooms(dropped);
+      setPicked(survivors);
     } catch (err) {
       if (seq === searchSeq.current) setError(err?.response?.data?.message || "Could not load availability");
     } finally {
@@ -414,31 +471,56 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   // Results that belong to other dates (or are still arriving) are shown faded and cannot be clicked.
   const stale = searching || (avail && (avail.check_in !== checkIn || avail.check_out !== checkOut));
 
-  const addRoom = (type, room) => {
-    if (picked.some(p => p.room_id === room.room_id)) return;
-    setDroppedRooms([]);
-    setPicked(p => [...p, {
-      room_type_id: type.room_type_id, type_name: type.type_name,
-      room_id: room.room_id, room_number: room.room_number,
-      leaving: room.leaving_that_day || null,
+  const removeRoom = (roomId) => setPicked(p => p.filter(x => x.room_id !== roomId));
+  const setRate = (roomId, rate) =>
+    setPicked(p => p.map(x => x.room_id === roomId ? { ...x, rate_per_night: rate } : x));
+
+  // Reserve N rooms of a type without picking which ones — the room is
+  // assigned later, at check-in. `cap` is how many of the type are still
+  // free for these dates minus whatever's already individually picked.
+  const incType = (type, cap) => setPicked(p => {
+    const existing = p.find(x => !x.room_id && x.room_type_id === type.room_type_id);
+    if (existing) {
+      if (existing.qty >= cap) return p;
+      return p.map(x => x === existing ? { ...x, qty: x.qty + 1 } : x);
+    }
+    if (cap < 1) return p;
+    return [...p, {
+      room_id: null, room_type_id: type.room_type_id, type_name: type.type_name, qty: 1,
       rate_per_night: Number(type.base_rate) || 0,
-      // Carried through so the summary can seat the party and price the guests
-      // past what the rate covers, exactly as the server will.
       included_guests: type.included_guests == null ? null : Number(type.included_guests),
       max_adults: type.max_adults == null ? null : Number(type.max_adults),
       max_children: type.max_children == null ? null : Number(type.max_children),
       extra_adult_rate: Number(type.extra_adult_rate) || 0,
       extra_child_rate: Number(type.extra_child_rate) || 0,
-    }]);
-  };
-  const removeRoom = (roomId) => setPicked(p => p.filter(x => x.room_id !== roomId));
-  const setRate = (roomId, rate) =>
-    setPicked(p => p.map(x => x.room_id === roomId ? { ...x, rate_per_night: rate } : x));
+    }];
+  });
+  const decType = (roomTypeId) => setPicked(p => p
+    .map(x => (!x.room_id && x.room_type_id === roomTypeId) ? { ...x, qty: x.qty - 1 } : x)
+    .filter(x => x.room_id || x.qty > 0));
+  const setTypeRate = (roomTypeId, rate) =>
+    setPicked(p => p.map(x => (!x.room_id && x.room_type_id === roomTypeId) ? { ...x, rate_per_night: rate } : x));
+
+  // A specific-room entry sends one line; a type-only entry expands into
+  // `qty` identical lines with no room_id, exactly like createBooking/
+  // updateBooking already expect.
+  const roomsPayload = (list) => list.flatMap(p => p.room_id
+    ? [{ room_id: p.room_id, room_type_id: p.room_type_id, rate_per_night: p.rate_per_night }]
+    : Array.from({ length: p.qty }, () => ({ room_type_id: p.room_type_id, rate_per_night: p.rate_per_night })));
+
+  // A picked entry is either one specific room (qty implicitly 1) or a
+  // type-only reservation for `qty` rooms of that type, room TBD at
+  // check-in. Capacity/seating/pricing all work per physical room, so
+  // expand type-only entries into that many identical virtual slots.
+  const expanded = useMemo(() =>
+    picked.flatMap(p => Array.from({ length: p.qty ?? 1 }, () => p))
+  , [picked]);
+  const pickedRoomCount = expanded.length;
 
   // How many people the selected rooms hold, and how much of the bill can be
   // given away — the same two ceilings the server enforces, shown while typing
   // rather than thrown back after Create.
-  const capacity = picked.reduce(
+  const capacity = expanded.reduce(
     (s, r) => s + (r.max_adults == null ? 0 : Number(r.max_adults))
                 + (r.max_children == null ? 0 : Number(r.max_children)), 0);
   const people   = numOr(adults, 0) + numOr(children, 0);
@@ -446,7 +528,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   // The same seating the server does, so the desk sees the extra-guest charge
   // while it types rather than after Create.
   const seated = useMemo(() => {
-    const seats = picked.map(r => ({ ...r, seatAdults: 0, seatChildren: 0 }));
+    const seats = expanded.map(r => ({ ...r, seatAdults: 0, seatChildren: 0 }));
     if (!seats.length) return seats;
     let a = numOr(adults, 0), c = numOr(children, 0);
     for (const seat of seats) {
@@ -464,7 +546,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
       last.seatAdults += a; last.seatChildren += c;
     }
     return seats;
-  }, [picked, adults, children]);
+  }, [expanded, adults, children]);
 
   const extraGuests = useMemo(() => {
     let amount = 0, extraAdults = 0, extraChildren = 0;
@@ -481,13 +563,13 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   }, [seated, nights]);
 
   const totals = useMemo(() => {
-    const room = picked.reduce((s, r) => s + Number(r.rate_per_night || 0) * nights, 0);
+    const room = expanded.reduce((s, r) => s + Number(r.rate_per_night || 0) * nights, 0);
     const tax = room * (Number(taxPct) || 0) / 100;
     const beforeDiscount = room + tax + extraGuests.amount + numOr(extras);
     const grand = beforeDiscount - numOr(discount);
     return { room, tax, guests: extraGuests.amount, beforeDiscount, grand,
              balance: grand - numOr(advance) };
-  }, [picked, nights, adults, children, taxPct, extras, discount, advance, extraGuests]);
+  }, [expanded, nights, adults, children, taxPct, extras, discount, advance, extraGuests]);
 
   // Does the arrival time make sense for the rooms picked? Advice, never a block:
   // the desk may well have arranged an early check-in, or a room that is already
@@ -553,7 +635,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
               tax_pct: numOr(taxPct, 0), extra_charges: numOr(extras), discount: numOr(discount),
               source, agent_id: source === "agent" ? agentId : "",
               arrival_time: arrivalTime, special_requests: specialRequests, remarks,
-              rooms: picked.map(p => ({ room_id: p.room_id, room_type_id: p.room_type_id, rate_per_night: p.rate_per_night })),
+              rooms: roomsPayload(picked),
             });
         onCreated(saved);
       } catch (err) {
@@ -597,9 +679,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
         tax_pct: numOr(taxPct, 0),
         extra_charges: numOr(extras), discount: numOr(discount),
         advance_payment: numOr(advance), advance_method: advanceMethod,
-        rooms: picked.map(p => ({
-          room_id: p.room_id, room_type_id: p.room_type_id, rate_per_night: p.rate_per_night,
-        })),
+        rooms: roomsPayload(picked),
       });
       onCreated(bk);
     } catch (err) {
@@ -663,9 +743,9 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
               </label>
               <div style={{ fontSize: 12, color: "#64748B", paddingBottom: 10 }}>
                 Booking for <strong style={{ color: "#1E293B" }}>{people} guest{people === 1 ? "" : "s"}</strong>
-                {picked.length > 0 && (
+                {pickedRoomCount > 0 && (
                   <span style={{ color: overCapacity ? "#B45309" : "#059669", fontWeight: 600 }}>
-                    {" · "}{picked.length} room{picked.length === 1 ? "" : "s"} selected, holding up to {capacity}
+                    {" · "}{pickedRoomCount} room{pickedRoomCount === 1 ? "" : "s"} selected, holding up to {capacity}
                     {overCapacity ? " — above that" : " ✓"}
                   </span>
                 )}
@@ -675,7 +755,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
 
           {droppedRooms.length > 0 && (
             <div style={{ ...errorBox, background: "#FFFBEB", borderColor: "#FDE68A", color: "#92400E" }}>
-              {droppedRooms.length === 1 ? `Room ${droppedRooms[0]} was` : `Rooms ${droppedRooms.join(", ")} were`} taken off
+              {droppedRooms.length === 1 ? `${droppedRooms[0]} was` : `${droppedRooms.join(", ")} were`} taken off
               your selection — {droppedRooms.length === 1 ? "it isn't" : "they aren't"} free for the new dates. Pick again below.
             </div>
           )}
@@ -710,106 +790,133 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                 // disable a "small" type — two Standard Doubles is a perfectly
                 // good answer for four guests.
                 const needed = holds > 0 ? Math.ceil(people / holds) : 0;
+                const [bg, fg] = typeColors(t.type_name);
+                const pickedSpecific = picked.filter(p => p.room_id && p.room_type_id === t.room_type_id).length;
+                const typeOnly = picked.find(p => !p.room_id && p.room_type_id === t.room_type_id);
+                const cap = t.available_rooms.length - pickedSpecific;
+                // Rooms already free that day plus rooms a same-day checkout will
+                // free up — both are bookable now, just at different times.
+                const sameDayCount = t.available_rooms.filter(r => r.leaving_that_day).length;
+                const full = t.available_rooms.length === 0;
                 return (
-                <div key={t.room_type_id} style={{ marginBottom: 16, paddingBottom: 14, borderBottom: "1px solid #F1F5F9" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 3 }}>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: "#1E293B" }}>
-                      {t.type_name}
-                      <span style={{ color: "#94A3B8", fontWeight: 400 }}>
-                        {(() => {
-                          const who = [
-                            holdsAdults ? `${holdsAdults} adult${holdsAdults === 1 ? "" : "s"}` : null,
-                            holdsKids ? `${holdsKids} child${holdsKids === 1 ? "" : "ren"}` : null,
-                          ].filter(Boolean).join(" + ");
-                          const covers = t.included_guests == null
-                            ? " · rate covers the room"
-                            : ` · rate covers ${t.included_guests}`;
-                          return who ? ` · takes ${who}${covers}` : covers;
-                        })()}
-                      </span>
-                      {needed === 1 && (
-                        <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#059669" }}>
-                          fits all {people}
-                        </span>
-                      )}
-                      {needed > 1 && (
-                        <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#B45309" }}>
-                          {people} guests: {needed} rooms, or extra bedding
-                        </span>
-                      )}
-                    </span>
-                    <span style={{ fontSize: 13, color: "#1565C0", fontWeight: 700, whiteSpace: "nowrap" }}>
-                      {money(t.base_rate)}/night
-                    </span>
-                  </div>
-
-                  {t.description && (
-                    <div style={{ fontSize: 12, color: "#64748B", marginBottom: 6 }}>{t.description}</div>
-                  )}
-
-                  {Array.isArray(t.amenities) && t.amenities.length > 0 && (
-                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
-                      {t.amenities.map(a => (
-                        <span key={a} style={{ fontSize: 10.5, color: "#475569", background: "#F1F5F9",
-                                               border: "1px solid #E2E8F0", borderRadius: 20, padding: "2px 9px" }}>
-                          {a}
-                        </span>
-                      ))}
+                <div key={t.room_type_id}
+                  style={{ ...card, padding: 16, marginBottom: 12, opacity: full ? 0.8 : 1 }}>
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 10, background: bg, color: fg,
+                                  display: "flex", alignItems: "center", justifyContent: "center",
+                                  fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                      {initials(t.type_name)}
                     </div>
-                  )}
 
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {t.available_rooms.length === 0 ? (
-                      <span style={{ fontSize: 12, color: "#DC2626" }}>
-                        Fully booked for these dates ({t.total_rooms} room{t.total_rooms === 1 ? "" : "s"})
-                      </span>
-                    ) : t.available_rooms.map(r => {
-                      const on = picked.some(p => p.room_id === r.room_id);
-                      return (
-                        <div key={r.room_id} style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
-                          <button type="button"
-                            onClick={() => on ? removeRoom(r.room_id) : addRoom(t, r)}
-                            style={{
-                              padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                              border: on ? "2px solid #1565C0" : "1px solid #E2E8F0",
-                              background: on ? "#1565C0" : "#fff", color: on ? "#fff" : "#475569",
-                            }}>
-                            {r.room_number} {on ? "✓" : ""}
-                          </button>
-                          {r.leaving_that_day && (
-                            <span style={{ fontSize: 10.5, color: "#0369A1", lineHeight: 1.3 }}
-                                  title={`${r.leaving_that_day.guest_name} (${r.leaving_that_day.booking_ref}) leaves that morning`}>
-                              ↺ checks out that morning
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: "#101828" }}>{t.type_name}</div>
+                          <div style={{ fontSize: 12, color: "#667085", marginTop: 1 }}>
+                            {(() => {
+                              const who = [
+                                holdsAdults ? `${holdsAdults} adult${holdsAdults === 1 ? "" : "s"}` : null,
+                                holdsKids ? `${holdsKids} child${holdsKids === 1 ? "" : "ren"}` : null,
+                              ].filter(Boolean).join(" + ");
+                              const covers = t.included_guests == null ? "rate covers the room" : `rate covers ${t.included_guests}`;
+                              return who ? `Takes ${who} · ${covers}` : covers;
+                            })()}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 14, color: "#1565C0", fontWeight: 700, whiteSpace: "nowrap" }}>
+                          {money(t.base_rate)}<span style={{ fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>/night</span>
+                        </div>
+                      </div>
+
+                      {t.description && (
+                        <div style={{ fontSize: 12, color: "#64748B", marginTop: 6 }}>{t.description}</div>
+                      )}
+
+                      {Array.isArray(t.amenities) && t.amenities.length > 0 && (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8 }}>
+                          {t.amenities.map(a => (
+                            <span key={a} style={{ fontSize: 10.5, color: "#475569", background: "#F1F5F9",
+                                                   border: "1px solid #E2E8F0", borderRadius: 20, padding: "2px 9px" }}>
+                              {a}
                             </span>
-                          )}
-                          {r.arriving_that_day && (
-                            <span style={{ fontSize: 10.5, color: "#B45309", lineHeight: 1.3 }}
-                                  title={`${r.arriving_that_day.guest_name} (${r.arriving_that_day.booking_ref}) arrives that day`}>
-                              next guest arrives {dmy(r.arriving_that_day.check_in)}
-                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                        {needed === 1 && <span style={badge({ bg: "#ECFDF3", fg: "#067647" })}>Fits all {people}</span>}
+                        {needed > 1 && <span style={badge({ bg: "#FFFAEB", fg: "#B54708" })}>{people} guests needs {needed} rooms</span>}
+                        {full ? (
+                          <span style={badge({ bg: "#FEF3F2", fg: "#B42318" })}>
+                            Fully booked ({t.total_rooms} room{t.total_rooms === 1 ? "" : "s"})
+                          </span>
+                        ) : sameDayCount > 0 ? (
+                          <span style={badge({ bg: "#EFF8FF", fg: "#175CD3" })}>
+                            {t.available_rooms.length} of {t.total_rooms} free · {sameDayCount} more once check-out is done
+                          </span>
+                        ) : (
+                          <span style={badge({ bg: "#ECFDF3", fg: "#067647" })}>
+                            {t.available_rooms.length} of {t.total_rooms} free
+                          </span>
+                        )}
+                      </div>
+
+                      {/* A specific room is never picked here — only how many of this
+                          type, and at what rate. Which physical room the guest gets
+                          is a check-in decision, made when they are actually here,
+                          not something reserved days or months in advance. */}
+                      {!full && !inHouse && (
+                        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#F8FAFC",
+                                        border: "1px solid #E2E8F0", borderRadius: 10, padding: "4px 6px" }}>
+                            <button type="button" onClick={() => decType(t.room_type_id)} disabled={!typeOnly}
+                              style={{ width: 28, height: 28, borderRadius: 8, border: "1px solid #E2E8F0", background: "#fff",
+                                       fontSize: 15, fontWeight: 700, color: "#475569",
+                                       cursor: typeOnly ? "pointer" : "default", opacity: typeOnly ? 1 : 0.4 }}>−</button>
+                            <span style={{ fontSize: 14, fontWeight: 700, minWidth: 18, textAlign: "center" }}>{typeOnly?.qty || 0}</span>
+                            <button type="button" onClick={() => incType(t, cap)} disabled={!(typeOnly ? typeOnly.qty < cap : cap > 0)}
+                              style={{ width: 28, height: 28, borderRadius: 8, border: "1px solid #E2E8F0", background: "#fff",
+                                       fontSize: 15, fontWeight: 700, color: "#475569",
+                                       cursor: (typeOnly ? typeOnly.qty < cap : cap > 0) ? "pointer" : "default",
+                                       opacity: (typeOnly ? typeOnly.qty < cap : cap > 0) ? 1 : 0.4 }}>+</button>
+                          </div>
+                          <span style={{ fontSize: 11.5, color: "#94A3B8" }}>rooms of this type</span>
+                          {typeOnly && (
+                            <label style={{ ...label, fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>Rate/night
+                              <input type="number" min={0} step="0.01" value={typeOnly.rate_per_night}
+                                onChange={e => setTypeRate(t.room_type_id, e.target.value)}
+                                style={{ ...input, width: 90, padding: "4px 8px", fontSize: 12 }} />
+                            </label>
                           )}
                         </div>
-                      );
-                    })}
-                  </div>
+                      )}
 
-                  {/* Why the rest are taken, so "booked" is never a bare word. */}
-                  {(t.unavailable_rooms || []).length > 0 && (
-                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
-                      {t.unavailable_rooms.map(r => (
-                        <span key={r.room_id} style={{ fontSize: 11.5, color: "#94A3B8" }}>
-                          Room {r.room_number} is taken
-                          {r.blocked_by
-                            ? (r.blocked_by.status === "checked_in"
-                              // Still in the room: they keep it until the desk checks them out,
-                              // whatever date they were due to leave.
-                              ? ` — ${r.blocked_by.guest_name} is in the room (due out ${dmy(r.blocked_by.due_out)}); it is free once they are checked out`
-                              : ` — ${r.blocked_by.guest_name}, ${dmy(r.blocked_by.check_in)} → ${dmy(r.blocked_by.check_out)}`)
-                            : ""}
-                        </span>
-                      ))}
+                      {/* Category first, reasons on demand — the desk doesn't need
+                          a room-by-room breakdown to decide whether to book this
+                          type, only if they go looking for it. */}
+                      {(t.unavailable_rooms || []).length > 0 && (
+                        <details style={{ marginTop: 10 }}>
+                          <summary style={{ cursor: "pointer", fontSize: 11.5, color: "#64748B", fontWeight: 600 }}>
+                            Why {t.unavailable_rooms.length} {t.unavailable_rooms.length === 1 ? "room isn't" : "rooms aren't"} free
+                          </summary>
+                          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+                            {t.unavailable_rooms.map(r => (
+                              <span key={r.room_id} style={{ fontSize: 11.5, color: "#94A3B8" }}>
+                                Room {r.room_number} is taken
+                                {r.blocked_by
+                                  ? (r.blocked_by.status === "checked_in"
+                                    // Still in the room: they keep it until the desk checks them out,
+                                    // whatever date they were due to leave.
+                                    ? ` — ${r.blocked_by.guest_name} is in the room (due out ${dmy(r.blocked_by.due_out)}); it is free once they are checked out`
+                                    : ` — ${r.blocked_by.guest_name}, ${dmy(r.blocked_by.check_in)} → ${dmy(r.blocked_by.check_out)}`)
+                                  : ""}
+                              </span>
+                            ))}
+                          </div>
+                        </details>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
                 );
               })}
@@ -820,19 +927,25 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
           {picked.length > 0 && (
             <Section title="Selected Rooms & Rates">
               {picked.map(p => (
-                <div key={p.room_id} style={{ display: "grid", gridTemplateColumns: "1fr 150px auto", gap: 12,
+                <div key={p.room_id ?? `type-${p.room_type_id}`} style={{ display: "grid", gridTemplateColumns: "1fr 150px auto", gap: 12,
                                               alignItems: "center", marginBottom: 8, padding: "10px 14px",
                                               background: "#F8FAFC", borderRadius: 8 }}>
                   <div style={{ fontSize: 13 }}>
-                    <strong>Room {p.room_number}</strong>
-                    <span style={{ color: "#94A3B8" }}> · {p.type_name}</span>
+                    {p.room_id ? (
+                      <><strong>Room {p.room_number}</strong><span style={{ color: "#94A3B8" }}> · {p.type_name}</span></>
+                    ) : (
+                      <><strong>{p.qty}× {p.type_name}</strong><span style={{ color: "#94A3B8" }}> · room assigned at check-in</span></>
+                    )}
                   </div>
                   <label style={{ ...label, fontSize: 11 }}>Rate / night
                     <input type="number" min={0} step="0.01" value={p.rate_per_night} disabled={inHouse}
-                      onChange={e => setRate(p.room_id, e.target.value)}
+                      onChange={e => p.room_id ? setRate(p.room_id, e.target.value) : setTypeRate(p.room_type_id, e.target.value)}
                       style={{ ...input, marginTop: 2, padding: "6px 10px", fontSize: 13 }} />
                   </label>
-                  {inHouse ? <span /> : <button type="button" onClick={() => removeRoom(p.room_id)} style={btn("danger")}>Remove</button>}
+                  {inHouse ? <span />
+                    : <button type="button" onClick={() => p.room_id ? removeRoom(p.room_id) : decType(p.room_type_id)} style={btn("danger")}>
+                        {p.room_id ? "Remove" : (p.qty > 1 ? "Remove one" : "Remove")}
+                      </button>}
                 </div>
               ))}
             </Section>
@@ -951,21 +1064,21 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                   24,000" for a 12,000 room is correct but unreadable — nothing on
                   the line said whether the doubling was nights or rooms. */}
               {picked.map(p => (
-                <div key={p.room_id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13, color: "#64748B" }}>
+                <div key={p.room_id ?? `type-${p.room_type_id}`} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13, color: "#64748B" }}>
                   <span>
-                    Room {p.room_number}
+                    {p.room_id ? `Room ${p.room_number}` : `${p.qty}× ${p.type_name}`}
                     <span style={{ color: "#94A3B8" }}>
-                      {" · "}{nights} night{nights === 1 ? "" : "s"} × {money(p.rate_per_night)}
+                      {" · "}{nights} night{nights === 1 ? "" : "s"} × {money(p.rate_per_night)}{!p.room_id && p.qty > 1 ? ` × ${p.qty}` : ""}
                     </span>
                   </span>
                   <span style={{ color: "#1E293B", fontWeight: 600 }}>
-                    {money(numOr(p.rate_per_night) * nights)}
+                    {money(numOr(p.rate_per_night) * nights * (p.qty ?? 1))}
                   </span>
                 </div>
               ))}
 
               {[
-                ...(picked.length > 1 ? [["Total Room Charges", money(totals.room), "#1E293B"]] : []),
+                ...(pickedRoomCount > 1 ? [["Total Room Charges", money(totals.room), "#1E293B"]] : []),
                 [`Room Charges Tax (${taxPct}%)`, money(totals.tax), "#1E293B"],
                 ...(totals.guests ? [[
                   `Extra guests (${[extraGuests.extraAdults ? `${extraGuests.extraAdults} adult${extraGuests.extraAdults === 1 ? "" : "s"}` : null,
@@ -1013,7 +1126,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                           fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
               <span style={{ fontSize: 15, lineHeight: 1 }}>⚠</span>
               <span>
-                <strong>{people} guests</strong> in {picked.length === 1 ? "a room that normally holds" : "rooms that normally hold"}{" "}
+                <strong>{people} guests</strong> in {pickedRoomCount === 1 ? "a room that normally holds" : "rooms that normally hold"}{" "}
                 <strong>{capacity}</strong>. Fine for young children sharing — just make sure the extra bedding is arranged.
                 You can still create this booking.
               </span>

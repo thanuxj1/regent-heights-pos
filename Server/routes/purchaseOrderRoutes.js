@@ -3,6 +3,7 @@ import express from "express";
 import {
   getPurchaseOrders,
   getPurchaseOrdersBySupplier,
+  getMostPurchasedItems,
   getPurchaseOrderById,
   createPurchaseOrder,
   updatePurchaseOrder,
@@ -11,17 +12,19 @@ import {
 } from "../controllers/purchaseOrderController.js";
 import {
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr,
+  CAPABILITIES,
 } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// All purchase order routes — Admin and Branch Admin only
-// Kitchen staff and cashiers have no business managing supplier orders
-router.use(requireAuth, requireBranchAdminOrAdmin);
+// All purchase order routes — Admin and Branch Admin, or a cashier granted
+// the Purchase Orders capability
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.PURCHASE_ORDERS));
 
 router.get("/", getPurchaseOrders);
 router.get("/supplier/:supId", getPurchaseOrdersBySupplier);
+router.get("/most-purchased-items", getMostPurchasedItems);
 router.get("/:id", getPurchaseOrderById);
 router.post("/", createPurchaseOrder);
 router.put("/:id", updatePurchaseOrder);

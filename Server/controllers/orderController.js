@@ -22,8 +22,28 @@ import { hotelToday } from "../utils/hotelTime.js";
 const VALID_STATUSES = ["pending", "preparing", "completed", "cancelled"];
 const VALID_TYPES = ["dine-in", "takeaway", "delivery"];
 // Tenders the till can take. "room" is a charge to a guest folio, not money
-// in the drawer, so it is a tender but never a cash one.
-const TENDERS = ["cash", "card", "mobile_pay", "voucher", "room", "split"];
+// in the drawer, so it is a tender but never a cash one. "cod" is cash the
+// delivery partner's rider collected from the customer — also never a till
+// tender, since the hotel's own cashier never touches it until settlement.
+const TENDERS = ["cash", "card", "mobile_pay", "voucher", "room", "split", "cod"];
+
+// Delivery partners a "delivery" order can be attributed to — a real,
+// manager-editable list (Server/controllers/deliveryPartnerController.js),
+// not a hardcoded one. Checked live so a newly-added partner works
+// immediately and a deactivated one is refused on new orders without
+// touching orders that already reference it.
+// requireActive=false is for settling a partner's existing debt — deactivating
+// a partner must stop *new* orders through them, never strand what they
+// already owe from before they were switched off.
+export async function isValidDeliveryPartner(com_id, key, { requireActive = true } = {}) {
+  if (!key) return false;
+  const params = [com_id, key];
+  const { rows } = await pool.query(
+    `SELECT 1 FROM "DELIVERY_PARTNER" WHERE com_id = $1 AND key = $2${requireActive ? " AND active = TRUE" : ""}`,
+    params,
+  );
+  return rows.length > 0;
+}
 
 // Legal status transitions for a POS system
 // Key = current status, Value = allowed next statuses
@@ -74,15 +94,17 @@ function validateCosts(or_tax, or_totalcost, or_totalCostWtax) {
 
 /**
  * Validates order type business rules:
- * - delivery → cust_id required
+ * - delivery → cust_id required (unless skipCustCheck is true — a cashier
+ *   placing a delivery-partner order never has a registered customer to
+ *   pick; the partner is the party of record, not the end customer)
  * - dine-in → table_id required (unless skipTableCheck is true, e.g. cashier counter dine-in)
  * Returns an error string or null if valid.
  */
-function validateTypeConstraints(or_type, cust_id, table_id, skipTableCheck = false) {
+function validateTypeConstraints(or_type, cust_id, table_id, skipTableCheck = false, skipCustCheck = false) {
   if (or_type === "dine-in" && !table_id && !skipTableCheck) {
     return "table_id is required for dine-in orders";
   }
-  if (or_type === "delivery" && !cust_id) {
+  if (or_type === "delivery" && !cust_id && !skipCustCheck) {
     return "cust_id is required for delivery orders";
   }
   return null;
@@ -276,7 +298,7 @@ export const createOrder = async (req, res) => {
     // ── Type-specific business rules ──
     // Cashiers doing counter dine-in may not have a table_id (no waiter flow involved)
     const isCashierOrder = req.user?.role_id === ROLES.CASHIER;
-    const typeError = validateTypeConstraints(or_type, cust_id, table_id, isCashierOrder && !table_id);
+    const typeError = validateTypeConstraints(or_type, cust_id, table_id, isCashierOrder && !table_id, isCashierOrder);
     if (typeError) {
       return res.status(400).json({ success: false, error: typeError });
     }
@@ -435,6 +457,7 @@ export const updateOrder = async (req, res) => {
       b_id,
       table_id,
       payment_method,
+      delivery_partner,
     } = req.body;
 
     // ── Required fields for full update ──
@@ -532,7 +555,7 @@ export const updateOrder = async (req, res) => {
 
     // ── Type-specific business rules ──
     const isCashierUpdate = req.user?.role_id === ROLES.CASHIER;
-    const typeError = validateTypeConstraints(or_type, cust_id, table_id, isCashierUpdate && !table_id);
+    const typeError = validateTypeConstraints(or_type, cust_id, table_id, isCashierUpdate && !table_id, isCashierUpdate);
     if (typeError) {
       return res.status(400).json({ success: false, error: typeError });
     }
@@ -591,6 +614,11 @@ export const updateOrder = async (req, res) => {
       drawerId = drawer.rows[0]?.session_id ?? null;
     }
 
+    const resolvedDeliveryPartner =
+      or_type === "delivery" && (await isValidDeliveryPartner(req.user?.com_id, delivery_partner))
+        ? delivery_partner
+        : null;
+
     const { rows } = await pool.query(
       `UPDATE "ORDER" SET
          or_tax             = $1,
@@ -603,7 +631,8 @@ export const updateOrder = async (req, res) => {
          b_id               = $8,
          table_id           = $9,
          payment_method     = COALESCE($11, payment_method),
-         session_id         = COALESCE(session_id, $12)
+         session_id         = COALESCE(session_id, $12),
+         delivery_partner   = $13
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -619,6 +648,7 @@ export const updateOrder = async (req, res) => {
         id,
         tender,
         drawerId,
+        resolvedDeliveryPartner,
       ],
     );
 
@@ -1082,6 +1112,7 @@ export const createOrderWithItems = async (req, res) => {
   const typeError = validateTypeConstraints(
     order.or_type, order.cust_id, order.table_id,
     isCashierOrder && !order.table_id,
+    isCashierOrder,
   );
   if (typeError) return res.status(400).json({ success: false, error: typeError });
 
@@ -1197,6 +1228,11 @@ export const createOrderWithItems = async (req, res) => {
   );
   const drawerId = drawer.rows[0]?.session_id ?? null;
 
+  const resolvedDeliveryPartner =
+    order.or_type === "delivery" && (await isValidDeliveryPartner(req.user?.com_id, order.delivery_partner))
+      ? order.delivery_partner
+      : null;
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1206,8 +1242,8 @@ export const createOrderWithItems = async (req, res) => {
          (or_tax, or_totalcost, "or_totalCostWtax", or_status, or_type,
           cust_id, u_id, b_id, table_id, client_ref,
           discount_pct, service_fee, discount_approved_by,
-          payment_method, session_id, kitchen_note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          payment_method, session_id, kitchen_note, delivery_partner)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1217,6 +1253,7 @@ export const createOrderWithItems = async (req, res) => {
         discountPct, serviceFee, discountApprover,
         tender, drawerId,
         String(order.kitchen_note ?? "").trim().slice(0, 500) || null,
+        resolvedDeliveryPartner,
       ],
     );
     const created = rows[0];

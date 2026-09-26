@@ -108,6 +108,21 @@ export function assertNotInThePast(dateStr, field, { graceDays = 1 } = {}) {
   }
 }
 
+/**
+ * Mirror of assertNotInThePast, for dates that must not be after today (a
+ * birth date, a document's issue date). Same grace, same direction reversed:
+ * Colombo can be a day ahead of UTC, never behind, so a date that is "today"
+ * there can look like tomorrow to a naive UTC comparison.
+ */
+export function assertNotInTheFuture(dateStr, field, { graceDays = 1 } = {}) {
+  const ceiling = new Date();
+  ceiling.setUTCHours(0, 0, 0, 0);
+  ceiling.setUTCDate(ceiling.getUTCDate() + graceDays);
+  if (new Date(dateStr + "T00:00:00Z") > ceiling) {
+    invalid(`${field} cannot be in the future.`);
+  }
+}
+
 export function timeField(v, field) {
   if (v === undefined || v === null || v === "") return null;
   const s = String(v).trim();
@@ -169,6 +184,14 @@ export function cleanGuest(raw, { requireName = true } = {}) {
   if (present("notes"))           g.notes   = textField(g.notes, "Notes", 2000);
   for (const f of GUEST_DATES) {
     if (present(f)) g[f] = dateField(g[f], LABELS[f] || f);
+  }
+  if (g.date_of_birth) assertNotInTheFuture(g.date_of_birth, LABELS.date_of_birth);
+  if (g.passport_issue_date) assertNotInTheFuture(g.passport_issue_date, LABELS.passport_issue_date);
+  // Both must be in *this* payload to compare — cleanGuest has no DB access,
+  // so it cannot check a new expiry date against an issue date saved earlier.
+  // The desk's own form always sends both together, which covers the real case.
+  if (g.passport_issue_date && g.passport_expiry_date && g.passport_expiry_date <= g.passport_issue_date) {
+    invalid("Passport expiry date must be after the issue date.");
   }
   return g;
 }

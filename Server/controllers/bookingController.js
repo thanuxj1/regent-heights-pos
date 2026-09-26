@@ -12,7 +12,7 @@ import {
 } from "../utils/validate.js";
 import { lateCheckoutFee, prettyTime, cancellationLine, termsLines, SUGGESTED_TERMS, POLICY_DEFAULTS } from "../utils/stayPolicy.js";
 import { syncBookingCommission } from "../utils/commission.js";
-import { lockRooms, roomClash } from "../utils/roomLock.js";
+import { lockRooms, roomClash, countFreeRoomsOfType } from "../utils/roomLock.js";
 import { seatGuests, guestCharges, occupancyWarnings } from "../utils/guestCharges.js";
 import { takeStock, noteShortfall } from "../utils/inventory.js";
 
@@ -142,10 +142,20 @@ export async function getGuests(req, res, next) {
   } catch (err) { next(err); }
 }
 
+export async function getGuestById(req, res, next) {
+  try {
+    await assertInScope(req, res, { table: "GUEST", idColumn: "guest_id", id: req.params.id });
+    const { rows } = await pool.query(`SELECT * FROM "GUEST" WHERE guest_id = $1`, [Number(req.params.id)]);
+    if (!rows.length) { res.status(404); return next(new Error("Guest not found")); }
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+}
+
 const GUEST_FIELDS = [
   "full_name","email","phone","country","nationality","passport_nic",
   "passport_issue_date","passport_expiry_date","date_of_birth","address",
   "company","guest_status","chauffeur_name","chauffeur_phone","next_destination","notes",
+  "id_document",
 ];
 
 export async function createGuest(req, res, next) {
@@ -219,11 +229,25 @@ export async function getAvailability(req, res, next) {
     //
     // Each room also says why it is taken, and where a same-day hand-over is
     // involved, so the desk can see the reason instead of a bare "fully booked".
+    //
+    // `countTurnovers`: a reservation only ever books a room TYPE now, not a
+    // specific room (the physical room is picked at check-in, once the desk
+    // can see who has actually left) — so a room whose occupant is due out the
+    // very day being searched can safely count toward that type's availability
+    // here, even before housekeeping/front desk has processed their check-out.
+    // Assigning an ACTUAL room at check-in still uses the strict rule below
+    // (unaffected — this flag is opt-in and only this endpoint sees it), so a
+    // still-occupied room can never be handed to a second guest.
+    const countTurnovers = req.query.count_turnovers === "1";
+    const effCheckout = countTurnovers
+      ? `(CASE WHEN b.status = 'checked_in' AND b.check_out_date = $2::date
+              THEN b.check_out_date ELSE ${effectiveCheckout("b")} END)`
+      : effectiveCheckout("b");
     const who = (extraWhere) => `
       SELECT json_build_object(
                'booking_id', b.booking_id, 'booking_ref', b.booking_ref, 'guest_name', g.full_name,
                'status', b.status, 'check_in', b.check_in_date::text, 'due_out', b.check_out_date::text,
-               'check_out', ${effectiveCheckout("b")}::text)
+               'check_out', ${effCheckout}::text)
         FROM "BOOKING_ROOM" br
         JOIN "BOOKING" b ON b.booking_id = br.booking_id
         JOIN "GUEST" g   ON g.guest_id = b.guest_id
@@ -246,10 +270,10 @@ export async function getAvailability(req, res, next) {
                   AND b.status IN ('tentative','confirmed','checked_in')
                   AND ($4::int IS NULL OR b.booking_id <> $4::int)
                   AND b.check_in_date  < $3::date
-                  AND ${effectiveCheckout("b")} > $2::date
+                  AND ${effCheckout} > $2::date
               ) AS is_available,
-              (${who(`b.check_in_date < $3::date AND ${effectiveCheckout("b")} > $2::date`)}) AS blocked_by,
-              (${who(`b.check_out_date = $2::date AND ${effectiveCheckout("b")} <= $2::date`)}) AS leaving_that_day,
+              (${who(`b.check_in_date < $3::date AND ${effCheckout} > $2::date`)}) AS blocked_by,
+              (${who(`b.check_out_date = $2::date AND ${effCheckout} <= $2::date`)}) AS leaving_that_day,
               (${who(`b.check_in_date = $3::date`)}) AS arriving_that_day
        FROM "ROOM" r
        JOIN "ROOM_TYPE" rt ON rt.room_type_id = r.room_type_id
@@ -285,6 +309,32 @@ export async function getAvailability(req, res, next) {
         });
       }
     });
+
+    // A room requested by type only (room_id still null — a booking made
+    // before a specific room was assigned) holds no specific ROOM row, so the
+    // per-room is_available check above never sees it and every physical room
+    // of that type still looks individually free. It isn't: that many rooms
+    // of the type are already spoken for, just not which ones yet. Trim that
+    // many entries off the end of each type's available_rooms so the count
+    // (and what the booking form offers) reflects it.
+    const typeOnlyCounts = await pool.query(
+      `SELECT br.room_type_id, COUNT(*)::int AS n
+         FROM "BOOKING_ROOM" br
+         JOIN "BOOKING" b ON b.booking_id = br.booking_id
+        WHERE b.b_id = $1 AND br.room_id IS NULL
+          AND b.status IN ('tentative','confirmed','checked_in')
+          AND ($4::int IS NULL OR b.booking_id <> $4::int)
+          AND b.check_in_date < $3::date AND ${effCheckout} > $2::date
+        GROUP BY br.room_type_id`,
+      [b_id, checkIn, checkOut, excludeId]
+    );
+    for (const { room_type_id, n } of typeOnlyCounts.rows) {
+      const t = byType[room_type_id];
+      if (!t || !n) continue;
+      const moved = t.available_rooms.splice(Math.max(0, t.available_rooms.length - n));
+      (t.unavailable_rooms ||= []).push(...moved.map(r => ({ room_id: r.room_id, room_number: r.room_number,
+        blocked_by: { guest_name: "another booking", status: "pending" } })));
+    }
 
     res.json({ check_in: checkIn, check_out: checkOut, nights, room_types: Object.values(byType) });
   } catch (err) { next(err); }
@@ -453,6 +503,26 @@ export async function createBooking(req, res, next) {
         extra_child_rate: num(t.extra_child_rate),
       });
     }
+    // A room requested with a specific room_id is locked and clash-checked
+    // above; a room requested by type only (no room_id — the normal case now
+    // that a room is assigned at check-in, not at booking) never was. Nothing
+    // stopped booking 50 rooms of a 10-room type. Count what's actually free
+    // for these dates before committing to the request.
+    const requestedByType = {};
+    for (const r of pricedRooms) {
+      if (r.room_id) continue;
+      requestedByType[r.room_type_id] = (requestedByType[r.room_type_id] || 0) + 1;
+    }
+    for (const [roomTypeId, count] of Object.entries(requestedByType)) {
+      const freeCount = await countFreeRoomsOfType(client, { b_id, room_type_id: roomTypeId, checkIn, checkOut });
+      if (count > freeCount) {
+        await client.query("ROLLBACK");
+        const typeName = pricedRooms.find(r => r.room_type_id === Number(roomTypeId))?.type_name || `type ${roomTypeId}`;
+        res.status(409);
+        return next(new Error(`Only ${freeCount} room(s) of ${typeName} are available for these dates (requested ${count}).`));
+      }
+    }
+
     // The party is entered once for the whole booking, so it is seated across
     // the rooms here and written down room by room.
     pricedRooms = seatGuests(pricedRooms, adultCount, childCount);
@@ -635,6 +705,25 @@ export async function updateBooking(req, res, next) {
           await client.query("ROLLBACK");
           res.status(409);
           return next(new Error(`Room ${taken} is already booked for those dates`));
+        }
+      }
+
+      // Same gap as createBooking: a room requested by type only never went
+      // through lockRooms/roomClash above.
+      const requestedByType = {};
+      for (const r of pricedRooms) {
+        if (r.room_id) continue;
+        requestedByType[r.room_type_id] = (requestedByType[r.room_type_id] || 0) + 1;
+      }
+      for (const [roomTypeId, count] of Object.entries(requestedByType)) {
+        const freeCount = await countFreeRoomsOfType(client, {
+          b_id: b.b_id, room_type_id: roomTypeId, checkIn, checkOut, ignoreBookingId: id,
+        });
+        if (count > freeCount) {
+          await client.query("ROLLBACK");
+          const typeName = pricedRooms.find(r => r.room_type_id === Number(roomTypeId))?.type_name || `type ${roomTypeId}`;
+          res.status(409);
+          return next(new Error(`Only ${freeCount} room(s) of ${typeName} are available for these dates (requested ${count}).`));
         }
       }
 
@@ -849,6 +938,39 @@ export async function checkIn(req, res, next) {
       res.status(400); return next(new Error("Every room on the booking must be assigned before check-in"));
     }
 
+    // An optional meal plan, chosen at check-in (not at booking time) — the
+    // guest may not have decided, or the desk may be upselling it right now.
+    // Entirely optional: nothing below runs if it wasn't sent.
+    let mealPlan = null;
+    let mealSupplement = 0;
+    const requestedMealPlanId = req.body?.meal_plan_id != null ? Number(req.body.meal_plan_id) : null;
+    if (requestedMealPlanId) {
+      const mp = await client.query(
+        `SELECT * FROM "MEAL_PLAN" WHERE plan_id = $1 AND b_id = $2 AND is_active = TRUE`,
+        [requestedMealPlanId, b.b_id],
+      );
+      if (!mp.rows.length) {
+        await client.query("ROLLBACK");
+        res.status(400); return next(new Error("That meal plan isn't available for this property"));
+      }
+      mealPlan = mp.rows[0];
+      mealSupplement = Math.round(
+        (num(mealPlan.supplement_per_adult) * num(b.adults) + num(mealPlan.supplement_per_child) * num(b.children)) * 100,
+      ) / 100;
+    }
+
+    // The desk takes a passport/NIC number and a scan of it at check-in —
+    // that is the point of this whole screen. Nothing enforced it before.
+    const guestDoc = await client.query(
+      `SELECT passport_nic, id_document FROM "GUEST" WHERE guest_id = $1`, [b.guest_id]
+    );
+    const g = guestDoc.rows[0];
+    if (!g?.passport_nic || !g?.id_document) {
+      await client.query("ROLLBACK");
+      res.status(400); return next(new Error(
+        "A passport/NIC number and a scan of the document must be on file before check-in — fill in Guest Registration first."));
+    }
+
     // Guard against a room being double-occupied right now
     const clash = await client.query(
       `SELECT r.room_number FROM "BOOKING_ROOM" br
@@ -901,11 +1023,19 @@ export async function checkIn(req, res, next) {
     if (num(b.tax_amount) > 0) await post("tax", `Room charges tax (${b.tax_pct}%)`, 1, b.tax_amount, b.tax_amount);
     if (num(b.extra_charges) > 0) await post("misc", "Extra charges", 1, b.extra_charges, b.extra_charges);
     if (num(b.discount) > 0)      await post("discount", "Discount", 1, -num(b.discount), -num(b.discount));
-
+    if (mealPlan && mealSupplement > 0) {
+      // "meal" — FOLIO_ITEM.source is CHECK-constrained to a fixed list
+      // that doesn't include "meal_plan"; "meal" is also what
+      // BookingDetail.jsx's SOURCE_LABEL already renders as "Meal Plan".
+      await post("meal", `${mealPlan.plan_name} (${mealPlan.plan_code}) × ${b.nights} night(s)`,
+                 1, mealSupplement, mealSupplement);
+    }
 
     await client.query(
-      `UPDATE "BOOKING" SET status='checked_in', checked_in_at=NOW(), checked_in_by=$2 WHERE booking_id=$1`,
-      [id, req.user?.u_id || null]
+      `UPDATE "BOOKING" SET status='checked_in', checked_in_at=NOW(), checked_in_by=$2,
+              meal_plan_id = COALESCE($3, meal_plan_id), meal_charges = CASE WHEN $3::int IS NOT NULL THEN $4 ELSE meal_charges END
+       WHERE booking_id=$1`,
+      [id, req.user?.u_id || null, requestedMealPlanId, mealSupplement]
     );
     await client.query(
       `UPDATE "ROOM" SET hk_status='dirty' WHERE room_id = ANY($1::int[])`,
@@ -1309,6 +1439,20 @@ export async function getConfirmation(req, res, next) {
     );
     if (!rows.length) { res.status(404); return next(new Error("Booking not found")); }
     const [b] = await attachRooms(rows);
+
+    // grand_total is a snapshot written when the booking was created/edited
+    // and again at check-out — never in between. A meal plan chosen at
+    // check-in (or any charge posted straight to the folio afterward) sits
+    // on the folio and on its own column correctly, but grand_total keeps
+    // the pre-check-in figure until check-out finally recomputes it. Once a
+    // folio exists, its live total is the only trustworthy one — the same
+    // rule BookingDetail's own header already follows.
+    if (b.folio_id) {
+      const { rows: sum } = await pool.query(
+        'SELECT COALESCE(SUM(amount),0) AS t FROM "FOLIO_ITEM" WHERE folio_id=$1', [b.folio_id]
+      );
+      b.grand_total = +num(sum[0].t).toFixed(2);
+    }
 
     const branch = await pool.query(
       'SELECT "B_name","B_address","B_conNo","B_email" FROM "Branch" WHERE "B_id"=$1', [b.b_id]

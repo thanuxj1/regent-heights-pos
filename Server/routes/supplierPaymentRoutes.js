@@ -1,5 +1,5 @@
 import express from "express";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
   getSupplierPayments,
   getSupplierPaymentById,
@@ -15,7 +15,7 @@ const router = express.Router();
 // Money paid to suppliers is the owner's business, and it was not behind a
 // login at all: anyone who could reach the server could list every company's
 // payments, supplier names and phone numbers included, and add or delete them.
-router.use(requireAuth, requireBranchAdminOrAdmin);
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.SUPPLIER_MANAGEMENT));
 
 router.get("/", getSupplierPayments);
 router.get("/supplier/:supId", getPaymentsBySupplier);

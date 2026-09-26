@@ -93,4 +93,37 @@ html, body, #root {
   thead { display: table-header-group; }
 
   @page { margin: 14mm; }
+
+  /* Guest Folio — a paper bill should read like a formal invoice, not a
+     colored dashboard card: solid black rules, no pill-shaped badges or
+     tinted panels. Same type and text color as the Booking Confirmation
+     document (the app's own print font, not a serif override), so the two
+     documents this property hands a guest read as one family. Screen keeps
+     the app's own look; this only takes effect while actually printing. */
+  .folio-doc, .folio-doc * {
+    color: #1E293B !important;
+    background: transparent !important;
+  }
+  .folio-doc thead tr, .folio-doc tfoot tr {
+    background: transparent !important;
+    border-top: 1px solid #1E293B !important;
+    border-bottom: 1px solid #1E293B !important;
+  }
+  .folio-doc .folio-badge {
+    background: transparent !important;
+    border: 1px solid #1E293B !important;
+    color: #1E293B !important;
+  }
+  .folio-doc .folio-balance-due { color: #B42318 !important; }
+  .folio-doc .folio-paid        { color: #067647 !important; }
+
+  /* Qty/Unit/Amount read as figures to scan and verify, not prose — right
+     align them, the way every printed invoice sets its numbers, instead of
+     the dashboard table's left-aligned columns. */
+  .folio-doc .folio-num { text-align: right !important; }
+
+  /* The table's own cell padding (16px) and the letterhead's padding (20px)
+     otherwise leave the table's edges a few pixels narrower than the
+     letterhead above it — a document should line up with itself. */
+  .folio-doc th, .folio-doc td { padding-left: 20px !important; padding-right: 20px !important; }
 }

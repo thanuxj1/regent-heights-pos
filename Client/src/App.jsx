@@ -29,6 +29,11 @@ const CashierPos = lazy(() => import('./pages/cashier/CashierPos'));
 const InvoicePreview = lazy(() => import('./pages/cashier/InvoicePreview'));
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
+
+// Mirrors the two capability keys (of the full backend catalog) that can
+// cross a role boundary here — see Server/middleware/authMiddleware.js's
+// CAPABILITIES for the source of truth; the full catalog is backend-only.
+const CAP = { CASHIER_POS_ACCESS: 'cashier_pos_access', RAW_MATERIALS: 'raw_materials', WASTE_TRACKING: 'waste_tracking', DELIVERY_MANAGEMENT: 'delivery_management' };
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminStatistics = lazy(() => import('./pages/admin/AdminStatistics'));
 const AdminTransactions = lazy(() => import('./pages/admin/Transactions'));
@@ -50,6 +55,8 @@ const BranchProfileRouter = () => {
   return <BranchProfile />;
 };
 const AddRawMaterials = lazy(() => import('./pages/branch-admin/AddRawMaterials'));
+const WasteTracking = lazy(() => import('./pages/branch-admin/WasteTracking'));
+const DeliveryCod = lazy(() => import('./pages/branch-admin/DeliveryCod'));
 const InventoryDashboard = lazy(() => import('./pages/branch-admin/InventoryDashboard'));
 const SupplierManagement = lazy(() => import('./pages/branch-admin/SupplierManagement'));
 const BranchAdminDashboard = lazy(() => import('./pages/branch-admin/Dashboard'));
@@ -65,6 +72,7 @@ const FrontDesk = lazy(() => import('./pages/hotel/FrontDesk'));
 const HotelBookings = lazy(() => import('./pages/hotel/Bookings'));
 const BookingDetail = lazy(() => import('./pages/hotel/BookingDetail'));
 const RoomTypes = lazy(() => import('./pages/hotel/RoomTypes'));
+const MealPlans = lazy(() => import('./pages/hotel/MealPlans'));
 const RoomsPage = lazy(() => import('./pages/hotel/RoomsPage'));
 const RoomRack = lazy(() => import('./pages/hotel/RoomRack'));
 const GuestProfile = lazy(() => import('./pages/hotel/GuestProfile'));
@@ -370,7 +378,7 @@ function App() {
       <Route
         path="/branch-admin/raw-ingredient"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.RAW_MATERIALS}>
             <AddRawMaterials />
           </ProtectedRoute>
         }
@@ -379,12 +387,34 @@ function App() {
       <Route
         path="/branch-admin/inventory"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.RAW_MATERIALS}>
             <InventoryDashboard />
           </ProtectedRoute>
         }
 
         />
+
+      <Route
+        path="/branch-admin/waste"
+        element={
+          // Super Admin (6) is included here, unlike sibling branch-admin
+          // routes: the backend only lets Super Admin (or the retired
+          // Admin role) edit/delete a waste record, so without this they
+          // could never reach the one page where that control appears.
+          <ProtectedRoute allowedRoles={[1, 2, 6]} orCapability={CAP.WASTE_TRACKING}>
+            <WasteTracking />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/branch-admin/delivery-cod"
+        element={
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.DELIVERY_MANAGEMENT}>
+            <DeliveryCod />
+          </ProtectedRoute>
+        }
+      />
 
       <Route
         path="/branch-admin/sales-revenue"
@@ -449,7 +479,10 @@ function App() {
         <Route
           path="/cashier/pos"
           element={
-            <ProtectedRoute allowedRoles={[3]}>
+            // Branch Admin/Owner already has full backend access to every POS
+            // action (order create/edit/void, drawer/till) — the till itself
+            // is the only thing that was frontend-gated to cashiers only.
+            <ProtectedRoute allowedRoles={[1, 2, 3]} orCapability={CAP.CASHIER_POS_ACCESS}>
               <CashierPos />
             </ProtectedRoute>
           }
@@ -458,7 +491,7 @@ function App() {
         <Route
           path="/cashier/invoice-preview"
           element={
-            <ProtectedRoute allowedRoles={[3]}>
+            <ProtectedRoute allowedRoles={[1, 2, 3]} orCapability={CAP.CASHIER_POS_ACCESS}>
               <InvoicePreview />
             </ProtectedRoute>
           }
@@ -621,6 +654,15 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={[1, 2]}>
               <RoomTypes />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/hotel/meal-plans"
+          element={
+            <ProtectedRoute allowedRoles={[1, 2]}>
+              <MealPlans />
             </ProtectedRoute>
           }
         />

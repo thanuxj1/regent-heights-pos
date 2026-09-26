@@ -7,12 +7,12 @@ import {
   updateTerminal,
   deleteTerminal,
 } from "../controllers/terminalController.js";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 // All terminal routes require auth + Branch Admin or Admin
-router.use(requireAuth, requireBranchAdminOrAdmin);
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.TERMINALS));
 
 // IMPORTANT: /branch/:branchId must be registered before /:id
 // otherwise Express matches "branch" as the :id param

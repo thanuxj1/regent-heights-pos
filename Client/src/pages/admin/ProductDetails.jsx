@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../../components/admin/Sidebar";
 import Header from "../../components/admin/Header";
 import { deleteProduct, getCategories, getProductById, updateProduct } from "../../services/api";
+import { readImageFile } from "../../utils/readImageFile";
 
 const cardStyle = {
   border: "1px solid #D9E4F2",
@@ -226,12 +227,16 @@ const ProductDetails = () => {
     return <span style={{ fontSize: "22px" }}>🍔</span>;
   }, [form.pro_image, form.pro_name]);
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setForm(prev => ({ ...prev, pro_image: ev.target.result }));
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await readImageFile(file, { maxWidth: 800 });
+      setForm(prev => ({ ...prev, pro_image: dataUrl }));
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   const discountedPrice = useMemo(() => {

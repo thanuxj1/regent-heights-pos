@@ -54,15 +54,20 @@ export async function getExpenseSummary(req, res, next) {
 
     const e = inYear("b_id");
     const h = inYear("b.b_id");
-    const o = inYear("b_id");
+    // "o." because the restaurant queries below now join to the COD
+    // settlement table to decide which date a delivery-COD sale counts on.
+    const o = inYear("o.b_id");
     const s = inYear("po.b_id");
+    // Waste has no b_id of its own — scoped through the raw material it wasted.
+    const w = inYear("rm.b_id");
     // Commission for the same year as everything else on the page. It was counted
     // across all years, so the "(2026)" figures did not add up.
     const cParams = [year];
     const cClause = branchClause(req, "a.b_id", cParams);
+    const cod = inYear("b_id");
 
-    const [monthly, byCategory, hotel, restaurant, suppliers, commissions,
-           hotelMonthly, restaurantMonthly, supplierMonthly, commissionMonthly] = await Promise.all([
+    const [monthly, byCategory, hotel, restaurant, suppliers, commissions, waste, codOutstanding,
+           hotelMonthly, restaurantMonthly, supplierMonthly, commissionMonthly, wasteMonthly] = await Promise.all([
       pool.query(
         `SELECT to_char(exp_date,'YYYY-MM') AS month, exp_category, SUM(exp_amount) AS total
            FROM "EXPENSE"
@@ -85,11 +90,19 @@ export async function getExpenseSummary(req, res, next) {
            JOIN "FOLIO" f   ON f.folio_id = fi.folio_id
            JOIN "BOOKING" b ON b.booking_id = f.booking_id
           WHERE EXTRACT(YEAR FROM fi.item_date) = $1${h.where}`, h.params),
+      // A COD delivery order isn't a real sale until the rider actually
+      // hands the cash over — it's excluded here and counted instead on
+      // the date it's settled (see the LEFT JOIN), not the date it was
+      // placed. Everything else counts on its own order date, as before.
       pool.query(
-        `SELECT COALESCE(SUM(COALESCE("or_totalCostWtax", or_totalcost, 0)), 0) AS t
-           FROM "ORDER"
-          WHERE folio_id IS NULL AND or_status <> 'cancelled'
-            AND EXTRACT(YEAR FROM or_date) = $1${o.where}`, o.params),
+        `SELECT COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)), 0) AS t
+           FROM "ORDER" o
+           LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
+          WHERE o.folio_id IS NULL AND o.or_status <> 'cancelled'
+            AND (
+              (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND EXTRACT(YEAR FROM o.or_date) = $1)
+              OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NOT NULL AND EXTRACT(YEAR FROM cs.settled_date) = $1)
+            )${o.where}`, o.params),
       // Money paid to suppliers is money out too, even though it is not typed
       // in on this page — it is recorded against purchase orders.
       pool.query(
@@ -103,6 +116,22 @@ export async function getExpenseSummary(req, res, next) {
            FROM "COMMISSION_RECORD" r
            JOIN "COMMISSION_AGENT" a ON a.agent_id = r.agent_id
           WHERE EXTRACT(YEAR FROM r.record_date) = $1${cClause ? ` AND ${cClause}` : ""}`, cParams),
+      // Wasted raw materials, priced at the item's current unit cost — 0 for
+      // anything never received through a priced purchase order.
+      pool.query(
+        `SELECT COALESCE(SUM(w.waste_qty * COALESCE(rm.unit_price, 0)), 0) AS t
+           FROM "public"."Waste" w
+           JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+          WHERE EXTRACT(YEAR FROM w.recorded_at) = $1${w.where}`, w.params),
+      // Cash a delivery partner is holding on the hotel's behalf, not yet
+      // settled — a receivable, not a cost, so it is never folded into
+      // moneyOut/monthlyTotals below, only reported as its own figure.
+      pool.query(
+        `SELECT COALESCE(SUM("or_totalCostWtax"), 0) AS t
+           FROM "ORDER"
+          WHERE or_type = 'delivery' AND payment_method = 'cod' AND cod_settlement_id IS NULL
+            AND or_status <> 'cancelled'
+            AND EXTRACT(YEAR FROM or_date) = $1${cod.where}`, cod.params),
 
       // Month by month, the same four figures the headline is made of — so the
       // Income tab and the trend chart add up to the totals above them.
@@ -114,11 +143,15 @@ export async function getExpenseSummary(req, res, next) {
           WHERE EXTRACT(YEAR FROM fi.item_date) = $1${h.where}
           GROUP BY 1`, h.params),
       pool.query(
-        `SELECT to_char(or_date, 'YYYY-MM') AS month,
-                COALESCE(SUM(COALESCE("or_totalCostWtax", or_totalcost, 0)), 0) AS total
-           FROM "ORDER"
-          WHERE folio_id IS NULL AND or_status <> 'cancelled'
-            AND EXTRACT(YEAR FROM or_date) = $1${o.where}
+        `SELECT to_char(COALESCE(cs.settled_date, o.or_date), 'YYYY-MM') AS month,
+                COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)), 0) AS total
+           FROM "ORDER" o
+           LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
+          WHERE o.folio_id IS NULL AND o.or_status <> 'cancelled'
+            AND (
+              (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND EXTRACT(YEAR FROM o.or_date) = $1)
+              OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NOT NULL AND EXTRACT(YEAR FROM cs.settled_date) = $1)
+            )${o.where}
           GROUP BY 1`, o.params),
       pool.query(
         `SELECT to_char(sp.payment_date, 'YYYY-MM') AS month, COALESCE(SUM(sp.amount), 0) AS total
@@ -132,26 +165,34 @@ export async function getExpenseSummary(req, res, next) {
            JOIN "COMMISSION_AGENT" a ON a.agent_id = r.agent_id
           WHERE EXTRACT(YEAR FROM r.record_date) = $1${cClause ? ` AND ${cClause}` : ""}
           GROUP BY 1`, cParams),
+      pool.query(
+        `SELECT to_char(w.recorded_at, 'YYYY-MM') AS month, COALESCE(SUM(w.waste_qty * COALESCE(rm.unit_price, 0)), 0) AS total
+           FROM "public"."Waste" w
+           JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+          WHERE EXTRACT(YEAR FROM w.recorded_at) = $1${w.where}
+          GROUP BY 1`, w.params),
     ]);
 
     // One row per month that had anything in it.
     const byMonth = {};
     const addTo = (rows, key) => rows.forEach((r) => {
-      (byMonth[r.month] ||= { month: r.month, hotel: 0, restaurant: 0, expenses: 0, suppliers: 0, commission: 0 })[key] += Number(r.total);
+      (byMonth[r.month] ||= { month: r.month, hotel: 0, restaurant: 0, expenses: 0, suppliers: 0, commission: 0, waste: 0 })[key] += Number(r.total);
     });
     addTo(hotelMonthly.rows, "hotel");
     addTo(restaurantMonthly.rows, "restaurant");
     addTo(monthly.rows, "expenses");
     addTo(supplierMonthly.rows, "suppliers");
     addTo(commissionMonthly.rows, "commission");
+    addTo(wasteMonthly.rows, "waste");
     const monthlyTotals = Object.values(byMonth).sort((a, b) => (a.month < b.month ? -1 : 1)).map((m) => {
       const revenue = m.hotel + m.restaurant;
-      const out = m.expenses + m.suppliers + m.commission;
+      const out = m.expenses + m.suppliers + m.commission + m.waste;
       return { ...m, revenue: +revenue.toFixed(2), out: +out.toFixed(2), net: +(revenue - out).toFixed(2) };
     });
 
     const totalExpenses = byCategory.rows.reduce((sum, r) => sum + Number(r.total), 0);
     const supplierPayments = Number(suppliers.rows[0].t);
+    const wasteTotal = Number(waste.rows[0].t);
     const hotelRevenue = Number(hotel.rows[0].t);
     const restaurantRevenue = Number(restaurant.rows[0].t);
 
@@ -161,11 +202,13 @@ export async function getExpenseSummary(req, res, next) {
       byCategory: byCategory.rows,
       totalExpenses,
       supplierPayments,
-      moneyOut: +(totalExpenses + supplierPayments).toFixed(2),
+      wasteTotal,
+      moneyOut: +(totalExpenses + supplierPayments + wasteTotal).toFixed(2),
       revenue: { hotel: hotelRevenue, restaurant: restaurantRevenue },
       totalRevenue: +(hotelRevenue + restaurantRevenue).toFixed(2),
       commissionPending: Number(commissions.rows[0].pending),
       commissionTotal: Number(commissions.rows[0].total),
+      codOutstanding: Number(codOutstanding.rows[0].t),
       monthlyTotals,
     });
   } catch (err) { next(err); }

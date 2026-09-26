@@ -11,7 +11,8 @@ import {
 import {
   requireAuth,
   requireRole,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr,
+  CAPABILITIES,
   ROLES,
 } from "../middleware/authMiddleware.js";
 
@@ -53,10 +54,10 @@ router.get(
   getPurchaseItemById,
 );
 
-// Only Admin and Branch Admin can manage items
-router.post("/", requireBranchAdminOrAdmin, createPurchaseItem);
-router.put("/:id", requireBranchAdminOrAdmin, updatePurchaseItem);
-router.delete("/:id", requireBranchAdminOrAdmin, deletePurchaseItem);
+// Admin, Branch Admin, or a cashier granted the Purchase Orders capability
+router.post("/", requireBranchAdminOr(CAPABILITIES.PURCHASE_ORDERS), createPurchaseItem);
+router.put("/:id", requireBranchAdminOr(CAPABILITIES.PURCHASE_ORDERS), updatePurchaseItem);
+router.delete("/:id", requireBranchAdminOr(CAPABILITIES.PURCHASE_ORDERS), deletePurchaseItem);
 
 export default router;
 

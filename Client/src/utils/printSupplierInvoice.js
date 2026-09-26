@@ -17,11 +17,17 @@ export const printSupplierInvoice = (invoice) => {
   const paidToDate = Number(invoice.paidToDate || 0);
   const balance = Math.max(0, +(orderTotal - paidToDate).toFixed(2));
   const isFullyPaid = balance <= 0.005;
+  // Goods taken on credit — nothing has changed hands yet, so this is a
+  // delivery record, not a payment document. Distinct from "partially paid":
+  // that one still has a real payment method to show, this one does not.
+  const isUnpaid = paidToDate <= 0.005;
+
+  const docTitle = isFullyPaid ? "Payment receipt" : isUnpaid ? "Goods received note" : "Payment statement";
 
   const page = `
     <html>
       <head>
-        <title>${isFullyPaid ? "Payment receipt" : "Payment statement"} — PO #${invoice.poId ?? ""}</title>
+        <title>${docTitle} — PO #${invoice.poId ?? ""}</title>
 
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -96,7 +102,7 @@ export const printSupplierInvoice = (invoice) => {
                onerror="this.style.display='none'"
                style="max-width:200px;max-height:70px;object-fit:contain;margin-bottom:8px;" />
           <div class="hotel-name">${invoice.branchName || "Supplier Payment"}</div>
-          <div class="subtitle">${isFullyPaid ? "Payment Receipt" : "Payment Statement — balance still owed"}</div>
+          <div class="subtitle">${isFullyPaid ? "Payment Receipt" : isUnpaid ? "Goods Received — payment pending" : "Payment Statement — balance still owed"}</div>
         </div>
 
         <div class="divider"></div>
@@ -142,15 +148,17 @@ export const printSupplierInvoice = (invoice) => {
             <span>Order total</span>
             <span>${money(orderTotal)}</span>
           </div>
+          ${paidThisTime > 0 ? `
           <div class="row grand-total">
             <span>Paid this time</span>
             <span>${money(paidThisTime)}</span>
-          </div>
+          </div>` : ""}
         </div>
 
+        ${paidThisTime > 0 ? `
         <div class="payment">
           ${(invoice.method || "").replace(/_/g, " ").toUpperCase()}
-        </div>
+        </div>` : ""}
 
         ${isFullyPaid
           ? `<div class="footer"><p>Paid in full — nothing further owed.</p></div>`

@@ -30,11 +30,15 @@ function isValidReason(value) {
 }
 
 function toResponseRow(row) {
+  const qty = parseFloat(row.waste_qty);
+  // No purchase history yet means no known cost — 0, not an error.
+  const unitPrice = row.unit_price != null ? parseFloat(row.unit_price) : 0;
   return {
     waste_id: row.waste_id,
     rm_id: row.rm_id,
     rm_name: row.rm_name,
-    waste_qty: parseFloat(row.waste_qty),
+    waste_qty: qty,
+    waste_value: Math.round(qty * unitPrice * 100) / 100,
     reason: row.reason ?? null,
     recorded_at: row.recorded_at,
   };
@@ -82,7 +86,7 @@ export const createWaste = async (req, res, next) => {
 
     // ── Raw material must exist ──────────────
     const rmCheck = await client.query(
-      'SELECT "rm_id", "rm_name", "stock_qty" FROM "public"."Raw_Material" WHERE "rm_id" = $1',
+      'SELECT "rm_id", "rm_name", "stock_qty", "unit_price" FROM "public"."Raw_Material" WHERE "rm_id" = $1',
       [rm_id],
     );
     if (rmCheck.rows.length === 0) {
@@ -136,6 +140,7 @@ export const createWaste = async (req, res, next) => {
         ...toResponseRow({
           ...wasteResult.rows[0],
           rm_name: rmCheck.rows[0].rm_name,
+          unit_price: rmCheck.rows[0].unit_price,
         }),
         stock_before: currentStock,
         stock_after: newStock,
@@ -161,6 +166,7 @@ export const getAllWaste = async (req, res, next) => {
         w."rm_id",
         rm."rm_name",
         w."waste_qty",
+        rm."unit_price",
         w."reason",
         w."recorded_at"
        FROM "public"."Waste" w
@@ -187,6 +193,7 @@ export const getWastePercentage = async (req, res, next) => {
         rm."unit",
         ROUND(rm."stock_qty", 3)                          AS current_stock,
         COALESCE(ROUND(SUM(w."waste_qty"), 3), 0)         AS total_wasted,
+        ROUND(COALESCE(SUM(w."waste_qty"), 0) * COALESCE(rm."unit_price", 0), 2) AS total_wasted_value,
         CASE
           WHEN (rm."stock_qty" + COALESCE(SUM(w."waste_qty"), 0)) > 0
           THEN ROUND(
@@ -197,7 +204,7 @@ export const getWastePercentage = async (req, res, next) => {
         END AS waste_percentage
        FROM "public"."Raw_Material" rm
        LEFT JOIN "public"."Waste" w ON w."rm_id" = rm."rm_id"
-       GROUP BY rm."rm_id", rm."rm_name", rm."unit", rm."stock_qty"
+       GROUP BY rm."rm_id", rm."rm_name", rm."unit", rm."stock_qty", rm."unit_price"
        ORDER BY waste_percentage DESC`,
     );
 
@@ -225,6 +232,7 @@ export const getWasteById = async (req, res, next) => {
         w."rm_id",
         rm."rm_name",
         w."waste_qty",
+        rm."unit_price",
         w."reason",
         w."recorded_at"
        FROM "public"."Waste" w
@@ -286,7 +294,7 @@ export const updateWaste = async (req, res, next) => {
 
     // ── Fetch existing record ────────────────
     const oldWaste = await client.query(
-      `SELECT w."waste_id", w."rm_id", w."waste_qty", rm."stock_qty", rm."rm_name"
+      `SELECT w."waste_id", w."rm_id", w."waste_qty", rm."stock_qty", rm."rm_name", rm."unit_price"
        FROM "public"."Waste" w
        JOIN "public"."Raw_Material" rm ON rm."rm_id" = w."rm_id"
        WHERE w."waste_id" = $1`,
@@ -340,6 +348,7 @@ export const updateWaste = async (req, res, next) => {
         ...toResponseRow({
           ...result.rows[0],
           rm_name: old.rm_name,
+          unit_price: old.unit_price,
         }),
         stock_before: currentStock,
         stock_after: currentStock - diff,

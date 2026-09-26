@@ -52,7 +52,7 @@ export default function TransactionTable({ data = [], loading = false, pageSize 
         </thead>
         <tbody className="divide-y divide-slate-100 bg-white">
           {paged.map((row) => {
-            const isSale = row.type === "sale" || (row.type === "hotel" && row.direction !== "out");
+            const isSale = row.type === "sale" || row.type === "cod" || (row.type === "hotel" && row.direction !== "out");
             const methodName = String(row.paymentMethod || "").toLowerCase();
             const isCash = methodName.includes("cash");
 

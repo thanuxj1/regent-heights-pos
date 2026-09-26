@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import ToastMessage from "../../components/branch-admin/ToastMessage";
 import { useAuth } from "../../context/AuthContext";
 import {
-  getSuppliers,
+  getSupplierLedger,
   createSupplier,
   getPurchaseOrdersBySupplier,
   getPurchaseItemsByOrder,
@@ -12,11 +12,26 @@ import {
   receivePurchaseOrder,
   recordSupplierPayment,
   getBranchById,
+  getSpendTrend,
 } from "../../services/api";
 import { printSupplierInvoice } from "../../utils/printSupplierInvoice";
+import SpendTrendChart from "../../components/branch-admin/SpendTrendChart";
 
 const money = (v) =>
   `LKR ${Number(v || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+// A fixed palette, picked by a stable hash of the name — the same supplier
+// always gets the same color, without needing to store one.
+const AVATAR_PALETTE = [
+  ["#EEF4FF", "#3538CD"], ["#ECFDF3", "#067647"], ["#FEF6EE", "#B93815"],
+  ["#FDF2FA", "#C11574"], ["#F0F9FF", "#026AA2"], ["#FEF3F2", "#B42318"],
+];
+const avatarColors = (name) => {
+  let h = 0;
+  for (const ch of name || "") h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+};
 
 const METHODS = [
   ["cash", "Cash"],
@@ -69,6 +84,9 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
   // actually moved (never for "receive on credit"), cleared once dismissed.
   const [receipt, setReceipt] = useState(null);
   const [branchName, setBranchName] = useState("");
+  const [trend, setTrend] = useState([]);
+  const [trendMonths, setTrendMonths] = useState(12);
+  const [hasTrendHistory, setHasTrendHistory] = useState(false);
   const recordedBy = [user?.u_fname, user?.u_lname].filter(Boolean).join(" ") || user?.u_email || "";
 
   useEffect(() => {
@@ -79,6 +97,13 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.b_id, user?.B_id]);
+
+  useEffect(() => {
+    getSpendTrend(supplier.sup_id, trendMonths).then((rows) => {
+      setTrend(rows);
+      if (rows.some((t) => t.total > 0)) setHasTrendHistory(true);
+    }).catch(() => setTrend([]));
+  }, [supplier.sup_id, trendMonths]);
 
   const load = async () => {
     setLoading(true);
@@ -134,27 +159,27 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
         });
         showToast(`Payment recorded against order #${order.po_id}`);
       }
-      // An invoice only makes sense when a payment actually happened — not for
-      // goods taken on credit, where nothing has been paid yet to put on paper.
-      if (paid) {
-        setReceipt({
-          branchName,
-          supplierName: supplier.sup_name,
-          supplierContact: supplier.sup_contact,
-          poId: order.po_id,
-          items: order.items.map((i) => ({
-            name: i.pro_id ? i.pro_name : i.rm_name,
-            qty: i.qty,
-            unit: i.pro_id ? "units" : i.rm_unit,
-            lineTotal: i.price,
-          })),
-          orderTotal: order.total,
-          paidThisTime: Number(amount),
-          paidToDate: order.paid + Number(amount),
-          method,
-          recordedBy,
-        });
-      }
+      // Printed either way — goods received on credit still need a paper
+      // record, even with nothing paid yet. printSupplierInvoice itself
+      // decides the document's framing (receipt / statement / goods-received
+      // note) from what was actually paid.
+      setReceipt({
+        branchName,
+        supplierName: supplier.sup_name,
+        supplierContact: supplier.sup_contact,
+        poId: order.po_id,
+        items: order.items.map((i) => ({
+          name: i.pro_id ? i.pro_name : i.rm_name,
+          qty: i.qty,
+          unit: i.pro_id ? "units" : i.rm_unit,
+          lineTotal: i.price,
+        })),
+        orderTotal: order.total,
+        paidThisTime: paid ? Number(amount) : 0,
+        paidToDate: order.paid + (paid ? Number(amount) : 0),
+        method: paid ? method : null,
+        recordedBy,
+      });
       setDialog(null);
       await load();
     } catch (e) {
@@ -248,10 +273,14 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
             background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px",
             boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center",
           }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
-            <h3 style={{ margin: "0 0 6px 0", color: "#101828" }}>Payment recorded</h3>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>{receipt.paidThisTime > 0 ? "✅" : "📦"}</div>
+            <h3 style={{ margin: "0 0 6px 0", color: "#101828" }}>
+              {receipt.paidThisTime > 0 ? "Payment recorded" : "Order received"}
+            </h3>
             <p style={{ fontSize: "14px", color: "#667085", margin: "0 0 20px" }}>
-              {money(receipt.paidThisTime)} paid to {receipt.supplierName} against order #{receipt.poId}.
+              {receipt.paidThisTime > 0
+                ? `${money(receipt.paidThisTime)} paid to ${receipt.supplierName} against order #${receipt.poId}.`
+                : `Order #${receipt.poId} received from ${receipt.supplierName} — nothing paid yet.`}
               {receipt.paidToDate < receipt.orderTotal - 0.005
                 ? ` ${money(receipt.orderTotal - receipt.paidToDate)} still owed.`
                 : " Paid in full."}
@@ -261,7 +290,7 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
                 Done
               </button>
               <button onClick={() => printSupplierInvoice(receipt)} style={{ ...primaryBtn, flex: 1, padding: "10px 16px" }}>
-                🖨️ Print Invoice
+                🖨️ Print
               </button>
             </div>
           </div>
@@ -288,6 +317,15 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
           </div>
         )}
       </div>
+
+      {hasTrendHistory && (
+        <div style={{ marginBottom: "24px" }}>
+          <SpendTrendChart
+            data={trend} title={`Spend with ${supplier.sup_name}`}
+            months={trendMonths} onMonthsChange={setTrendMonths}
+          />
+        </div>
+      )}
 
       <h3 style={{ marginBottom: "16px", color: "#101828", fontSize: "18px" }}>Purchase History</h3>
 
@@ -372,7 +410,22 @@ const SupplierManagement = () => {
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
-  
+  const [searchTerm, setSearchTerm] = useState("");
+  const [balanceFilter, setBalanceFilter] = useState("all"); // all | owed | settled
+  const [sortBy, setSortBy] = useState("name"); // name | balance
+  const [overallTrend, setOverallTrend] = useState([]);
+  const [trendMonths, setTrendMonths] = useState(12);
+  // Sticky once true — switching to a shorter range that happens to be all
+  // zero shouldn't make the whole chart (and its own range control) vanish.
+  const [hasTrendHistory, setHasTrendHistory] = useState(false);
+
+  useEffect(() => {
+    getSpendTrend(undefined, trendMonths).then((rows) => {
+      setOverallTrend(rows);
+      if (rows.some((t) => t.total > 0)) setHasTrendHistory(true);
+    }).catch(() => setOverallTrend([]));
+  }, [trendMonths]);
+
   // New Supplier Modal State
   const [showAddModal, setShowAddModal] = useState(false);
   const [newSupplier, setNewSupplier] = useState({ sup_name: "", sup_contact: "", sup_email: "", sup_address: "" });
@@ -386,7 +439,7 @@ const SupplierManagement = () => {
   const loadSuppliers = async () => {
     setIsLoading(true);
     try {
-      const list = await getSuppliers();
+      const list = await getSupplierLedger();
       setSuppliers(Array.isArray(list) ? list : list?.suppliers || []);
     } catch (e) {
       showToast(errorText(e, "Failed to load suppliers"), "error");
@@ -394,6 +447,21 @@ const SupplierManagement = () => {
       setIsLoading(false);
     }
   };
+
+  const visibleSuppliers = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    let list = !q ? suppliers : suppliers.filter((s) =>
+      [s.sup_name, s.sup_contact, s.sup_address].some((f) => (f || "").toLowerCase().includes(q))
+    );
+    if (balanceFilter === "owed") list = list.filter((s) => Number(s.balance_due) > 0.005);
+    if (balanceFilter === "settled") list = list.filter((s) => Number(s.balance_due) <= 0.005);
+    list = [...list].sort((a, b) => {
+      if (sortBy === "balance") return Number(b.balance_due) - Number(a.balance_due);
+      if (sortBy === "spend") return Number(b.total_purchased) - Number(a.total_purchased);
+      return (a.sup_name || "").localeCompare(b.sup_name || "");
+    });
+    return list;
+  }, [suppliers, searchTerm, balanceFilter, sortBy]);
 
   useEffect(() => {
     loadSuppliers();
@@ -444,6 +512,7 @@ const SupplierManagement = () => {
           />
         )}
         
+
         {/* Add Supplier Modal */}
         {showAddModal && (
           <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}>
@@ -477,7 +546,7 @@ const SupplierManagement = () => {
           </div>
         )}
 
-        <div style={{ padding: "30px", maxWidth: "1200px", margin: "0 auto" }}>
+        <div style={{ padding: "30px", maxWidth: "1600px", margin: "0 auto" }}>
           {selectedSupplier ? (
             <SupplierDetailView
               supplier={selectedSupplier}
@@ -488,52 +557,118 @@ const SupplierManagement = () => {
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px" }}>
                 <div>
-                  <h2 style={{ fontSize: "24px", fontWeight: "700", color: "#101828", margin: "0 0 4px 0" }}>Supplier Directory</h2>
-                  <p style={{ color: "#667085", margin: 0 }}>What you have ordered, what has arrived, and what you still owe.</p>
+                  <h2 style={{ fontSize: "24px", fontWeight: "700", color: "#101828", margin: 0, letterSpacing: "-0.3px" }}>Supplier Directory</h2>
+                  <p style={{ color: "#667085", margin: "2px 0 0", fontSize: "14px" }}>What you have ordered, what has arrived, and what you still owe.</p>
                 </div>
-                <button 
+                <button
                   onClick={() => setShowAddModal(true)}
-                  style={{ background: "#1565C0", color: "#fff", border: "none", padding: "10px 20px", borderRadius: "10px", fontWeight: "600", cursor: "pointer", fontSize: "14px" }}
+                  style={{
+                    background: "linear-gradient(135deg, #1565C0, #0D47A1)", color: "#fff", border: "none",
+                    padding: "11px 22px", borderRadius: "10px", fontWeight: "600", cursor: "pointer", fontSize: "14px",
+                    boxShadow: "0 2px 8px rgba(21,101,192,0.3)",
+                  }}
                 >
                   + Add Supplier
                 </button>
               </div>
 
+              {hasTrendHistory && (
+                <div style={{ marginBottom: "24px" }}>
+                  <SpendTrendChart
+                    data={overallTrend} title="Purchasing Trend"
+                    months={trendMonths} onMonthsChange={setTrendMonths}
+                  />
+                </div>
+              )}
+
+              {!isLoading && suppliers.length > 0 && (
+                <div style={{
+                  display: "flex", gap: "12px", marginBottom: "24px", flexWrap: "wrap",
+                  background: "#fff", padding: "16px", borderRadius: "14px", border: "1px solid #EAECF0",
+                }}>
+                  <input
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="🔍  Search by name, phone, or location…"
+                    style={{ ...field, flex: "1 1 260px", border: "1px solid #EAECF0", background: "#F9FAFB" }}
+                  />
+                  <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} style={{ ...field, flex: "0 0 170px", border: "1px solid #EAECF0", background: "#F9FAFB" }}>
+                    <option value="all">All suppliers</option>
+                    <option value="owed">Has balance due</option>
+                    <option value="settled">Settled</option>
+                  </select>
+                  <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ ...field, flex: "0 0 170px", border: "1px solid #EAECF0", background: "#F9FAFB" }}>
+                    <option value="name">Sort: Name A–Z</option>
+                    <option value="spend">Sort: Highest spend</option>
+                    <option value="balance">Sort: Balance high→low</option>
+                  </select>
+                </div>
+              )}
+
               {isLoading ? (
                 <p>Loading suppliers...</p>
               ) : suppliers.length === 0 ? (
                 <p style={{ color: "#667085" }}>No suppliers yet. Click "+ Add Supplier" to create one.</p>
+              ) : visibleSuppliers.length === 0 ? (
+                <p style={{ color: "#667085" }}>No suppliers match "{searchTerm}".</p>
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "20px" }}>
-                  {suppliers.map((sup) => (
-                    <div
-                      key={sup.sup_id}
-                      onClick={() => setSelectedSupplier(sup)}
-                      style={{
-                        background: "#fff", padding: "24px", borderRadius: "16px",
-                        border: "1px solid #E4E7EC", cursor: "pointer", transition: "all 0.2s"
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#1565C0"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.05)" }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#E4E7EC"; e.currentTarget.style.boxShadow = "none" }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                  {visibleSuppliers.map((sup) => {
+                    const [bg, fg] = avatarColors(sup.sup_name);
+                    const owed = Number(sup.balance_due) > 0.005;
+                    return (
+                      <div
+                        key={sup.sup_id}
+                        onClick={() => setSelectedSupplier(sup)}
+                        style={{
+                          background: "#fff", borderRadius: "16px", border: "1px solid #EAECF0",
+                          cursor: "pointer", transition: "transform 0.15s, box-shadow 0.15s", overflow: "hidden",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 12px 24px rgba(16,24,40,0.08)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
+                      >
+                        <div style={{ padding: "20px 24px 16px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+                            <div style={{
+                              width: "44px", height: "44px", borderRadius: "50%", background: bg, color: fg,
+                              display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px",
+                              fontWeight: 700, flexShrink: 0,
+                            }}>
+                              {initials(sup.sup_name)}
+                            </div>
+                            <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#101828", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {sup.sup_name}
+                            </h3>
+                          </div>
+                        </div>
+                        <div style={{ padding: "0 24px 16px", fontSize: "13.5px", color: "#475467", display: "flex", flexDirection: "column", gap: "7px" }}>
+                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                            <span style={{ opacity: 0.6 }}>📞</span> <span>{sup.sup_contact}</span>
+                          </div>
+                          {sup.sup_email && (
+                            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                              <span style={{ opacity: 0.6 }}>📧</span> <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.sup_email}</span>
+                            </div>
+                          )}
+                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                            <span style={{ opacity: 0.6 }}>📍</span> <span>{sup.sup_address || "No address provided"}</span>
+                          </div>
+                        </div>
                         <div style={{
-                          width: "40px", height: "40px", borderRadius: "10px", background: "#EEF2FF",
-                          display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px"
+                          padding: "12px 24px", borderTop: "1px solid #F2F4F7",
+                          background: owed ? "#FFFBFA" : "#F9FFFB",
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
                         }}>
-                          🏢
-                        </div>
-                        <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "#101828" }}>{sup.sup_name}</h3>
-                      </div>
-                      <div style={{ fontSize: "14px", color: "#475467", display: "flex", flexDirection: "column", gap: "8px" }}>
-                        <div style={{ display: "flex", gap: "8px" }}>📞 <span>{sup.sup_contact}</span></div>
-                        {sup.sup_email && <div style={{ display: "flex", gap: "8px" }}>📧 <span>{sup.sup_email}</span></div>}
-                        <div style={{ display: "flex", gap: "8px" }}>
-                          📍 <span style={{ fontSize: "12px" }}>{sup.sup_address || "No address provided"}</span>
+                          <span style={{ fontSize: "12px", color: "#667085", fontWeight: 600 }}>
+                            {owed ? "Balance due" : "Account status"}
+                          </span>
+                          <span style={{ fontSize: "13px", fontWeight: 700, color: owed ? "#B42318" : "#067647" }}>
+                            {owed ? money(sup.balance_due) : "Settled ✓"}
+                          </span>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </>

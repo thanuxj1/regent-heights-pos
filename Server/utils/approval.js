@@ -13,8 +13,8 @@ import bcrypt from "bcryptjs";
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
 
-/** Discounts above this need a manager. Below it, the cashier's own judgement. */
-export const DISCOUNT_APPROVAL_PCT = 10;
+/** Discounts above this need a manager. 0 means every discount needs one. */
+export const DISCOUNT_APPROVAL_PCT = 0;
 
 /** Roles whose PIN can authorise something. */
 const APPROVER_ROLES = [ROLES.BRANCH_ADMIN, ROLES.ADMIN, ROLES.SUPER_ADMIN];

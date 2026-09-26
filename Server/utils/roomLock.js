@@ -80,3 +80,36 @@ export async function roomClash(client, roomIds, checkIn, checkOut, ignoreBookin
   );
   return rows.length ? rows[0].room_number : null;
 }
+
+/**
+ * How many rooms of this type are free over [checkIn, checkOut)? For a room
+ * requested by type only (no room_id — the normal case now that a room is
+ * assigned at check-in, not at booking), roomClash/lockRooms above never run,
+ * so nothing else checks that this many rooms of the type actually exist and
+ * are free. `ignoreBookingId` excludes a booking's own current rooms when
+ * re-checking availability while editing it.
+ */
+export async function countFreeRoomsOfType(client, { b_id, room_type_id, checkIn, checkOut, ignoreBookingId }) {
+  // Free = total active rooms of the type, minus how many BOOKING_ROOM slots
+  // of that type already overlap these dates — counted by type, not by
+  // joining through a specific room_id. A type-only reservation (room_id
+  // still null) occupies a slot exactly as much as an assigned one does, but
+  // `br.room_id = r.room_id` can never match a null room_id, so counting via
+  // ROOM would silently ignore every type-only booking already on the books.
+  const { rows } = await client.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM "ROOM" r
+         WHERE r.b_id = $1 AND r.room_type_id = $2 AND r.is_active = TRUE
+           AND r.hk_status NOT IN ('out_of_order','maintenance'))
+       -
+       (SELECT COUNT(*)::int FROM "BOOKING_ROOM" br
+          JOIN "BOOKING" b ON b.booking_id = br.booking_id
+         WHERE br.room_type_id = $2 AND b.b_id = $1
+           AND b.status = ANY($6::text[])
+           AND ($5::int IS NULL OR b.booking_id <> $5::int)
+           AND b.check_in_date < $4::date AND ${effectiveCheckout("b")} > $3::date)
+       AS n`,
+    [Number(b_id), Number(room_type_id), checkIn, checkOut, ignoreBookingId ?? null, ACTIVE]
+  );
+  return rows[0].n;
+}

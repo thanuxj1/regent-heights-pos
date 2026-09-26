@@ -1,7 +1,8 @@
 import express from "express";
 import {
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr,
+  CAPABILITIES,
 } from "../middleware/authMiddleware.js";
 import {
   getProducts,
@@ -14,7 +15,7 @@ import {
 const router = express.Router();
 
 router.use(requireAuth);
-router.use(requireBranchAdminOrAdmin);
+router.use(requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU));
 
 router.get("/", getProducts);
 router.get("/:id", getProductById);

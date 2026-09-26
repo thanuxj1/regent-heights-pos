@@ -1,5 +1,5 @@
 import express from "express";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
   getRecipes,
   getRecipeById,
@@ -14,7 +14,7 @@ import {
 const router = express.Router();
 
 router.use(requireAuth);
-router.use(requireBranchAdminOrAdmin);
+router.use(requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU));
 
 // ── Static routes first (before /:id) ────────
 router.get("/product/:pro_id", getRecipesByProduct);

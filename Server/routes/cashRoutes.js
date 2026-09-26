@@ -3,7 +3,7 @@ import {
   getCurrentSession, openSession, addMovement, closeSession,
   listSessions, getSession, getDrawerPinSetting, setDrawerPinSetting,
 } from "../controllers/cashSessionController.js";
-import { requireAuth, requireRole, ROLES } from "../middleware/authMiddleware.js";
+import { requireAuth, requireRole, requireBranchAdminOr, CAPABILITIES, ROLES } from "../middleware/authMiddleware.js";
 import { requireDrawerPin } from "../utils/drawerPin.js";
 
 const router = express.Router();
@@ -15,10 +15,7 @@ const worksATill = requireRole(
 );
 
 /** Reviewing everyone's drawers is the owner's job, not the cashier's. */
-const reviewsDrawers = requireRole(
-  [ROLES.BRANCH_ADMIN, ROLES.ADMIN],
-  "Branch Admin or Admin",
-);
+const reviewsDrawers = requireBranchAdminOr(CAPABILITIES.CASH_DRAWER_ADMIN);
 
 router.use(requireAuth);
 

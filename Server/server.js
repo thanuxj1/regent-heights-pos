@@ -24,6 +24,7 @@ import authRoutes from "./routes/authRoutes.js";
 
 // User Management
 import userRoutes from "./routes/userRoutes.js";
+import userCapabilityRoutes from "./routes/userCapabilityRoutes.js";
 import roleRoutes from "./routes/roleRoutes.js";
 
 // Company & Branch
@@ -65,6 +66,8 @@ import discountRoutes from "./routes/discountRoutes.js";
 
 // Delivery & Terminals
 import deliveryRoutes from "./routes/deliveryRoutes.js";
+import deliveryCodRoutes from "./routes/deliveryCodRoutes.js";
+import deliveryPartnerRoutes from "./routes/deliveryPartnerRoutes.js";
 import terminalRoutes from "./routes/terminalRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 
@@ -151,6 +154,12 @@ app.get("/api/health", async (req, res) => {
 app.use("/api/auth", authRoutes);
 
 // -- User Management
+// userCapabilityRoutes must be mounted before userRoutes: it owns the narrow
+// "/users/:id/capabilities" path and lets a person read their own grants,
+// but userRoutes.js's blanket router.use() guard (Branch Admin/Admin or
+// USER_MANAGEMENT) covers everything under "/api/users" and would 403 that
+// self-read before it ever reached this router if userRoutes went first.
+app.use("/api", userCapabilityRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/roles", roleRoutes);
 
@@ -191,6 +200,8 @@ app.use("/api/discounts", discountRoutes);
 
 // -- Delivery & Terminals
 app.use("/api/deliveries", deliveryRoutes);
+app.use("/api/delivery-cod", deliveryCodRoutes);
+app.use("/api/delivery-partners", deliveryPartnerRoutes);
 app.use("/api/terminals", terminalRoutes);
 
 

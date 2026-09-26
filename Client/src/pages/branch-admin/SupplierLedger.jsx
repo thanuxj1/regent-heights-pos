@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import ToastMessage from "../../components/branch-admin/ToastMessage";
@@ -14,6 +14,8 @@ const SupplierLedger = () => {
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sort, setSort] = useState({ key: "sup_name", dir: "asc" });
 
   // Modal State
   const [selectedSupplier, setSelectedSupplier] = useState(null);
@@ -72,6 +74,26 @@ const SupplierLedger = () => {
     setToast({ show: true, message, type });
     setTimeout(() => setToast((t) => ({ ...t, show: false })), 3000);
   };
+
+  const toggleSort = (key) => setSort((s) => ({
+    key, dir: s.key === key && s.dir === "asc" ? "desc" : "asc",
+  }));
+
+  const visibleSuppliers = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    const filtered = !q ? suppliers : suppliers.filter((s) => (s.sup_name || "").toLowerCase().includes(q));
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      if (sort.key === "sup_name") return dir * String(a.sup_name || "").localeCompare(String(b.sup_name || ""));
+      return dir * (Number(a[sort.key]) - Number(b[sort.key]));
+    });
+  }, [suppliers, searchTerm, sort]);
+
+  const totals = useMemo(() => suppliers.reduce((acc, s) => ({
+    purchased: acc.purchased + Number(s.total_purchased || 0),
+    paid: acc.paid + Number(s.total_paid || 0),
+    owed: acc.owed + Number(s.balance_due || 0),
+  }), { purchased: 0, paid: 0, owed: 0 }), [suppliers]);
 
   const handleRowClick = async (sup) => {
     setSelectedSupplier(sup);
@@ -181,7 +203,12 @@ const SupplierLedger = () => {
   };
 
   // --- STYLES ---
-  const containerStyle = { padding: "30px", maxWidth: "1200px", margin: "0 auto", fontFamily: "'Inter', sans-serif" };
+  // width: "100%" matters here, not just maxWidth — this div is a flex item
+  // inside a flex-column parent, and margin:auto on a flex item overrides the
+  // default stretch behavior. Without an explicit width it shrinks to fit its
+  // own content instead of filling out to maxWidth, so the page reads as
+  // narrow no matter what maxWidth says.
+  const containerStyle = { padding: "30px", maxWidth: "1600px", width: "100%", boxSizing: "border-box", margin: "0 auto", fontFamily: "'Inter', sans-serif" };
   const cardStyle = { background: "#fff", borderRadius: "12px", boxShadow: "0 2px 10px rgba(0,0,0,0.05)", overflow: "hidden" };
   const headerStyle = { padding: "20px 24px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" };
   const thStyle = { padding: "16px 24px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "#64748B", textTransform: "uppercase", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" };
@@ -191,8 +218,16 @@ const SupplierLedger = () => {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", backgroundColor: "#F1F5F9" }}>
+      <style>{`
+        @keyframes supplierDrawerIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+      `}</style>
       <Sidebar />
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      {/* Sidebar is position:fixed (see Sidebar.jsx) — every other page offsets
+          with marginLeft: var(--sidebar-w), this one never had it, so content
+          rendered underneath the sidebar. Only looked fine before because the
+          content was accidentally shrink-wrapped narrow enough to center past
+          the overlap by luck, not because this was actually correct. */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", marginLeft: "var(--sidebar-w, 240px)" }}>
         <Header />
         
         {toast.show && <ToastMessage message={toast.message} type={toast.type} onClose={() => setToast({ show: false })} />}
@@ -205,9 +240,37 @@ const SupplierLedger = () => {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "24px", alignItems: "flex-start" }}>
-            {/* Left Side: Supplier List */}
-            <div style={{ ...cardStyle, flex: selectedSupplier ? 1 : '1 1 100%', transition: "all 0.3s" }}>
+          {!loading && suppliers.length > 0 && (
+            <div style={{ display: "flex", gap: "16px", marginBottom: "20px", flexWrap: "wrap" }}>
+              {[
+                ["Total Purchases", totals.purchased, "#1E293B"],
+                ["Total Paid", totals.paid, "#16A34A"],
+                ["Total Owed", totals.owed, totals.owed > 0.005 ? "#DC2626" : "#16A34A"],
+              ].map(([label, val, color]) => (
+                <div key={label} style={{ ...cardStyle, flex: "1 1 180px", padding: "16px 20px" }}>
+                  <div style={{ fontSize: "12px", color: "#64748B", fontWeight: 600, textTransform: "uppercase" }}>{label}</div>
+                  <div style={{ fontSize: "20px", fontWeight: 700, color, marginTop: 4 }}>
+                    {val.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && suppliers.length > 0 && (
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search suppliers by name…"
+              style={{ ...inputStyle, width: "100%", maxWidth: 360, marginBottom: 16, display: "block" }}
+            />
+          )}
+
+          <div>
+            {/* The supplier list always uses the full width now — the detail
+                view opens as a drawer over it instead of squeezing it down,
+                so a wide screen doesn't sit half-empty when nothing's selected. */}
+            <div style={cardStyle}>
               <div style={headerStyle}>
                 <h3 style={{ margin: 0, fontSize: "16px", color: "#1E293B" }}>All Suppliers</h3>
               </div>
@@ -217,14 +280,20 @@ const SupplierLedger = () => {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      <th style={thStyle}>Supplier Name</th>
-                      <th style={thStyle}>Total Purchases</th>
-                      <th style={thStyle}>Total Paid</th>
-                      <th style={thStyle}>Balance Due</th>
+                      {[
+                        ["sup_name", "Supplier Name"],
+                        ["total_purchased", "Total Purchases"],
+                        ["total_paid", "Total Paid"],
+                        ["balance_due", "Balance Due"],
+                      ].map(([key, label]) => (
+                        <th key={key} onClick={() => toggleSort(key)} style={{ ...thStyle, cursor: "pointer", userSelect: "none" }}>
+                          {label}{sort.key === key ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {suppliers.map(sup => {
+                    {visibleSuppliers.map(sup => {
                       const balance = Number(sup.balance_due);
                       return (
                         <tr 
@@ -244,8 +313,18 @@ const SupplierLedger = () => {
                           </td>
                           <td style={tdStyle}>{Number(sup.total_purchased).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td style={tdStyle}>{Number(sup.total_paid).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                          <td style={{ ...tdStyle, fontWeight: "700", color: balance > 0 ? "#DC2626" : "#16A34A" }}>
-                            {balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          <td style={tdStyle}>
+                            {balance > 0.005 ? (
+                              <span style={{ background: "#FEF3F2", color: "#B42318", fontSize: "12px", fontWeight: 700,
+                                padding: "4px 10px", borderRadius: "999px", whiteSpace: "nowrap" }}>
+                                {balance.toLocaleString(undefined, { minimumFractionDigits: 2 })} owed
+                              </span>
+                            ) : (
+                              <span style={{ background: "#ECFDF3", color: "#067647", fontSize: "12px", fontWeight: 700,
+                                padding: "4px 10px", borderRadius: "999px", whiteSpace: "nowrap" }}>
+                                Settled
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -255,24 +334,72 @@ const SupplierLedger = () => {
                         <td colSpan="4" style={{ padding: "40px", textAlign: "center", color: "#64748B" }}>No suppliers found.</td>
                       </tr>
                     )}
+                    {suppliers.length > 0 && visibleSuppliers.length === 0 && (
+                      <tr>
+                        <td colSpan="4" style={{ padding: "40px", textAlign: "center", color: "#64748B" }}>No suppliers match "{searchTerm}".</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               )}
             </div>
 
-            {/* Right Side: Supplier Details & History */}
+            {/* Supplier Details & History — a drawer over the table, not a
+                second column, so the table itself never has to shrink. */}
             {selectedSupplier && (
-              <div style={{ ...cardStyle, flex: 1, position: "sticky", top: "24px" }}>
-                <div style={headerStyle}>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "18px", color: "#1E293B" }}>{selectedSupplier.sup_name}</h3>
-                    <p style={{ margin: "4px 0 0 0", color: "#64748B", fontSize: "13px" }}>
-                      Current Balance: <strong style={{ color: Number(selectedSupplier.balance_due) > 0 ? "#DC2626" : "#16A34A" }}>LKR {Number(suppliers.find(s => s.sup_id === selectedSupplier.sup_id)?.balance_due || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
-                    </p>
+              <div onClick={() => setSelectedSupplier(null)} style={{
+                position: "fixed", inset: 0, background: "rgba(15,23,42,0.4)", zIndex: 900,
+              }} />
+            )}
+            {selectedSupplier && (
+              <div style={{
+                position: "fixed", top: 0, right: 0, height: "100vh", width: "min(460px, 100vw)",
+                background: "#fff", zIndex: 901, boxShadow: "-12px 0 32px rgba(0,0,0,0.15)",
+                overflowY: "auto", animation: "supplierDrawerIn 0.22s ease-out",
+              }}>
+                <div style={{
+                  padding: "24px", background: "linear-gradient(135deg, #1565C0, #0D47A1)", color: "#fff",
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                      <div style={{
+                        width: 44, height: 44, borderRadius: "12px", background: "rgba(255,255,255,0.15)",
+                        display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", flexShrink: 0,
+                      }}>
+                        🏢
+                      </div>
+                      <div>
+                        <h3 style={{ margin: 0, fontSize: "18px", fontWeight: 700 }}>{selectedSupplier.sup_name}</h3>
+                        <div style={{ fontSize: "12px", opacity: 0.75, marginTop: 2 }}>{selectedSupplier.sup_contact}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => setSelectedSupplier(null)} style={{
+                      background: "rgba(255,255,255,0.15)", border: "none", width: 28, height: 28, borderRadius: "50%",
+                      fontSize: "16px", cursor: "pointer", color: "#fff", lineHeight: 1,
+                    }}>×</button>
                   </div>
-                  <button onClick={() => setSelectedSupplier(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#94A3B8" }}>×</button>
+                  {(() => {
+                    const bal = Number(suppliers.find(s => s.sup_id === selectedSupplier.sup_id)?.balance_due || 0);
+                    return (
+                      <div style={{ marginTop: "18px" }}>
+                        <div style={{ fontSize: "11px", opacity: 0.75, textTransform: "uppercase", letterSpacing: "0.5px", fontWeight: 600 }}>
+                          Current Balance
+                        </div>
+                        <div style={{ fontSize: "26px", fontWeight: 700, marginTop: 2 }}>
+                          LKR {bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </div>
+                        <span style={{
+                          display: "inline-block", marginTop: "6px", fontSize: "11px", fontWeight: 700,
+                          padding: "3px 10px", borderRadius: "999px",
+                          background: bal > 0.005 ? "rgba(220,38,38,0.25)" : "rgba(22,163,74,0.25)",
+                        }}>
+                          {bal > 0.005 ? "Balance owed" : "Settled"}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
-                
+
                 <div style={{ padding: "24px", borderBottom: "1px solid #E2E8F0", background: "#F8FAFC" }}>
                   <h4 style={{ margin: "0 0 16px 0", fontSize: "14px", color: "#334155" }}>Make a Payment</h4>
                   {outstandingLoading ? (

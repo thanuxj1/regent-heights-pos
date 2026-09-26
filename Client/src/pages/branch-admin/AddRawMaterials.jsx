@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Carrot, Package, SprayCan, Plus, Truck, Wallet, CircleAlert, LoaderCircle } from "lucide-react";
 import PurchaseItemRow from "../../components/branch-admin/PurchaseItemRow";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import ToastMessage from "../../components/branch-admin/ToastMessage";
 import { useAuth } from "../../context/AuthContext";
+import { printSupplierInvoice } from "../../utils/printSupplierInvoice";
 
 // The units the server accepts for a raw material.
 const VALID_UNITS = ["kg", "g", "mg", "l", "ml", "pcs", "units", "dozen", "box", "pack", "bag", "bottle", "can"];
@@ -167,18 +169,35 @@ select.ai-input{padding-right:6px}
 
 const AddRawMaterials = () => {
   const { user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Arrived here via "Reorder" on the Inventory page — Inventory Dashboard.jsx
+  // passes the item's name/unit/category so the row is ready to fill in a
+  // quantity and price, instead of retyping what's already known.
+  const reorderFrom = location.state?.reorder || null;
 
   // "ingredient" = raw material, "product" = resale product, "supply" = hotel supplies
-  const [itemType, setItemType] = useState("ingredient");
+  const [itemType, setItemType] = useState(reorderFrom?.itemType || "ingredient");
 
   // Each tab keeps its own rows, so switching tabs never loses or mixes up work.
-  const [rowsByType, setRowsByType] = useState({
-    ingredient: [blankMaterial()],
-    product: [blankProduct()],
-    supply: [blankMaterial()],
+  const [rowsByType, setRowsByType] = useState(() => {
+    const prefilled = reorderFrom ? { ...blankMaterial(), rm_name: reorderFrom.name, unit: reorderFrom.unit } : null;
+    const startType = reorderFrom?.itemType || "ingredient";
+    return {
+      ingredient: startType === "ingredient" && prefilled ? [prefilled] : [blankMaterial()],
+      product: [blankProduct()],
+      supply: startType === "supply" && prefilled ? [prefilled] : [blankMaterial()],
+    };
   });
   const rows = rowsByType[itemType];
-  const [focusKey, setFocusKey] = useState(null);
+  const [focusKey, setFocusKey] = useState(reorderFrom ? rowsByType[reorderFrom.itemType || "ingredient"][0].key : null);
+
+  // Consume the reorder prefill once — a later refresh or back-navigation to
+  // this same history entry shouldn't keep re-triggering it.
+  useEffect(() => {
+    if (reorderFrom) navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [availableProducts, setAvailableProducts] = useState([]);
   const [availableMaterials, setAvailableMaterials] = useState([]);
@@ -199,6 +218,9 @@ const AddRawMaterials = () => {
   const [attempted, setAttempted] = useState(false);
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
   const [isSaving, setIsSaving] = useState(false);
+  // A dismissible confirmation after save — optional, never blocks the next
+  // line item from being typed the way a required modal would.
+  const [receipt, setReceipt] = useState(null);
 
   // --- network helpers ---
   const fetchWithAuth = (url, opts = {}) => {
@@ -797,6 +819,26 @@ const AddRawMaterials = () => {
         "success",
       );
 
+      // Optional, dismissible — printSupplierInvoice itself picks the right
+      // framing (paid / partial / goods-received-on-credit) from the amounts.
+      setReceipt({
+        branchName: branchCandidate?.B_name || "",
+        supplierName: supplier.sup_name,
+        supplierContact: supplier.sup_contact,
+        poId,
+        items: validation.filled.map((row) => ({
+          name: itemType === "product" ? row.pro_name : row.rm_name,
+          qty: Number(row.qty),
+          unit: itemType === "product" ? "units" : row.unit,
+          lineTotal: cents(Number(row.qty) * Number(row.unit_price)) / 100,
+        })),
+        orderTotal: totalCents / 100,
+        paidThisTime: paidCents / 100,
+        paidToDate: paidCents / 100,
+        method: paidCents > 0 ? paymentMethod : null,
+        recordedBy: [user?.u_fname, user?.u_lname].filter(Boolean).join(" ") || user?.u_email || "",
+      });
+
       setRowsByType((prev) => ({ ...prev, [itemType]: [blankFor(itemType)] }));
       setFocusKey(null);
       setPaymentAmount("");
@@ -827,6 +869,42 @@ const AddRawMaterials = () => {
       <style>{STYLES}</style>
       <Sidebar />
       {toast.show && <ToastMessage message={toast.message} type={toast.type} onClose={closeToast} />}
+      {receipt && (
+        <div style={{
+          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex",
+          alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)",
+        }}>
+          <div style={{
+            background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px",
+            boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center",
+          }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>{receipt.paidThisTime > 0 ? "✅" : "📦"}</div>
+            <h3 style={{ margin: "0 0 6px 0", color: "#101828" }}>
+              {receipt.paidThisTime > 0 ? "Purchase saved & paid" : "Purchase saved"}
+            </h3>
+            <p style={{ fontSize: "14px", color: "#667085", margin: "0 0 20px" }}>
+              Order #{receipt.poId} from {receipt.supplierName} — {money(receipt.orderTotal * 100)}.
+              {receipt.paidThisTime > 0
+                ? receipt.paidThisTime >= receipt.orderTotal - 0.005 ? " Paid in full." : ` ${money((receipt.orderTotal - receipt.paidThisTime) * 100)} still owed.`
+                : " Nothing paid yet — on credit."}
+            </p>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button onClick={() => setReceipt(null)} style={{
+                flex: 1, padding: "10px 16px", borderRadius: 10, border: "1px solid #D0D5DD",
+                background: "#fff", color: "#344054", fontWeight: 600, cursor: "pointer",
+              }}>
+                Done
+              </button>
+              <button onClick={() => printSupplierInvoice(receipt)} style={{
+                flex: 1, padding: "10px 16px", borderRadius: 10, border: "none",
+                background: "#155EEF", color: "#fff", fontWeight: 600, cursor: "pointer",
+              }}>
+                🖨️ Print
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ flex: 1, minWidth: 0, marginLeft: "var(--sidebar-w, 240px)" }}>
         <Header title="Inventory Items" role="Branch Admin" />
         <main

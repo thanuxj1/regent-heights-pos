@@ -1,6 +1,6 @@
 import { Router } from "express";
 import {
-  requireAuth, requireBranchAdminOrAdmin, requireCashierOrAbove,
+  requireAuth, requireBranchAdminOr, CAPABILITIES, requireCashierOrAbove,
 } from "../middleware/authMiddleware.js";
 import {
   getRoomTypes, getRoomTypeById, createRoomType, updateRoomType, deleteRoomType,
@@ -8,7 +8,7 @@ import {
   getRooms, createRoom, updateRoom, deleteRoom,
 } from "../controllers/roomController.js";
 import {
-  getGuests, createGuest, updateGuest,
+  getGuests, getGuestById, createGuest, updateGuest,
   getAvailability, getBookings, getBookingById, createBooking, updateBooking, cancelBooking,
   checkIn, checkOut, getFolio, postFolioItem, deleteFolioItem, addPayment,
   getDashboard, getConfirmation, getStayPolicy, updateStayPolicy,
@@ -16,6 +16,9 @@ import {
 import {
   getRoomGrid, getGuestHistory, getGuestDirectory, createRoomServiceOrder, chargeOrderToRoom,
 } from "../controllers/frontDeskController.js";
+import {
+  getMealPlans, createMealPlan, updateMealPlan, getMealPlanStats,
+} from "../controllers/mealPlanController.js";
 
 const router = Router();
 
@@ -35,23 +38,31 @@ router.use(requireAuth, requireCashierOrAbove);
 // ─── Property setup — the owner defines it, everyone else reads it ───────────
 router.get("/room-types",        getRoomTypes);
 router.get("/room-types/:id",    getRoomTypeById);
-router.post("/room-types",       requireBranchAdminOrAdmin, createRoomType);
-router.put("/room-types/:id",    requireBranchAdminOrAdmin, updateRoomType);
-router.delete("/room-types/:id", requireBranchAdminOrAdmin, deleteRoomType);
+router.post("/room-types",       requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), createRoomType);
+router.put("/room-types/:id",    requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), updateRoomType);
+router.delete("/room-types/:id", requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), deleteRoomType);
 
 // The facilities a room type can be ticked with: the property's own list.
 router.get("/room-facilities",        getRoomFacilities);
-router.post("/room-facilities",       requireBranchAdminOrAdmin, createRoomFacility);
-router.delete("/room-facilities/:id", requireBranchAdminOrAdmin, deleteRoomFacility);
+router.post("/room-facilities",       requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), createRoomFacility);
+router.delete("/room-facilities/:id", requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), deleteRoomFacility);
+
+// Meal plan categories (RO/BB/HB/FB, or whatever a property adds) — a
+// front-desk user reads this to offer a choice at check-in; only a
+// manager defines what the choices are and what they cost.
+router.get("/meal-plans",           getMealPlans);
+router.get("/meal-plans/:id/stats", getMealPlanStats);
+router.post("/meal-plans",          requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), createMealPlan);
+router.put("/meal-plans/:id",       requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), updateMealPlan);
 
 router.get("/rooms",        getRooms);
-router.post("/rooms",       requireBranchAdminOrAdmin, createRoom);
+router.post("/rooms",       requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), createRoom);
 router.put("/rooms/:id",    updateRoom);        // housekeeping status is front-desk work
-router.delete("/rooms/:id", requireBranchAdminOrAdmin, deleteRoom);
+router.delete("/rooms/:id", requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), deleteRoom);
 
 // House rules decide what guests are charged, so only the owner may change them.
 router.get("/policy",       getStayPolicy);
-router.put("/policy",       requireBranchAdminOrAdmin, updateStayPolicy);
+router.put("/policy",       requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), updateStayPolicy);
 
 // Meal plan routes removed — meal plan module has been retired.
 
@@ -60,6 +71,7 @@ router.get("/guest-directory",    getGuestDirectory);
 router.get("/guests",             getGuests);
 router.post("/guests",            createGuest);
 router.get("/guests/:id/history", getGuestHistory);
+router.get("/guests/:id",         getGuestById);
 router.put("/guests/:id",         updateGuest);
 
 // ─── Front desk ──────────────────────────────────────────────────────────────

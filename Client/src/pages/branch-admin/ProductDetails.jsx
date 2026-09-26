@@ -5,6 +5,7 @@ import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { readImageFile } from "../../utils/readImageFile";
 
 const fieldLabel = { fontSize: 12, fontWeight: 600, color: "#64748B" };
 
@@ -148,14 +149,16 @@ const ProductDetails = () => {
 		}));
 	};
 
-	const handleFileUpload = (e) => {
+	const handleFileUpload = async (e) => {
 		const file = e.target.files?.[0];
+		e.target.value = "";
 		if (!file) return;
-		const reader = new FileReader();
-		reader.onload = (ev) => {
-			setForm(prev => ({ ...prev, pro_image: ev.target.result }));
-		};
-		reader.readAsDataURL(file);
+		try {
+			const dataUrl = await readImageFile(file, { maxWidth: 800 });
+			setForm(prev => ({ ...prev, pro_image: dataUrl }));
+		} catch (err) {
+			setError(err.message);
+		}
 	};
 
 	const handleSave = async () => {

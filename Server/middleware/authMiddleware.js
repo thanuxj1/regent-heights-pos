@@ -125,6 +125,110 @@ export async function requireAuth(req, res, next) {
 }
 
 // ─────────────────────────────────────────────
+// GRANTABLE CAPABILITIES
+// A capability is an individual permission an admin can grant to (or revoke
+// from) a specific user, independent of their role_id. Branch Admin/Owner
+// and Super Admin already pass every check below and never need a row in
+// "USER_CAPABILITY" — this exists so a cashier can be handed one specific
+// slice of admin-tier access (e.g. Supplier Management) without promoting
+// them to Branch Admin and handing them everything at once.
+// ─────────────────────────────────────────────
+export const CAPABILITIES = {
+  REPORTS_ACCOUNTING:  { key: "reports_accounting",  label: "Reports & Accounting" },
+  SUPPLIER_MANAGEMENT: { key: "supplier_management", label: "Supplier Management" },
+  PURCHASE_ORDERS:     { key: "purchase_orders",     label: "Purchase Orders" },
+  PRODUCT_MENU:        { key: "product_menu",        label: "Product & Menu Management" },
+  RAW_MATERIALS:       { key: "raw_materials",        label: "Raw Materials & Stock" },
+  HOTEL_MANAGEMENT:    { key: "hotel_management",    label: "Hotel & Room Management" },
+  // hidden: true — real backend exists, but no frontend page anywhere calls
+  // the endpoints it gates, so granting it does nothing today. Kept in this
+  // object (route files still reference these for backend protection) but
+  // filtered out of the grantable catalog so the toggle can't mislead an
+  // admin into thinking it does something. Un-hide once a real page exists.
+  TABLES_MANAGEMENT:   { key: "tables_management",   label: "Tables & Assignments", hidden: true },
+  TERMINALS:           { key: "terminals",            label: "Terminal/Device Management", hidden: true },
+  WASTE_TRACKING:      { key: "waste_tracking",       label: "Waste Tracking" },
+  CASH_DRAWER_ADMIN:   { key: "cash_drawer_admin",    label: "Cash Drawer Administration" },
+  ACTIVITY_LOG:        { key: "activity_log",         label: "Activity Log / Audit" },
+  BRANCH_SETTINGS:     { key: "branch_settings",      label: "Branch Settings" },
+  // Now gates recording a delivery-partner COD settlement (Server/routes/deliveryCodRoutes.js) —
+  // no longer hidden, since that page exists.
+  DELIVERY_MANAGEMENT: { key: "delivery_management",  label: "Delivery Management" },
+  COMMISSION_AGENTS:   { key: "commission_agents",    label: "Commission Agents" },
+  USER_MANAGEMENT:     { key: "user_management",      label: "User Management", sensitive: true },
+  ROLES_MANAGEMENT:    { key: "roles_management",     label: "Roles Management", sensitive: true, hidden: true },
+  SECURITY_SETTINGS:   { key: "security_settings",    label: "Security Settings", sensitive: true, hidden: true },
+  CASHIER_POS_ACCESS:  { key: "cashier_pos_access",   label: "Cashier POS Terminal" },
+};
+
+export const CAPABILITY_LIST = Object.values(CAPABILITIES);
+
+/**
+ * Same shape as statusCache/invalidateUserStatus below, kept as a separate
+ * Map rather than folded in: this one is only ever consulted for cashier-tier
+ * requests hitting a capability-gated route, not on every authenticated
+ * request, so there's no reason to pay its query cost universally.
+ */
+const CAPABILITY_TTL_MS = 30_000;
+const capabilityCache = new Map(); // u_id -> { caps: Set<string>, at }
+
+export function invalidateUserCapabilities(u_id) {
+  capabilityCache.delete(Number(u_id));
+}
+
+async function userCapabilities(u_id) {
+  const now = Date.now();
+  const hit = capabilityCache.get(Number(u_id));
+  if (hit && now - hit.at < CAPABILITY_TTL_MS) return hit.caps;
+
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      'SELECT capability FROM "USER_CAPABILITY" WHERE u_id = $1',
+      [Number(u_id)],
+    ));
+  } catch (err) {
+    // Same philosophy as accountIsLive: a DB blink here should not lock a
+    // granted cashier out of a route they were using seconds ago. Serve the
+    // stale set if we have one; otherwise fail closed (no set = no grants).
+    console.warn(`[AUTH] capability lookup failed for u_id=${u_id}: ${err.message}`);
+    if (hit) return hit.caps;
+    return new Set();
+  }
+  const caps = new Set(rows.map((r) => r.capability));
+  capabilityCache.set(Number(u_id), { caps, at: now });
+  return caps;
+}
+
+/**
+ * Branch Admin/Owner/Super Admin always pass, same as requireBranchAdminOrAdmin.
+ * Anyone else passes only if this specific capability has been granted to
+ * them — independent of role_id, so a cashier can hold exactly one slice of
+ * admin-tier access without being promoted.
+ */
+export function requireBranchAdminOr(capability) {
+  return async (req, res, next) => {
+    const roleId = req.user?.role_id != null ? Number(req.user.role_id) : undefined;
+
+    if (roleId === ROLES.SUPER_ADMIN || roleId === ROLES.BRANCH_ADMIN || roleId === ROLES.ADMIN) {
+      return next();
+    }
+
+    const uId = req.user?.u_id;
+    if (uId == null) {
+      return res.status(403).json({ message: "Your account doesn't have a role assigned yet. Please contact your administrator." });
+    }
+
+    const caps = await userCapabilities(uId);
+    if (caps.has(capability.key)) return next();
+
+    return res.status(403).json({
+      message: `You don't have permission to perform this action. ${capability.label} access is required.`,
+    });
+  };
+}
+
+// ─────────────────────────────────────────────
 // ROLE CONSTANTS
 // ─────────────────────────────────────────────
 export const ROLES = {

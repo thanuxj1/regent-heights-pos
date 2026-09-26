@@ -5,6 +5,8 @@ import express from "express";
 import {
   requireAuth,
   requireRole,
+  requireBranchAdminOr,
+  CAPABILITIES,
   ROLES,
 } from "../middleware/authMiddleware.js";
 
@@ -42,10 +44,7 @@ const canCreateDelivery = requireRole(
 );
 
 // Update — Branch Admin+ can reassign, change status, update ETA
-const canUpdateDelivery = requireRole(
-  [ROLES.BRANCH_ADMIN, ROLES.ADMIN],
-  "Branch Admin or Admin",
-);
+const canUpdateDelivery = requireBranchAdminOr(CAPABILITIES.DELIVERY_MANAGEMENT);
 
 // Delete — Admin only; hard delete of cancelled/failed records
 const canDeleteDelivery = requireRole([ROLES.ADMIN], "Admin");

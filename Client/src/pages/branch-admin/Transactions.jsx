@@ -18,6 +18,8 @@ function ledgerType(reportType) {
   if (reportType.startsWith("Expense")) return "expense";
   if (reportType.startsWith("Commission")) return "commission";
   if (reportType === "Supplier payment") return "purchase";
+  if (reportType === "Waste") return "waste";
+  if (reportType === "Delivery COD Settlement") return "cod";
   return "other";
 }
 
@@ -70,8 +72,10 @@ export default function Transactions() {
             : type === "purchase" ? t.po_id
             : type === "expense" ? t.exp_id
             : type === "commission" ? t.record_id
+            : type === "waste" ? t.waste_id
+            : type === "cod" ? t.settlement_id
             : t.reference;
-          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM" }[type] || "TX";
+          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM", waste: "WASTE", cod: "COD" }[type] || "TX";
 
           return {
             id: `${type}-${invoiceNo ?? i}-${t.at}`,
@@ -113,7 +117,9 @@ export default function Transactions() {
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
       // Room payments count as income; a refund to a guest counts as money out.
-      const moneyIn = t.type === "sale" || (t.type === "hotel" && t.direction !== "out");
+      // A COD settlement is also income — cash a delivery partner was holding
+      // for us, finally landing.
+      const moneyIn = t.type === "sale" || t.type === "cod" || (t.type === "hotel" && t.direction !== "out");
       if (filters.tab === "income" && !moneyIn) return false;
       if (filters.tab === "expense" && moneyIn) return false;
 

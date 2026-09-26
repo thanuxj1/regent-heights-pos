@@ -44,6 +44,13 @@ export function printElement(node, { title = document.title, widthMm = 210, onDo
         max-width: ${widthMm}mm;
         max-height: none !important;
         margin: 0 auto;
+        /* @page below has no margin — this replaces it. A page margin makes
+           Chrome print its own header/footer (page title, URL, date) in the
+           space it opens up; a page with none of its own leaves no room for
+           that, and it goes unprinted instead of announcing this address to
+           a guest reading their bill. */
+        padding: 14mm;
+        box-sizing: border-box;
         overflow: visible !important;
         border: none !important;
         border-radius: 0 !important;
@@ -83,7 +90,7 @@ export function printElement(node, { title = document.title, widthMm = 210, onDo
       tr    { page-break-inside: avoid; }
       thead { display: table-header-group; }
 
-      @page { margin: 14mm; }
+      @page { margin: 0; }
     </style>
   </head>
   <body><div class="printed">${node.outerHTML}</div></body>

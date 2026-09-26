@@ -1,7 +1,8 @@
 import express from "express";
 import {
   requireAuth,
-  requireBranchAdminOrAdmin,
+  requireBranchAdminOr,
+  CAPABILITIES,
   requireAdmin,
 } from "../middleware/authMiddleware.js";
 import {
@@ -19,13 +20,13 @@ router.use(requireAuth);
 
 // ── Static routes first ───────────────────────
 // Dashboard summary — Admin and Branch Admin can view
-router.get("/percentage", requireBranchAdminOrAdmin, getWastePercentage);
+router.get("/percentage", requireBranchAdminOr(CAPABILITIES.WASTE_TRACKING), getWastePercentage);
 
 // ── Standard CRUD ─────────────────────────────
 // Branch Admin and above can view and record waste (it happens at branch level)
-router.get("/", requireBranchAdminOrAdmin, getAllWaste);
-router.get("/:id", requireBranchAdminOrAdmin, getWasteById);
-router.post("/", requireBranchAdminOrAdmin, createWaste);
+router.get("/", requireBranchAdminOr(CAPABILITIES.WASTE_TRACKING), getAllWaste);
+router.get("/:id", requireBranchAdminOr(CAPABILITIES.WASTE_TRACKING), getWasteById);
+router.post("/", requireBranchAdminOr(CAPABILITIES.WASTE_TRACKING), createWaste);
 
 // Only Admin can edit or delete waste records (audit integrity)
 router.put("/:id", requireAdmin, updateWaste);

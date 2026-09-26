@@ -4,7 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   FaTachometerAlt, FaChevronDown, FaChartLine, FaSignOutAlt,
   FaConciergeBell, FaBed, FaAngleDoubleLeft, FaAngleDoubleRight,
-  FaCashRegister,
+  FaCashRegister, FaTrash,
 } from "react-icons/fa";
 import { useAuth } from "../../context/AuthContext";
 import { colors, sidebar as S, radius, font } from "../../theme";
@@ -33,6 +33,7 @@ const ADMIN_NAV = [
       ["Guests",               "/hotel/guests"],
       ["Rooms & Housekeeping", "/hotel/rooms"],
       ["Room Types & Rates",   "/hotel/room-types"],
+      ["Meal Plan Categories", "/hotel/meal-plans"],
     ],
   },
   {
@@ -45,6 +46,8 @@ const ADMIN_NAV = [
       ["Kitchen Orders",     "/branch-admin/kitchen-orders"],
       ["Inventory",          "/branch-admin/inventory"],
       ["Add Inventory Item", "/branch-admin/raw-ingredient"],
+      ["Waste Tracking",     "/branch-admin/waste"],
+      ["Delivery COD",       "/branch-admin/delivery-cod"],
       ["Suppliers",          "/branch-admin/suppliers"],
       ["Supplier Ledger",    "/branch-admin/supplier-ledger"],
       ["Recipe Mapper",      "/branch-admin/recipe-mapper"],
@@ -133,15 +136,41 @@ function SideLink({ to, icon: Icon, label, active, collapsed, hovered, setHovere
   );
 }
 
+// Extra nav a cashier gains when a manager hands them supply-page access,
+// without touching the base CASHIER_NAV that every cashier gets by default.
+const CASHIER_SUPPLIES_GROUP = {
+  id: "supplies",
+  label: "Supplies",
+  icon: FaConciergeBell,
+  items: [
+    ["Inventory",          "/branch-admin/inventory"],
+    ["Add Inventory Item", "/branch-admin/raw-ingredient"],
+  ],
+};
+
 export default function Sidebar() {
   const { pathname } = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, capabilities } = useAuth();
 
   // One sidebar, two audiences. The cashier gets counter work; the owner gets
   // everything. Keeping it in one component means the two can never drift apart.
   const isCashier = Number(user?.role_id) === 3;
-  const NAV = isCashier ? CASHIER_NAV : ADMIN_NAV;
+  const hasSuppliesGrant = isCashier && capabilities?.has("raw_materials");
+  // Its own capability, granted independently of Supplies access — a
+  // cashier can hold either, both, or neither. One page, so a pinned link
+  // rather than a one-item dropdown group.
+  const hasWasteGrant = isCashier && capabilities?.has("waste_tracking");
+  const NAV = isCashier
+    ? (hasSuppliesGrant ? [...CASHIER_NAV, CASHIER_SUPPLIES_GROUP] : CASHIER_NAV)
+    : ADMIN_NAV;
   const [homeLabel, homeTo, HomeIcon] = isCashier ? HOME.cashier : HOME.admin;
+
+  // Branch Admin/Owner already has full backend access to everything a
+  // cashier can do, so they get the till link by default, no grant needed.
+  // Any other non-cashier who was personally handed POS access gets the same
+  // second pinned link, alongside their own role's home page.
+  const isBranchAdminOwner = [1, 2].includes(Number(user?.role_id));
+  const hasPosGrant = !isCashier && (isBranchAdminOwner || capabilities?.has("cashier_pos_access"));
 
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(STORAGE_KEY) === "1"; } catch { return false; }
@@ -218,6 +247,22 @@ export default function Sidebar() {
             active={isActive(homeTo)} collapsed={collapsed}
             hovered={hovered} setHovered={setHovered}
           />
+
+          {hasPosGrant && (
+            <SideLink
+              to={HOME.cashier[1]} icon={HOME.cashier[2]} label={HOME.cashier[0]}
+              active={isActive(HOME.cashier[1])} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {hasWasteGrant && (
+            <SideLink
+              to="/branch-admin/waste" icon={FaTrash} label="Waste Tracking"
+              active={isActive("/branch-admin/waste")} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
 
           {NAV.map((group) => {
             const GroupIcon = group.icon;

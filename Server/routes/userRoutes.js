@@ -6,12 +6,14 @@ import {
   updateUser,
   deleteUser,
 } from "../controllers/userController.js";
-import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
+import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// All user routes require auth + Branch Admin or Admin
-router.use(requireAuth, requireBranchAdminOrAdmin);
+// All user routes require auth + Branch Admin/Admin, or a cashier granted the
+// User Management capability. Granting/revoking capabilities themselves is a
+// separate, stricter router (userCapabilityRoutes.js) that never delegates.
+router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.USER_MANAGEMENT));
 
 router.get("/", getUsers);
 router.get("/:id", getUserById);

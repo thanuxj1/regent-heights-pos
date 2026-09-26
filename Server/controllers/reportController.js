@@ -31,7 +31,8 @@ export async function getSummary(req, res, next) {
     const to   = req.query.to   || todayStr();
 
     const [hotel, restaurant, expenses, commissions, hotelDaily, restDaily, expDaily,
-           expByCat, roomNights, occupancy, suppliers, supplierDaily] = await Promise.all([
+           expByCat, roomNights, occupancy, suppliers, supplierDaily, waste, wasteDaily,
+           codOutstanding] = await Promise.all([
 
       pool.query(
         `SELECT COALESCE(SUM(fi.amount),0) AS total
@@ -42,13 +43,20 @@ export async function getSummary(req, res, next) {
         [b_id, from, to]
       ),
 
+      // A COD delivery order isn't a real sale until the rider hands the
+      // cash over — excluded here on its order date, counted instead once
+      // settled, on the settlement's date (see the LEFT JOIN below).
       pool.query(
-        `SELECT COALESCE(SUM(COALESCE("or_totalCostWtax", or_totalcost, 0)),0) AS total,
-                COUNT(*) AS orders
-         FROM "ORDER"
-         WHERE b_id = $1 AND folio_id IS NULL
-           AND or_status <> 'cancelled'
-           AND or_date BETWEEN $2::date AND $3::date`,
+        `SELECT COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)),0) AS total,
+                COUNT(*) FILTER (WHERE NOT (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NULL)) AS orders
+         FROM "ORDER" o
+         LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
+         WHERE o.b_id = $1 AND o.folio_id IS NULL
+           AND o.or_status <> 'cancelled'
+           AND (
+             (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND o.or_date BETWEEN $2::date AND $3::date)
+             OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date BETWEEN $2::date AND $3::date)
+           )`,
         [b_id, from, to]
       ),
 
@@ -80,10 +88,14 @@ export async function getSummary(req, res, next) {
       ),
 
       pool.query(
-        `SELECT or_date AS day, SUM(COALESCE("or_totalCostWtax", or_totalcost, 0)) AS total
-         FROM "ORDER"
-         WHERE b_id = $1 AND folio_id IS NULL AND or_status <> 'cancelled'
-           AND or_date BETWEEN $2::date AND $3::date
+        `SELECT COALESCE(cs.settled_date, o.or_date) AS day, SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) AS total
+         FROM "ORDER" o
+         LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
+         WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
+           AND (
+             (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND o.or_date BETWEEN $2::date AND $3::date)
+             OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date BETWEEN $2::date AND $3::date)
+           )
          GROUP BY day ORDER BY day`,
         [b_id, from, to]
       ),
@@ -138,6 +150,36 @@ export async function getSummary(req, res, next) {
          GROUP BY day ORDER BY day`,
         [b_id, from, to]
       ),
+
+      // Wasted raw materials, priced at each item's current unit cost — money
+      // out the same as an expense, though nobody types it in as one.
+      pool.query(
+        `SELECT COALESCE(SUM(w.waste_qty * COALESCE(rm.unit_price, 0)),0) AS total
+         FROM "public"."Waste" w
+         JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+         WHERE rm.b_id = $1 AND w.recorded_at::date BETWEEN $2::date AND $3::date`,
+        [b_id, from, to]
+      ),
+      pool.query(
+        `SELECT w.recorded_at::date AS day, SUM(w.waste_qty * COALESCE(rm.unit_price, 0)) AS total
+         FROM "public"."Waste" w
+         JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+         WHERE rm.b_id = $1 AND w.recorded_at::date BETWEEN $2::date AND $3::date
+         GROUP BY day ORDER BY day`,
+        [b_id, from, to]
+      ),
+
+      // Cash a delivery partner is holding for us, not yet settled — a
+      // receivable, reported on its own, never folded into expenses/profit
+      // (the sale itself already counted as restaurant revenue above).
+      pool.query(
+        `SELECT COALESCE(SUM("or_totalCostWtax"),0) AS total
+         FROM "ORDER"
+         WHERE b_id = $1 AND or_type = 'delivery' AND payment_method = 'cod'
+           AND cod_settlement_id IS NULL AND or_status <> 'cancelled'
+           AND or_date BETWEEN $2::date AND $3::date`,
+        [b_id, from, to]
+      ),
     ]);
 
     // Merge the three daily series onto one timeline
@@ -150,6 +192,7 @@ export async function getSummary(req, res, next) {
     put(restDaily.rows, "restaurant");
     put(expDaily.rows, "expenses");
     put(supplierDaily.rows, "expenses");
+    put(wasteDaily.rows, "expenses");
 
     const daily = Object.values(dayMap)
       .sort((a, b) => a.day.localeCompare(b.day))
@@ -159,7 +202,8 @@ export async function getSummary(req, res, next) {
     const restRev  = num(restaurant.rows[0].total);
     const expTotal = num(expenses.rows[0].total);
     const supTotal = num(suppliers.rows[0].total);
-    const outTotal = expTotal + supTotal;
+    const wasteTotal = num(waste.rows[0].total);
+    const outTotal = expTotal + supTotal + wasteTotal;
     const commTotal = num(commissions.rows[0].total);
     const revenue  = hotelRev + restRev;
 
@@ -177,9 +221,12 @@ export async function getSummary(req, res, next) {
         recorded: expTotal,
         supplier_payments: supTotal,
         commissions: commTotal,
-        by_category: (supTotal > 0
-          ? [...expByCat.rows, { exp_category: "supplier_payments", total: supTotal }]
-          : expByCat.rows).sort((a, b) => Number(b.total) - Number(a.total)),
+        waste: wasteTotal,
+        by_category: [
+          ...expByCat.rows,
+          ...(supTotal > 0 ? [{ exp_category: "supplier_payments", total: supTotal }] : []),
+          ...(wasteTotal > 0 ? [{ exp_category: "waste", total: wasteTotal }] : []),
+        ].sort((a, b) => Number(b.total) - Number(a.total)),
       },
       profit: {
         gross: revenue,
@@ -194,6 +241,9 @@ export async function getSummary(req, res, next) {
         revpar: roomsAvailable ? +(hotelRev / roomsAvailable).toFixed(2) : 0,
       },
       restaurant_orders: num(restaurant.rows[0].orders),
+      receivables: {
+        cod_outstanding: num(codOutstanding.rows[0].total),
+      },
       daily,
     });
   } catch (err) { next(err); }
@@ -236,6 +286,10 @@ export async function getTransactions(req, res, next) {
     }
 
     if (kind === "all" || kind === "restaurant") {
+      // A COD delivery order is excluded here entirely — settled or not.
+      // Its own "Delivery COD Settlement" row (below) is what represents
+      // that money landing, on the date it actually lands; listing the
+      // order here too would count the same sale twice in this ledger.
       const r = await pool.query(
         `SELECT o.or_id, o.or_date AS at, COALESCE(o."or_totalCostWtax", o.or_totalcost, 0) AS amount,
                 o.or_type, o.u_id AS handled_by_id, c.cust_name AS party,
@@ -244,6 +298,7 @@ export async function getTransactions(req, res, next) {
          LEFT JOIN "CUSTOMER" c ON c.cust_id = o.cust_id
          LEFT JOIN "User" u     ON u.u_id = o.u_id
          WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
+           AND NOT (o.or_type = 'delivery' AND o.payment_method = 'cod')
            AND o.or_date BETWEEN $2::date AND $3::date
          ORDER BY o.or_date DESC, o.or_id DESC`,
         [b_id, from, to]
@@ -306,6 +361,44 @@ export async function getTransactions(req, res, next) {
         at: x.at, type: "Supplier payment", direction: "out",
         amount: num(x.amount), method: x.method, reference: `PO#${x.po_id}`, party: x.party,
         pay_id: x.pay_id, po_id: x.po_id,
+      }));
+    }
+
+    // Wasted raw materials, priced at each item's current unit cost — a real
+    // cost with no bill or payment behind it, so it belongs in this ledger
+    // the same way an expense does, not just in the Waste Tracking page.
+    if (kind === "all" || kind === "waste") {
+      const r = await pool.query(
+        `SELECT w.waste_id, w.recorded_at AS at, w.waste_qty * COALESCE(rm.unit_price, 0) AS amount,
+                rm.rm_name AS party, w.reason
+         FROM "public"."Waste" w
+         JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+         WHERE rm.b_id = $1 AND w.recorded_at::date BETWEEN $2::date AND $3::date
+         ORDER BY w.recorded_at DESC`,
+        [b_id, from, to]
+      );
+      r.rows.forEach(x => out.push({
+        at: x.at, type: "Waste", direction: "out",
+        amount: num(x.amount), method: "—", reference: x.reason || "", party: x.party,
+        waste_id: x.waste_id,
+      }));
+    }
+
+    // A delivery-partner COD settlement — cash the partner was holding on the
+    // hotel's behalf actually arriving. One row per settlement (like one
+    // supplier payment is one row, not one per purchase order it covers).
+    if (kind === "all" || kind === "delivery_cod") {
+      const r = await pool.query(
+        `SELECT settlement_id, created_at AS at, amount, delivery_partner, method, note
+         FROM "DELIVERY_COD_SETTLEMENT"
+         WHERE b_id = $1 AND settled_date BETWEEN $2::date AND $3::date
+         ORDER BY created_at DESC`,
+        [b_id, from, to]
+      );
+      r.rows.forEach(x => out.push({
+        at: x.at, type: "Delivery COD Settlement", direction: "in",
+        amount: num(x.amount), method: x.method, reference: x.note || "", party: x.delivery_partner,
+        settlement_id: x.settlement_id,
       }));
     }
 

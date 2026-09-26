@@ -11,6 +11,9 @@ export const AuthContext = createContext(null);
 const SIGNED_OUT = {
   user: null,
   token: null,
+  capabilities: new Set(),
+  capabilitiesLoaded: true,
+  refreshCapabilities: () => {},
   login: async () => {
     throw new Error("Sign-in is not ready yet. Reload the page.");
   },

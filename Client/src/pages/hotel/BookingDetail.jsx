@@ -3,14 +3,16 @@ import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
 import {
-  getBookingById, getBookingFolio, getRooms, checkInBooking, checkOutBooking,
+  getBookingById, getBookingFolio, getAvailability, checkInBooking, checkOutBooking,
   postFolioItem, deleteFolioItem, addBookingPayment, cancelBooking, getBookingConfirmation,
-  getGuests, getAgents,
+  getGuests, getAgents, getGuestById, updateGuest, getBranchById, getStayPolicy, getMealPlans,
 } from "../../services/api";
+import { printGuestRegistration } from "../../utils/printGuestRegistration";
+import { readImageFile } from "../../utils/readImageFile";
 import { BookingFormModal } from "./Bookings";
 import {
   card, input, label, btn, badge, th, td,
-  modalWrap, modalBox, errorBox, money, dmy, initials, STATUS_STYLE,
+  modalWrap, modalBox, errorBox, money, dmy, ymd, initials, STATUS_STYLE,
 } from "./ui";
 import { printElement } from "../../utils/printElement";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
@@ -29,12 +31,17 @@ export default function BookingDetail() {
 
   const [booking, setBooking] = useState(null);
   const [folio, setFolio] = useState(null);
-  const [rooms, setRooms] = useState([]);
+  const [avail, setAvail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
   const [assignments, setAssignments] = useState({});
+  // Optional — the guest may not have decided a meal plan until they're
+  // actually standing at the desk, so this is offered at check-in, not
+  // locked in at booking time.
+  const [mealPlans, setMealPlans] = useState([]);
+  const [selectedMealPlanId, setSelectedMealPlanId] = useState("");
   const folioRef = useRef(null);
   const printFolio = () =>
     printElement(folioRef.current, { title: `Folio ${booking?.booking_ref ?? ""}` });
@@ -43,6 +50,65 @@ export default function BookingDetail() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   const [editing, setEditing] = useState(null); // { guests, agents } once loaded, while the form is open
+
+  // Guest Registration — the paper form the guest signs at check-in
+  // (passport/ID, next destination, chauffeur, payment method) covers GUEST
+  // fields nothing else in the app surfaces. Loaded once the booking names
+  // its guest_id; saved back through the same updateGuest every other guest
+  // edit uses.
+  const [guest, setGuest] = useState(null);
+  const [guestForm, setGuestForm] = useState(null);
+  const [branchName, setBranchName] = useState("");
+  // The paper folio's letterhead needs more than the name — address and a
+  // way to reach the property, same as any hotel bill a guest walks away with.
+  const [branch, setBranch] = useState(null);
+  useEffect(() => {
+    if (!branchId) return;
+    getBranchById(branchId).then(b => {
+      setBranchName(b?.B_name || b?.b_name || "");
+      setBranch(b || null);
+    }).catch(() => {});
+  }, [branchId]);
+  const [stayPolicy, setStayPolicy] = useState(null);
+  useEffect(() => { getStayPolicy().then(setStayPolicy).catch(() => {}); }, []);
+  useEffect(() => { getMealPlans({ active: 1 }).then(setMealPlans).catch(() => {}); }, []);
+  const [guestSaving, setGuestSaving] = useState(false);
+  const [guestSaved, setGuestSaved] = useState(false);
+  const docFileRef = useRef(null);
+  const [docUploadError, setDocUploadError] = useState("");
+  useEffect(() => {
+    if (!booking?.guest_id) return;
+    getGuestById(booking.guest_id).then(g => { setGuest(g); setGuestForm(g); }).catch(() => {});
+  }, [booking?.guest_id]);
+  const guestField = (k, v) => { setGuestForm(f => ({ ...f, [k]: v })); setGuestSaved(false); };
+  const handleDocUpload = async (file) => {
+    if (!file) return;
+    setDocUploadError("");
+    try {
+      // 2000px keeps passport text legible; the profile-photo default (512) does not.
+      guestField("id_document", await readImageFile(file, { maxWidth: 2000 }));
+    } catch (err) { setDocUploadError(err.message); }
+  };
+  const saveGuestRegistration = async () => {
+    setGuestSaving(true); setError("");
+    try {
+      const fields = ["passport_nic", "passport_issue_date", "passport_expiry_date", "date_of_birth",
+        "address", "company", "guest_status", "chauffeur_name", "chauffeur_phone", "next_destination",
+        "id_document"];
+      const changed = {};
+      fields.forEach(f => { if ((guestForm[f] || "") !== (guest[f] || "")) changed[f] = guestForm[f]; });
+      if (Object.keys(changed).length) {
+        const saved = await updateGuest(booking.guest_id, changed);
+        setGuest(saved); setGuestForm(saved);
+      }
+      setGuestSaved(true);
+    } catch (err) {
+      setError(err?.response?.data?.message || "Could not save guest registration details");
+    } finally { setGuestSaving(false); }
+  };
+  const doPrintGuestRegistration = () => {
+    printGuestRegistration({ branchName, booking, guest: guestForm || guest || {}, stayPolicy });
+  };
 
   const load = useCallback(async () => {
     try {
@@ -59,9 +125,17 @@ export default function BookingDetail() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+  // Which rooms are actually free for THIS booking's dates — a real
+  // date-range overlap check (the same one Bookings.jsx uses to build the
+  // booking form), not just "is nobody in it right now". exclude_booking
+  // means this booking's own current rooms count as free for itself.
   useEffect(() => {
-    if (branchId) getRooms({ b_id: branchId }).then(setRooms).catch(() => {});
-  }, [branchId]);
+    if (!branchId || !booking?.check_in_date || !booking?.check_out_date) return;
+    getAvailability({
+      b_id: branchId, check_in: ymd(booking.check_in_date), check_out: ymd(booking.check_out_date),
+      exclude_booking: booking.booking_id,
+    }).then(setAvail).catch(() => {});
+  }, [branchId, booking?.booking_id, booking?.check_in_date, booking?.check_out_date]);
 
   const run = async (name, fn) => {
     setBusy(name); setError("");
@@ -74,6 +148,7 @@ export default function BookingDetail() {
     room_assignments: Object.entries(assignments).map(([booking_room_id, room_id]) => ({
       booking_room_id: Number(booking_room_id), room_id: Number(room_id),
     })),
+    ...(selectedMealPlanId ? { meal_plan_id: Number(selectedMealPlanId) } : {}),
   }));
 
   // A late fee the guest was never told about is a complaint at the desk, so it
@@ -137,10 +212,14 @@ export default function BookingDetail() {
   const balance = folio ? folio.balance_due : Number(booking.grand_total || 0) - Number(booking.paid_total || 0);
   const canCheckIn  = ["confirmed", "tentative"].includes(booking.status);
   const canCheckOut = booking.status === "checked_in";
-  const freeRooms = (bookingRoom) => rooms.filter(r =>
-    r.room_type_id === bookingRoom.room_type_id &&
-    (!r.current_booking_id || r.current_booking_id === booking.booking_id)
-  );
+  const freeRooms = (bookingRoom) => {
+    const t = avail?.room_types.find(t => t.room_type_id === bookingRoom.room_type_id);
+    return t ? t.available_rooms : [];
+  };
+  // Every BOOKING_ROOM row needs a room_id before Check In is allowed — the
+  // server already refuses otherwise; this just stops the click before an
+  // API round trip finds out.
+  const allRoomsAssigned = (booking.rooms || []).every(br => (assignments[br.booking_room_id] ?? br.room_id));
 
   return (
     <AppShell title={`Booking ${booking.booking_ref}`}>
@@ -219,7 +298,8 @@ export default function BookingDetail() {
                 <button onClick={openEdit} style={btn("ghost")}>✎ Edit Booking</button>
               )}
               {canCheckIn && (
-                <button onClick={doCheckIn} disabled={busy === "check-in"} style={btn("success")}>
+                <button onClick={doCheckIn} disabled={busy === "check-in" || !allRoomsAssigned} style={btn("success")}
+                  title={allRoomsAssigned ? "" : "Assign every room below first"}>
                   {busy === "check-in" ? "Checking in…" : "✓ Check In"}
                 </button>
               )}
@@ -267,38 +347,165 @@ export default function BookingDetail() {
                   </select>
                 </div>
               ))}
-              <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 8, marginBottom: 14 }}>
                 Every room must be assigned before check-in. Charges post to the folio automatically at check-in.
+              </div>
+
+              <label style={{ ...label, marginBottom: 4 }}>Meal Plan (optional)</label>
+              <select value={selectedMealPlanId} onChange={(e) => setSelectedMealPlanId(e.target.value)} style={input}>
+                <option value="">None — Room Only</option>
+                {mealPlans.map((p) => (
+                  <option key={p.plan_id} value={p.plan_id}>
+                    {p.plan_name} ({p.plan_code}){(Number(p.supplement_per_adult) > 0 || Number(p.supplement_per_child) > 0)
+                      ? ` — ${money(p.supplement_per_adult)}/adult, ${money(p.supplement_per_child)}/child`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+              {selectedMealPlanId && (
+                <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 6 }}>
+                  Posted to the folio as one line, for {booking.adults} adult(s){booking.children ? ` and ${booking.children} child(ren)` : ""}.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Guest Registration — collected at check-in, when the guest is
+              actually here with their passport/ID in hand. Prints the
+              hotel's paper registration form for the guest to sign. */}
+          {canCheckIn && guestForm && (
+            <div style={{ ...card, padding: 20, marginBottom: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#1E293B", marginBottom: 4 }}>Guest Registration</div>
+              <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 14 }}>
+                Fill this in from the guest's passport/ID at the desk, then print the registration form for them to sign.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label style={label}>Passport / NIC {!guestForm.passport_nic && <span style={{ color: "#DC2626" }}>* required to check in</span>}
+                  <input value={guestForm.passport_nic || ""} onChange={e => guestField("passport_nic", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Date of Birth
+                  <input type="date" value={ymd(guestForm.date_of_birth)} onChange={e => guestField("date_of_birth", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Passport Issue Date
+                  <input type="date" value={ymd(guestForm.passport_issue_date)} onChange={e => guestField("passport_issue_date", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Passport Expiry Date
+                  <input type="date" value={ymd(guestForm.passport_expiry_date)} onChange={e => guestField("passport_expiry_date", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={{ ...label, gridColumn: "1 / -1" }}>Home Address
+                  <input value={guestForm.address || ""} onChange={e => guestField("address", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Company
+                  <input value={guestForm.company || ""} onChange={e => guestField("company", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Guest Status
+                  <input value={guestForm.guest_status || ""} onChange={e => guestField("guest_status", e.target.value)} placeholder="e.g. VIP, Corporate, Regular" style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Next Destination
+                  <input value={guestForm.next_destination || ""} onChange={e => guestField("next_destination", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Chauffeur's Name
+                  <input value={guestForm.chauffeur_name || ""} onChange={e => guestField("chauffeur_name", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <label style={label}>Chauffeur's Number
+                  <input value={guestForm.chauffeur_phone || ""} onChange={e => guestField("chauffeur_phone", e.target.value)} style={{ ...input, marginTop: 4 }} />
+                </label>
+                <div style={{ ...label, gridColumn: "1 / -1" }}>
+                  <div>Passport / ID Scan {!guestForm.id_document && <span style={{ color: "#DC2626" }}>* required to check in</span>}</div>
+                  <input
+                    ref={docFileRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={e => { const file = e.target.files?.[0]; e.target.value = ""; handleDocUpload(file); }}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+                    {guestForm.id_document ? (
+                      <img src={guestForm.id_document} alt="Passport / ID scan"
+                        style={{ width: 120, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #E2E8F0" }} />
+                    ) : (
+                      <div style={{ width: 120, height: 80, borderRadius: 6, border: "1px dashed #CBD5E1",
+                        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#94A3B8" }}>
+                        No scan yet
+                      </div>
+                    )}
+                    <button type="button" onClick={() => docFileRef.current?.click()} style={btn("ghost")}>
+                      {guestForm.id_document ? "Replace" : "Upload"}
+                    </button>
+                    {guestForm.id_document && (
+                      <button type="button" onClick={() => guestField("id_document", "")} style={btn("ghost")}>Remove</button>
+                    )}
+                  </div>
+                  {docUploadError && <div style={{ color: "#DC2626", fontSize: 12, marginTop: 4 }}>{docUploadError}</div>}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
+                <button type="button" onClick={saveGuestRegistration} disabled={guestSaving} style={btn("primary")}>
+                  {guestSaving ? "Saving…" : "Save Guest Details"}
+                </button>
+                <button type="button" onClick={doPrintGuestRegistration} style={btn("ghost")}>🖨 Print Guest Registration Form</button>
+                {guestSaved && <span style={{ fontSize: 12, color: "#059669", fontWeight: 600 }}>Saved ✓</span>}
               </div>
             </div>
           )}
 
           {/* Folio */}
           {folio && (
-            <div ref={folioRef} style={{ ...card, overflow: "hidden", marginBottom: 20 }}>
-              <div style={{ padding: "14px 20px", borderBottom: "1px solid #F1F5F9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  {/* Print-only: the paper bill needs the property's letterhead. */}
-                  <img className="print-only" src={DOCUMENT_LOGO} alt="" onError={hideIfMissing}
-                    style={{ display: "none", maxHeight: 54, maxWidth: 210, objectFit: "contain", marginBottom: 8 }} />
-                  <span style={{ fontWeight: 700, fontSize: 14, color: "#1E293B" }}>
-                    Guest Folio <span style={{ color: "#94A3B8", fontWeight: 400 }}>#{folio.folio_id} · {folio.status}</span>
-                  </span>
-                  {/* Only shows on paper, so the guest's copy identifies itself. */}
-                  <div className="print-only" style={{ display: "none", fontSize: 12, color: "#475569", marginTop: 4 }}>
-                    {booking.guest_name} · {booking.booking_ref} · {dmy(booking.check_in_date)} → {dmy(booking.check_out_date)}
-                  </div>
-                </div>
-                <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div ref={folioRef} className="folio-doc" style={{ ...card, overflow: "hidden", marginBottom: 20 }}>
+              {/* Staff view — unchanged, this is what the desk works from on screen. */}
+              <div className="no-print" style={{ padding: "14px 20px", borderBottom: "1px solid #F1F5F9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontWeight: 700, fontSize: 14, color: "#1E293B" }}>
+                  Guest Folio <span style={{ color: "#94A3B8", fontWeight: 400 }}>#{folio.folio_id} · {folio.status}</span>
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <span style={{ fontSize: 12, color: "#94A3B8" }}>
                     Restaurant orders charged to this room appear here automatically
                   </span>
                   <button onClick={printFolio} style={btn("ghost")}>Print Bill</button>
                 </div>
               </div>
+
+              {/* Letterhead — print only. Same header the Booking Confirmation
+                  uses, so the two documents this property hands a guest read
+                  as one family: logo, hotel name and how to reach it on the
+                  left; document type and reference details on the right;
+                  one solid rule underneath, not a dashboard card's
+                  title-and-subtitle. */}
+              <div className="print-only folio-letterhead" style={{ display: "none", padding: "20px 20px 0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+                              borderBottom: "2px solid #1E293B", paddingBottom: 10, marginBottom: 16 }}>
+                  <div>
+                    <img src={DOCUMENT_LOGO} alt="" onError={hideIfMissing}
+                      style={{ height: 68, width: "auto", maxWidth: 240, objectFit: "contain", objectPosition: "left center",
+                               marginBottom: 10, display: "block" }} />
+                    <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: 0.3 }}>
+                      {(branchName || "Hotel").toUpperCase()}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#64748B", marginTop: 3, lineHeight: 1.5 }}>
+                      {branch?.B_address || ""}
+                      {branch?.B_email ? <><br />{branch.B_email}</> : null}
+                      {branch?.B_conNo ? ` | Phone: ${branch.B_conNo}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>GUEST FOLIO</div>
+                    <div style={{ fontSize: 11, marginTop: 6 }}>
+                      <strong>Booking Ref:</strong> {booking.booking_ref}
+                    </div>
+                    <div style={{ fontSize: 11 }}>
+                      <strong>Guest:</strong> {booking.guest_name}
+                    </div>
+                    <div style={{ fontSize: 11 }}>
+                      <strong>Stay:</strong> {dmy(booking.check_in_date)} → {dmy(booking.check_out_date)}
+                    </div>
+                  </div>
+                </div>
+              </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#F8FAFC" }}>
-                  {["Date", "Type", "Description", "Qty", "Unit", "Amount"].map(h => <th key={h} style={th}>{h}</th>)}
+                  {["Date", "Type", "Description", "Qty", "Unit", "Amount"].map(h => (
+                    <th key={h} className={["Qty", "Unit", "Amount"].includes(h) ? "folio-num" : undefined} style={th}>{h}</th>
+                  ))}
                   {/* Never printed — this table doubles as the paper bill, and a
                       guest's copy must not carry a "delete this charge" button. */}
                   <th className="no-print" style={th}></th>
@@ -307,11 +514,11 @@ export default function BookingDetail() {
                   {folio.items.map(i => (
                     <tr key={i.item_id} style={{ borderTop: "1px solid #F1F5F9" }}>
                       <td style={td}>{dmy(i.item_date)}</td>
-                      <td style={td}><span style={badge({ bg: "#F1F5F9", fg: "#475569" })}>{SOURCE_LABEL[i.source] || i.source}</span></td>
+                      <td style={td}><span className="folio-badge" style={badge({ bg: "#F1F5F9", fg: "#475569" })}>{SOURCE_LABEL[i.source] || i.source}</span></td>
                       <td style={{ ...td, color: "#1E293B" }}>{i.description}</td>
-                      <td style={td}>{Number(i.qty)}</td>
-                      <td style={td}>{money(i.unit_price)}</td>
-                      <td style={{ ...td, fontWeight: 700, color: Number(i.amount) < 0 ? "#059669" : "#1E293B" }}>{money(i.amount)}</td>
+                      <td className="folio-num" style={td}>{Number(i.qty)}</td>
+                      <td className="folio-num" style={td}>{money(i.unit_price)}</td>
+                      <td className="folio-num" style={{ ...td, fontWeight: 700, color: Number(i.amount) < 0 ? "#059669" : "#1E293B" }}>{money(i.amount)}</td>
                       <td className="no-print" style={td}>
                         {folio.status === "open" && (
                           <button onClick={() => run("delete", () => deleteFolioItem(id, i.item_id))} style={btn("danger")}>Del</button>
@@ -323,17 +530,18 @@ export default function BookingDetail() {
                 <tfoot>
                   <tr style={{ background: "#F8FAFC", borderTop: "2px solid #E2E8F0" }}>
                     <td colSpan={5} style={{ ...td, fontWeight: 700, color: "#1E293B", textAlign: "right" }}>Total Charges</td>
-                    <td style={{ ...td, fontWeight: 700, color: "#1E293B" }}>{money(folio.total_charges)}</td>
+                    <td className="folio-num" style={{ ...td, fontWeight: 700, color: "#1E293B" }}>{money(folio.total_charges)}</td>
                     <td className="no-print" />
                   </tr>
                   <tr style={{ background: "#F8FAFC" }}>
                     <td colSpan={5} style={{ ...td, textAlign: "right" }}>Total Paid</td>
-                    <td style={{ ...td, color: "#059669", fontWeight: 600 }}>{money(folio.total_paid)}</td>
+                    <td className="folio-num folio-paid" style={{ ...td, color: "#059669", fontWeight: 600 }}>{money(folio.total_paid)}</td>
                     <td className="no-print" />
                   </tr>
                   <tr style={{ background: "#F8FAFC", borderTop: "2px solid #CBD5E1" }}>
                     <td colSpan={5} style={{ ...td, fontWeight: 700, color: "#1E293B", textAlign: "right", fontSize: 15 }}>Balance Due</td>
-                    <td style={{ ...td, fontWeight: 700, fontSize: 15, color: folio.balance_due > 0.01 ? "#DC2626" : "#059669" }}>
+                    <td className={`folio-num ${folio.balance_due > 0.01 ? "folio-balance-due" : "folio-paid"}`}
+                      style={{ ...td, fontWeight: 700, fontSize: 15, color: folio.balance_due > 0.01 ? "#DC2626" : "#059669" }}>
                       {money(folio.balance_due)}
                     </td>
                     <td className="no-print" />
@@ -509,6 +717,12 @@ function ConfirmationModal({ data, onClose }) {
   // "McDonald" and "O'Neil" are left as typed.
   const properCase = (s) => String(s || "").replace(/\b[a-z][a-z'’-]*\b/g, (w) => w[0].toUpperCase() + w.slice(1));
   const guestName = properCase(b.guest_name);
+  // A full timestamp, unlike a plain DATE column, needs no manual timezone
+  // correction — the browser's own toLocaleString already converts it to
+  // local time correctly.
+  const fmtTime = (v) => new Date(v).toLocaleString("en-GB", {
+    day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit",
+  });
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(data.whatsapp_text); setCopied(true); setTimeout(() => setCopied(false), 2000); }
@@ -596,8 +810,16 @@ function ConfirmationModal({ data, onClose }) {
               <L k="Check-In Date" v={dmy(b.check_in_date)} />
               <L k="Check-Out Date" v={dmy(b.check_out_date)} />
               <L k="No. of Nights" v={b.nights} />
-              {inTime && <L k="Check-In Time" v={inTime} />}
-              {outTime && <L k="Check-Out Time" v={outTime} />}
+              {/* Once the guest has actually arrived/left, that real timestamp is
+                  more useful than the property's standard policy time — this is
+                  what settles a late-checkout dispute, not what was advertised
+                  when the booking was made. */}
+              {b.checked_in_at
+                ? <L k="Check-In Time" v={fmtTime(b.checked_in_at)} />
+                : (inTime && <L k="Check-In Time" v={inTime} />)}
+              {b.checked_out_at
+                ? <L k="Check-Out Time" v={fmtTime(b.checked_out_at)} />
+                : (outTime && <L k="Check-Out Time" v={outTime} />)}
             </div>
           </div>
 
@@ -644,6 +866,7 @@ function ConfirmationModal({ data, onClose }) {
               </div>
               <Money k="Total Room Charges" v={b.room_charges} />
               <Money k={`Room Charges Tax (${b.tax_pct}%)`} v={b.tax_amount} />
+              {Number(b.person_charges) > 0 && <Money k="Extra Guest Charges" v={b.person_charges} />}
               <Money k="Inclusions Including Tax" v={b.meal_charges} />
               <Money k="Extra Charges" v={b.extra_charges} />
               {Number(b.discount) > 0 && <Money k="Discount" v={-Number(b.discount)} red />}

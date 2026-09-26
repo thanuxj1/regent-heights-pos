@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { login as apiLogin, setAuthToken, getCurrentUser } from "../services/api";
+import { login as apiLogin, setAuthToken, getCurrentUser, getUserCapabilities } from "../services/api";
 import { connectSocket, disconnectSocket } from "../services/socket";
 import { AuthContext } from "./AuthContext";
 
@@ -43,6 +43,34 @@ export function AuthProvider({ children }) {
   const navigate = useNavigate();
   const [session, setSession] = useState(() => readSession() ?? { token: null, user: null });
   const { user, token } = session;
+  const [capabilities, setCapabilities] = useState(() => new Set());
+  // Starts false so a capability-gated route doesn't decide (and redirect
+  // away) on the empty Set that exists before the first fetch resolves —
+  // ProtectedRoute waits on this instead of racing the request.
+  const [capabilitiesLoaded, setCapabilitiesLoaded] = useState(false);
+
+  // The permissions the signed-in person was personally granted — independent
+  // of their role, and used to decide whether to show them a role-crossing
+  // link (e.g. a POS terminal a manager handed a waiter). Fetched, never
+  // baked into the token, so a revoke takes effect without a re-login.
+  const refreshCapabilities = useCallback(async () => {
+    if (!user?.u_id) { setCapabilities(new Set()); setCapabilitiesLoaded(true); return; }
+    try {
+      const data = await getUserCapabilities(user.u_id);
+      setCapabilities(new Set(data?.capabilities || []));
+    } catch {
+      setCapabilities(new Set());
+    } finally {
+      setCapabilitiesLoaded(true);
+    }
+  }, [user?.u_id]);
+
+  useEffect(() => {
+    setCapabilitiesLoaded(false);
+    if (user?.u_id) refreshCapabilities();
+    else setCapabilitiesLoaded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.u_id]);
 
   // Whatever is left of an expired or half-written sign-in is cleared once.
   useEffect(() => {
@@ -101,7 +129,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout }}>
+    <AuthContext.Provider value={{ user, token, capabilities, capabilitiesLoaded, refreshCapabilities, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
