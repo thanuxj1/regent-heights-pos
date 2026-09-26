@@ -1,5 +1,8 @@
 import express from "express";
-import { requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
+import {
+  requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+} from "../middleware/authMiddleware.js";
 import { getOutstandingCod, getCodHistory, createCodSettlement } from "../controllers/deliveryCodController.js";
 
 const router = express.Router();
@@ -8,8 +11,8 @@ const router = express.Router();
 // order should be able to see the running COD balance building up. Recording
 // a settlement (money actually changing hands) is a manager-tier action,
 // same as a supplier payment.
-router.get("/outstanding", requireAuth, requireCashierOrAbove, getOutstandingCod);
-router.get("/history", requireAuth, requireCashierOrAbove, getCodHistory);
+router.get("/outstanding", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getOutstandingCod);
+router.get("/history", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getCodHistory);
 router.post("/settle", requireAuth, requireBranchAdminOr(CAPABILITIES.DELIVERY_MANAGEMENT), createCodSettlement);
 
 export default router;

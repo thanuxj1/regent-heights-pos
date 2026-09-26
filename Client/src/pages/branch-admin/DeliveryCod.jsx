@@ -390,6 +390,24 @@ export default function DeliveryCod() {
   const totalOutstanding = useMemo(() => outstanding.byPartner.reduce((s, p) => s + Number(p.total || 0), 0), [outstanding]);
   const outstandingByKey = useMemo(() => new Map(outstanding.byPartner.map((p) => [p.delivery_partner, p])), [outstanding]);
 
+  // Ranked by lifetime COD actually settled, not by outstanding — outstanding
+  // is usually near zero right after a settlement day, which would make "top
+  // partner" flicker between whoever last had a stray unsettled order rather
+  // than showing who the property actually does the most business with.
+  const topPartnerByVolume = useMemo(() => {
+    const totals = new Map();
+    for (const s of history) {
+      const key = s.delivery_partner;
+      totals.set(key, (totals.get(key) || 0) + Number(s.amount || 0));
+    }
+    let top = null;
+    for (const [key, total] of totals) {
+      if (!top || total > top.total) top = { key, total };
+    }
+    if (!top) return null;
+    return { name: partners.find((p) => p.key === top.key)?.name || top.key, total: top.total };
+  }, [history, partners]);
+
   const handleCreatePartner = async () => {
     setCreateError("");
     const name = newPartner.name.trim();
@@ -447,10 +465,11 @@ export default function DeliveryCod() {
             </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, marginBottom: 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
             <StatCard title="Outstanding COD" value={money(totalOutstanding)} subtitle="Cash partners are holding for us" icon="💰" iconClass="bg-violet-100 text-violet-700" showAction={false} onClick={() => {}} />
             <StatCard title="Partners Owing" value={outstanding.byPartner.length} icon="🏍️" iconClass="bg-amber-100 text-amber-700" showAction={false} onClick={() => {}} />
             <StatCard title="Orders Unsettled" value={outstanding.orders.length} icon="🧾" iconClass="bg-blue-100 text-blue-700" showAction={false} onClick={() => {}} />
+            <StatCard title="Top Partner" value={topPartnerByVolume?.name || "—"} subtitle={topPartnerByVolume ? `${money(topPartnerByVolume.total)} settled lifetime` : "No settlements yet"} icon="🏆" iconClass="bg-emerald-100 text-emerald-700" showAction={false} onClick={() => {}} />
           </div>
 
           {selectedPartner ? (

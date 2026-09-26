@@ -7,6 +7,8 @@ import {
   requireAdmin,
   requireBranchAdminOrAdmin,
   requireCashierOrAbove,
+  requireDefaultNotRevoked,
+  DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 
 // ─── Controller functions + validation arrays ─────────────────────────────────
@@ -47,7 +49,7 @@ router.get(
   getPaymentById,
 );
 
-router.post("/", requireCashierOrAbove, createPaymentValidation, createPayment);
+router.post("/", requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.POS_TERMINAL), createPaymentValidation, createPayment);
 
 router.put(
   "/:id",

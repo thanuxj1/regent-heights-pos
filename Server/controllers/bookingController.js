@@ -135,8 +135,17 @@ export async function getGuests(req, res, next) {
       clauses.push(`(full_name ILIKE $${n} OR phone ILIKE $${n} OR email ILIKE $${n} OR passport_nic ILIKE $${n})`);
     }
     const where = clauses.length ? "WHERE " + clauses.join(" AND ") : "";
+    // Every field the guest-picker dropdown needs to search and display —
+    // not `photo`/`id_document`. Those are full base64 images: harmless at
+    // today's guest count, but this list only ever grows, and a `SELECT *`
+    // here would mean pulling up to 200 full ID-scan photos over the wire
+    // on every search, just to show a name and phone number.
     const { rows } = await pool.query(
-      `SELECT * FROM "GUEST" ${where} ORDER BY full_name LIMIT 200`, params
+      `SELECT guest_id, full_name, email, phone, country, nationality, passport_nic,
+              passport_issue_date, passport_expiry_date, date_of_birth,
+              address, company, guest_status, chauffeur_name, chauffeur_phone,
+              next_destination, notes, b_id, created_at
+       FROM "GUEST" ${where} ORDER BY full_name LIMIT 200`, params
     );
     res.json(rows);
   } catch (err) { next(err); }
@@ -316,24 +325,39 @@ export async function getAvailability(req, res, next) {
     // of that type still looks individually free. It isn't: that many rooms
     // of the type are already spoken for, just not which ones yet. Trim that
     // many entries off the end of each type's available_rooms so the count
-    // (and what the booking form offers) reflects it.
-    const typeOnlyCounts = await pool.query(
-      `SELECT br.room_type_id, COUNT(*)::int AS n
+    // (and what the booking form offers) reflects it. Named per reservation,
+    // not just counted — a bare "another booking" with no date to show (the
+    // room number it's borrowed from has one, this reservation doesn't) read
+    // as broken. This is the actual guest and dates holding the slot.
+    const typeOnlyRows = await pool.query(
+      `SELECT br.room_type_id, b.booking_ref, g.full_name AS guest_name,
+              b.check_in_date::text AS check_in, b.check_out_date::text AS check_out
          FROM "BOOKING_ROOM" br
          JOIN "BOOKING" b ON b.booking_id = br.booking_id
+         LEFT JOIN "GUEST" g ON g.guest_id = b.guest_id
         WHERE b.b_id = $1 AND br.room_id IS NULL
           AND b.status IN ('tentative','confirmed','checked_in')
           AND ($4::int IS NULL OR b.booking_id <> $4::int)
-          AND b.check_in_date < $3::date AND ${effCheckout} > $2::date
-        GROUP BY br.room_type_id`,
+          AND b.check_in_date < $3::date AND ${effCheckout} > $2::date`,
       [b_id, checkIn, checkOut, excludeId]
     );
-    for (const { room_type_id, n } of typeOnlyCounts.rows) {
+    const typeOnlyByType = {};
+    typeOnlyRows.rows.forEach(r => { (typeOnlyByType[r.room_type_id] ||= []).push(r); });
+    for (const [room_type_id, reservations] of Object.entries(typeOnlyByType)) {
       const t = byType[room_type_id];
-      if (!t || !n) continue;
-      const moved = t.available_rooms.splice(Math.max(0, t.available_rooms.length - n));
-      (t.unavailable_rooms ||= []).push(...moved.map(r => ({ room_id: r.room_id, room_number: r.room_number,
-        blocked_by: { guest_name: "another booking", status: "pending" } })));
+      if (!t || !reservations.length) continue;
+      const moved = t.available_rooms.splice(Math.max(0, t.available_rooms.length - reservations.length));
+      (t.unavailable_rooms ||= []).push(...moved.map((r, i) => {
+        const src = reservations[i] || reservations[reservations.length - 1];
+        // room_id/room_number/floor/hk_status carried over from the available-rooms
+        // entry being moved — this room is not actually clashing with anything at
+        // the room level, only counted against another type-only reservation's
+        // share of the type, so the check-in room-assignment screen can still
+        // offer it (with a warning) rather than hiding a genuinely free room.
+        return { room_id: r.room_id, room_number: r.room_number, floor: r.floor, hk_status: r.hk_status,
+          blocked_by: { guest_name: src.guest_name || "a guest", status: "reserved",
+            booking_ref: src.booking_ref, check_in: src.check_in, check_out: src.check_out } };
+      }));
     }
 
     res.json({ check_in: checkIn, check_out: checkOut, nights, room_types: Object.values(byType) });
@@ -513,13 +537,21 @@ export async function createBooking(req, res, next) {
       if (r.room_id) continue;
       requestedByType[r.room_type_id] = (requestedByType[r.room_type_id] || 0) + 1;
     }
+    // The desk may deliberately take more reservations of a type than exist
+    // physically — a same-day check-out or a cancellation often frees one
+    // up before the new arrival, and refusing every booking past today's
+    // exact count is worse than the odd tight squeeze. This is flagged, not
+    // blocked: the desk sees it and decides, instead of being told a
+    // reservation the property can probably still honor doesn't exist.
+    const overbookWarnings = [];
     for (const [roomTypeId, count] of Object.entries(requestedByType)) {
       const freeCount = await countFreeRoomsOfType(client, { b_id, room_type_id: roomTypeId, checkIn, checkOut });
       if (count > freeCount) {
-        await client.query("ROLLBACK");
         const typeName = pricedRooms.find(r => r.room_type_id === Number(roomTypeId))?.type_name || `type ${roomTypeId}`;
-        res.status(409);
-        return next(new Error(`Only ${freeCount} room(s) of ${typeName} are available for these dates (requested ${count}).`));
+        overbookWarnings.push(
+          `Only ${freeCount} room(s) of ${typeName} are free for these dates — ${count} were requested. ` +
+          `A room will need to free up before check-in.`
+        );
       }
     }
 
@@ -583,8 +615,9 @@ export async function createBooking(req, res, next) {
     await client.query("COMMIT");
     announce(booking.b_id, { action: "created", booking_id: booking.booking_id });
     logActivity(req, { action: "create", entity: "booking", entity_id: booking.booking_id, b_id: booking.b_id,
-      summary: `Created booking ${booking.booking_ref} — ${totals.grand_total.toFixed(2)}` });
-    res.status(201).json(booking);
+      summary: `Created booking ${booking.booking_ref} — ${totals.grand_total.toFixed(2)}`
+             + (overbookWarnings.length ? " (over availability)" : "") });
+    res.status(201).json({ ...booking, warnings: overbookWarnings });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     next(err);
@@ -603,6 +636,7 @@ const dateOnly = (d) => {
 
 export async function updateBooking(req, res, next) {
   const client = await pool.connect();
+  const overbookWarnings = [];
   try {
     const id = Number(req.params.id);
     await assertBookingInScope(req, res, id);
@@ -709,7 +743,8 @@ export async function updateBooking(req, res, next) {
       }
 
       // Same gap as createBooking: a room requested by type only never went
-      // through lockRooms/roomClash above.
+      // through lockRooms/roomClash above. Flagged, not blocked — see the
+      // same reasoning in createBooking.
       const requestedByType = {};
       for (const r of pricedRooms) {
         if (r.room_id) continue;
@@ -720,10 +755,11 @@ export async function updateBooking(req, res, next) {
           b_id: b.b_id, room_type_id: roomTypeId, checkIn, checkOut, ignoreBookingId: id,
         });
         if (count > freeCount) {
-          await client.query("ROLLBACK");
           const typeName = pricedRooms.find(r => r.room_type_id === Number(roomTypeId))?.type_name || `type ${roomTypeId}`;
-          res.status(409);
-          return next(new Error(`Only ${freeCount} room(s) of ${typeName} are available for these dates (requested ${count}).`));
+          overbookWarnings.push(
+            `Only ${freeCount} room(s) of ${typeName} are free for these dates — ${count} were requested. ` +
+            `A room will need to free up before check-in.`
+          );
         }
       }
 
@@ -816,7 +852,7 @@ export async function updateBooking(req, res, next) {
       summary: `Edited booking ${rows[0].booking_ref} — ${rows[0].check_in_date} to ${rows[0].check_out_date}, total ${rows[0].grand_total}`
              + (commissionNote ? ` (${commissionNote})` : "") });
     announce(rows[0].b_id, { action: "updated", booking_id: rows[0].booking_id });
-    res.json(rows[0]);
+    res.json({ ...rows[0], warnings: overbookWarnings });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     next(err);

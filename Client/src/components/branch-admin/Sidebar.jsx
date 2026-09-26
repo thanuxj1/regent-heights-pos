@@ -4,7 +4,8 @@ import { Link, useLocation } from "react-router-dom";
 import {
   FaTachometerAlt, FaChevronDown, FaChartLine, FaSignOutAlt,
   FaConciergeBell, FaBed, FaAngleDoubleLeft, FaAngleDoubleRight,
-  FaCashRegister, FaTrash,
+  FaCashRegister, FaTrash, FaBoxes, FaClipboardList, FaHandshake,
+  FaUsers, FaHistory, FaCog, FaTruck,
 } from "react-icons/fa";
 import { useAuth } from "../../context/AuthContext";
 import { colors, sidebar as S, radius, font } from "../../theme";
@@ -148,6 +149,52 @@ const CASHIER_SUPPLIES_GROUP = {
   ],
 };
 
+// Same idea, for the Reports & Accounting capability — granting it (see
+// EditUser.jsx's Permissions panel) already opens these two pages server-side
+// and via App.jsx's orCapability; without a nav entry a cashier granted it
+// had no way to actually find them.
+const CASHIER_REPORTS_GROUP = {
+  id: "reports",
+  label: "Reports",
+  icon: FaChartLine,
+  items: [
+    ["Reports",    "/hotel/reports"],
+    ["Accounting", "/branch-admin/accounting"],
+  ],
+};
+
+// Supplier Management and Purchase Orders both land here (SupplierManagement
+// itself embeds the purchase-order flow), so either grant shows this group.
+const CASHIER_SUPPLIERS_GROUP = {
+  id: "suppliers",
+  label: "Suppliers",
+  icon: FaBoxes,
+  items: [
+    ["Suppliers",       "/branch-admin/suppliers"],
+    ["Supplier Ledger", "/branch-admin/supplier-ledger"],
+  ],
+};
+
+const CASHIER_MENU_GROUP = {
+  id: "menu",
+  label: "Menu",
+  icon: FaClipboardList,
+  items: [
+    ["Menu / Products", "/branch-admin/products"],
+    ["Menu Categories", "/branch-admin/categories"],
+  ],
+};
+
+const CASHIER_HOTEL_MGMT_GROUP = {
+  id: "hotel-mgmt",
+  label: "Room Management",
+  icon: FaBed,
+  items: [
+    ["Room Types & Rates",   "/hotel/room-types"],
+    ["Meal Plan Categories", "/hotel/meal-plans"],
+  ],
+};
+
 export default function Sidebar() {
   const { pathname } = useLocation();
   const { user, logout, capabilities } = useAuth();
@@ -160,8 +207,31 @@ export default function Sidebar() {
   // cashier can hold either, both, or neither. One page, so a pinned link
   // rather than a one-item dropdown group.
   const hasWasteGrant = isCashier && capabilities?.has("waste_tracking");
+  const hasReportsGrant = isCashier && capabilities?.has("reports_accounting");
+  // Purchase Orders has no page of its own — it's the order/receiving flow
+  // embedded inside Supplier Management — so either grant surfaces this group.
+  const hasSupplierGrant = isCashier
+    && (capabilities?.has("supplier_management") || capabilities?.has("purchase_orders"));
+  const hasProductMenuGrant = isCashier && capabilities?.has("product_menu");
+  const hasHotelMgmtGrant = isCashier && capabilities?.has("hotel_management");
+  const hasCommissionGrant = isCashier && capabilities?.has("commission_agents");
+  const hasUserMgmtGrant = isCashier && capabilities?.has("user_management");
+  const hasActivityGrant = isCashier && capabilities?.has("activity_log");
+  // Cash Drawer Administration has no page of its own either — its one
+  // control (the drawer PIN card) lives inside Hotel Profile — so it also
+  // earns the link there, same as Branch Settings does.
+  const hasHotelProfileGrant = isCashier
+    && (capabilities?.has("branch_settings") || capabilities?.has("cash_drawer_admin"));
+  const hasDeliveryGrant = isCashier && capabilities?.has("delivery_management");
   const NAV = isCashier
-    ? (hasSuppliesGrant ? [...CASHIER_NAV, CASHIER_SUPPLIES_GROUP] : CASHIER_NAV)
+    ? [
+        ...CASHIER_NAV,
+        ...(hasSuppliesGrant ? [CASHIER_SUPPLIES_GROUP] : []),
+        ...(hasReportsGrant ? [CASHIER_REPORTS_GROUP] : []),
+        ...(hasSupplierGrant ? [CASHIER_SUPPLIERS_GROUP] : []),
+        ...(hasProductMenuGrant ? [CASHIER_MENU_GROUP] : []),
+        ...(hasHotelMgmtGrant ? [CASHIER_HOTEL_MGMT_GROUP] : []),
+      ]
     : ADMIN_NAV;
   const [homeLabel, homeTo, HomeIcon] = isCashier ? HOME.cashier : HOME.admin;
 
@@ -260,6 +330,46 @@ export default function Sidebar() {
             <SideLink
               to="/branch-admin/waste" icon={FaTrash} label="Waste Tracking"
               active={isActive("/branch-admin/waste")} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {hasDeliveryGrant && (
+            <SideLink
+              to="/branch-admin/delivery-cod" icon={FaTruck} label="Delivery COD"
+              active={isActive("/branch-admin/delivery-cod")} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {hasCommissionGrant && (
+            <SideLink
+              to="/branch-admin/commission-agents" icon={FaHandshake} label="Commission Agents"
+              active={isActive("/branch-admin/commission-agents")} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {hasUserMgmtGrant && (
+            <SideLink
+              to="/branch-admin/users" icon={FaUsers} label="User Management"
+              active={isActive("/branch-admin/users")} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {hasActivityGrant && (
+            <SideLink
+              to="/branch-admin/activity" icon={FaHistory} label="Activity Log"
+              active={isActive("/branch-admin/activity")} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {hasHotelProfileGrant && (
+            <SideLink
+              to="/branch-admin/hotel-profile" icon={FaCog} label="Hotel Profile"
+              active={isActive("/branch-admin/hotel-profile")} collapsed={collapsed}
               hovered={hovered} setHovered={setHovered}
             />
           )}

@@ -15,6 +15,8 @@ import {
   requireBranchAdminOr,
   CAPABILITIES,
   ROLES,
+  requireDefaultNotRevoked,
+  DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -41,6 +43,7 @@ router.get(
     [ROLES.ADMIN, ROLES.BRANCH_ADMIN, ROLES.KITCHEN_STAFF],
     "Kitchen Staff or Admin",
   ),
+  requireDefaultNotRevoked(DEFAULT_PERMISSIONS.KITCHEN_STOCK),
   getLowStockMaterials,
 );
 

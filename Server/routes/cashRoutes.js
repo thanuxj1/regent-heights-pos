@@ -3,16 +3,21 @@ import {
   getCurrentSession, openSession, addMovement, closeSession,
   listSessions, getSession, getDrawerPinSetting, setDrawerPinSetting,
 } from "../controllers/cashSessionController.js";
-import { requireAuth, requireRole, requireBranchAdminOr, CAPABILITIES, ROLES } from "../middleware/authMiddleware.js";
+import {
+  requireAuth, requireRole, requireBranchAdminOr, CAPABILITIES, ROLES,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+} from "../middleware/authMiddleware.js";
 import { requireDrawerPin } from "../utils/drawerPin.js";
 
 const router = express.Router();
 
-/** Anyone who works a till owns a drawer. */
-const worksATill = requireRole(
-  [ROLES.CASHIER, ROLES.BRANCH_ADMIN, ROLES.ADMIN],
-  "Cashier, Branch Admin or Admin",
-);
+/** Anyone who works a till owns a drawer — unless a Cashier's own drawer
+ * access has been switched off specifically for them (Branch Admin/Admin are
+ * never subject to that toggle). */
+const worksATill = [
+  requireRole([ROLES.CASHIER, ROLES.BRANCH_ADMIN, ROLES.ADMIN], "Cashier, Branch Admin or Admin"),
+  requireDefaultNotRevoked(DEFAULT_PERMISSIONS.OWN_DRAWER),
+];
 
 /** Reviewing everyone's drawers is the owner's job, not the cashier's. */
 const reviewsDrawers = requireBranchAdminOr(CAPABILITIES.CASH_DRAWER_ADMIN);

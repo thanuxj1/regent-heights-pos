@@ -14,9 +14,14 @@ import {
   requireBranchAdminOr,
   CAPABILITIES,
   requireWaiterOrAbove,
+  requireDefaultNotRevoked,
+  DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+
+// A Waiter's own default, inert for Cashier/Kitchen/Admin (see requireDefaultNotRevoked).
+const waiterTables = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.WAITER_TABLES);
 
 // ─────────────────────────────────────────────
 // PUBLIC (AUTHENTICATED USERS BASED ON ROLE)
@@ -24,16 +29,17 @@ const router = express.Router();
 
 // Get all assignments
 // 👉 Waiter+ can view (they need schedule)
-router.get("/", requireAuth, requireWaiterOrAbove, getTableAssignments);
+router.get("/", requireAuth, requireWaiterOrAbove, waiterTables, getTableAssignments);
 
 // Get assignment by ID
-router.get("/:id", requireAuth, requireWaiterOrAbove, getTableAssignmentById);
+router.get("/:id", requireAuth, requireWaiterOrAbove, waiterTables, getTableAssignmentById);
 
 // Get assignments by table
 router.get(
   "/table/:tableId",
   requireAuth,
   requireWaiterOrAbove,
+  waiterTables,
   getAssignmentsByTable,
 );
 
@@ -42,6 +48,7 @@ router.get(
   "/user/:userId",
   requireAuth,
   requireWaiterOrAbove,
+  waiterTables,
   getAssignmentsByUser,
 );
 

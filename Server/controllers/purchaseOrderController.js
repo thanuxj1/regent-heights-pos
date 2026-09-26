@@ -673,10 +673,10 @@ export async function updatePurchaseOrderStatus(req, res, next) {
 
         if (pay) {
           const p = await client.query(
-            `INSERT INTO supplier_payment (sup_id, po_id, amount, method, payment_date)
-             VALUES ($1, $2, $3, $4, CURRENT_DATE)
+            `INSERT INTO supplier_payment (sup_id, po_id, amount, method, payment_date, recorded_by)
+             VALUES ($1, $2, $3, $4, CURRENT_DATE, $5)
              RETURNING pay_id, sup_id, po_id, amount, method, payment_date`,
-            [existing.rows[0].sup_id, id, pay.amount, pay.method],
+            [existing.rows[0].sup_id, id, pay.amount, pay.method, req.user?.u_id ?? null],
           );
           paid = p.rows[0];
         }

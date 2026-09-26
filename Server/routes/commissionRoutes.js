@@ -1,5 +1,8 @@
 import { Router } from "express";
-import { requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
+import {
+  requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+} from "../middleware/authMiddleware.js";
 import {
   getAgents, getAgentById, createAgent, updateAgent, deleteAgent,
   getRecords, createRecord, updateRecord, deleteRecord, getMonthlySummary
@@ -13,8 +16,8 @@ router.use(requireAuth);
 // at Cashier-or-above. Managing agents, and the commission records/summary
 // themselves, is admin-tier data gated behind the same capability grant as
 // everything else this migration adds.
-router.get("/agents",              requireCashierOrAbove, getAgents);
-router.get("/agents/:id",          requireCashierOrAbove, getAgentById);
+router.get("/agents",              requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getAgents);
+router.get("/agents/:id",          requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getAgentById);
 router.get("/agents/summary",      requireBranchAdminOr(CAPABILITIES.COMMISSION_AGENTS), getMonthlySummary);
 router.post("/agents",             requireBranchAdminOr(CAPABILITIES.COMMISSION_AGENTS), createAgent);
 router.put("/agents/:id",          requireBranchAdminOr(CAPABILITIES.COMMISSION_AGENTS), updateAgent);

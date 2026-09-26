@@ -76,6 +76,10 @@ export default function BookingDetail() {
   const [guestSaved, setGuestSaved] = useState(false);
   const docFileRef = useRef(null);
   const [docUploadError, setDocUploadError] = useState("");
+  // A passport photo taken at the desk is easy to get wrong — bad light, a
+  // thumb over a corner, out of focus — and a 120×80 crop won't show that.
+  // Full size, the desk can actually tell whether it's worth keeping.
+  const [viewingDoc, setViewingDoc] = useState(false);
   useEffect(() => {
     if (!booking?.guest_id) return;
     getGuestById(booking.guest_id).then(g => { setGuest(g); setGuestForm(g); }).catch(() => {});
@@ -107,7 +111,23 @@ export default function BookingDetail() {
     } finally { setGuestSaving(false); }
   };
   const doPrintGuestRegistration = () => {
-    printGuestRegistration({ branchName, booking, guest: guestForm || guest || {}, stayPolicy });
+    // The desk may have already picked a room in the dropdown above without
+    // clicking Check In yet (registration is usually filled in first) — that
+    // pick lives only in local state until check-in saves it, so the form
+    // would otherwise print "TBD" even though a room's already decided.
+    const roomNumberById = {};
+    (avail?.room_types || []).forEach(t => {
+      [...(t.available_rooms || []), ...(t.unavailable_rooms || [])].forEach(r => {
+        if (r.room_number) roomNumberById[r.room_id] = r.room_number;
+      });
+    });
+    const rooms = (booking.rooms || []).map(br => {
+      const pendingId = assignments[br.booking_room_id];
+      return (!br.room_number && pendingId && roomNumberById[pendingId])
+        ? { ...br, room_number: roomNumberById[pendingId] }
+        : br;
+    });
+    printGuestRegistration({ branchName, booking: { ...booking, rooms }, guest: guestForm || guest || {}, stayPolicy });
   };
 
   const load = useCallback(async () => {
@@ -212,9 +232,19 @@ export default function BookingDetail() {
   const balance = folio ? folio.balance_due : Number(booking.grand_total || 0) - Number(booking.paid_total || 0);
   const canCheckIn  = ["confirmed", "tentative"].includes(booking.status);
   const canCheckOut = booking.status === "checked_in";
+  // Every physically free room of the type, offered for assignment — including
+  // one only "unavailable" because another type-only reservation is also
+  // counting on it (blocked_by.status === "reserved"). That guest hasn't been
+  // given a room either, so nothing is actually double-booked by offering it
+  // here too; the desk just sees a warning on it (below) rather than having it
+  // silently withheld. A room whose guest is still physically checked in stays
+  // excluded — that one's a real clash, not an accounting one.
   const freeRooms = (bookingRoom) => {
     const t = avail?.room_types.find(t => t.room_type_id === bookingRoom.room_type_id);
-    return t ? t.available_rooms : [];
+    if (!t) return [];
+    const alsoNeeded = (t.unavailable_rooms || []).filter(r => r.blocked_by?.status === "reserved");
+    return [...t.available_rooms, ...alsoNeeded]
+      .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }));
   };
   // Every BOOKING_ROOM row needs a room_id before Check In is allowed — the
   // server already refuses otherwise; this just stops the click before an
@@ -303,10 +333,16 @@ export default function BookingDetail() {
                   {busy === "check-in" ? "Checking in…" : "✓ Check In"}
                 </button>
               )}
+              {/* A payment isn't tied to the folio (that doesn't exist until check-in
+                  creates it) — it's just money against the booking, so there's no
+                  reason a deposit taken over the phone, or paid at the desk while
+                  registration is being filled in, has to wait for Check In first. */}
+              {["tentative", "confirmed", "checked_in"].includes(booking.status) && (
+                <button onClick={() => setShowPayment(true)} style={btn("ghost")}>+ Payment</button>
+              )}
               {canCheckOut && (
                 <>
                   <button onClick={() => setShowCharge(true)} style={btn("ghost")}>+ Post Charge</button>
-                  <button onClick={() => setShowPayment(true)} style={btn("ghost")}>+ Payment</button>
                   <button onClick={() => doCheckOut(false)} disabled={busy === "check-out"} style={btn("warn")}>
                     {busy === "check-out" ? "Checking out…" : "→ Check Out"}
                   </button>
@@ -327,26 +363,61 @@ export default function BookingDetail() {
           {canCheckIn && (
             <div style={{ ...card, padding: 20, marginBottom: 20 }}>
               <div style={{ fontWeight: 700, fontSize: 14, color: "#1E293B", marginBottom: 12 }}>Room Assignment</div>
-              {(booking.rooms || []).map(br => (
-                <div key={br.booking_room_id} style={{ display: "grid", gridTemplateColumns: "1fr 220px", gap: 12,
-                                                       alignItems: "center", marginBottom: 10 }}>
-                  <div style={{ fontSize: 13, color: "#475569" }}>
-                    <strong>{br.type_name}</strong> · {money(br.rate_per_night)}/night
-                    {br.room_number && <span style={{ color: "#059669" }}> — assigned Room {br.room_number}</span>}
+              {(booking.rooms || []).map(br => {
+                const t = avail?.room_types.find(t => t.room_type_id === br.room_type_id);
+                const free = freeRooms(br);
+                // The reservation only ever promised a room *type* — a same-day
+                // turnover counted toward it (see the booking form), but that
+                // specific room is still occupied until the outgoing guest is
+                // actually checked out. An empty dropdown with no explanation
+                // reads as broken; say what it's actually waiting on.
+                const stillOccupied = free.length === 0 && !br.room_number
+                  ? t?.unavailable_rooms?.find(r => r.blocked_by?.status === "checked_in")
+                  : null;
+                // Other confirmed/tentative bookings of this same category, over
+                // overlapping dates, that also need a room of this type but — same
+                // as this booking — haven't been assigned a specific one yet. No
+                // room is actually "theirs"; the server just has to hold back that
+                // many rooms so assigning this one doesn't leave them with none.
+                const otherReserved = !br.room_number
+                  ? (t?.unavailable_rooms || []).filter(r => r.blocked_by?.status === "reserved")
+                  : [];
+                return (
+                <div key={br.booking_room_id} style={{ marginBottom: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 220px", gap: 12, alignItems: "center" }}>
+                    <div style={{ fontSize: 13, color: "#475569" }}>
+                      <strong>{br.type_name}</strong> · {money(br.rate_per_night)}/night
+                      {br.room_number && <span style={{ color: "#059669" }}> — assigned Room {br.room_number}</span>}
+                    </div>
+                    <select
+                      value={assignments[br.booking_room_id] ?? br.room_id ?? ""}
+                      onChange={e => setAssignments(a => ({ ...a, [br.booking_room_id]: e.target.value }))}
+                      style={input}>
+                      <option value="">Select room…</option>
+                      {/* No option is marked individually — which of the free rooms is
+                          "at risk" is arbitrary (either could end up assigned to the
+                          other reservation below), so singling one out would just be
+                          misleading. The one warning below covers all of them. */}
+                      {free.map(r => (
+                        <option key={r.room_id} value={r.room_id}>
+                          Room {r.room_number}{r.floor ? ` · Floor ${r.floor}` : ""}{r.hk_status ? ` · ${r.hk_status}` : ""}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <select
-                    value={assignments[br.booking_room_id] ?? br.room_id ?? ""}
-                    onChange={e => setAssignments(a => ({ ...a, [br.booking_room_id]: e.target.value }))}
-                    style={input}>
-                    <option value="">Select room…</option>
-                    {freeRooms(br).map(r => (
-                      <option key={r.room_id} value={r.room_id}>
-                        Room {r.room_number}{r.floor ? ` · Floor ${r.floor}` : ""} · {r.hk_status}
-                      </option>
-                    ))}
-                  </select>
+                  {stillOccupied && (
+                    <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 4 }}>
+                      ⚠ {stillOccupied.blocked_by.guest_name} is still in Room {stillOccupied.room_number} — check them out to free it up.
+                    </div>
+                  )}
+                  {!stillOccupied && otherReserved.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 4 }}>
+                      ⚠ {otherReserved.map(r => r.blocked_by.guest_name).join(", ")} also {otherReserved.length > 1 ? "have" : "has"} a booking needing a {br.type_name} room these dates — make sure one's left for them.
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
               <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 8, marginBottom: 14 }}>
                 Every room must be assigned before check-in. Charges post to the folio automatically at check-in.
               </div>
@@ -421,8 +492,9 @@ export default function BookingDetail() {
                   />
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
                     {guestForm.id_document ? (
-                      <img src={guestForm.id_document} alt="Passport / ID scan"
-                        style={{ width: 120, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #E2E8F0" }} />
+                      <img src={guestForm.id_document} alt="Passport / ID scan — click to view full size"
+                        onClick={() => setViewingDoc(true)}
+                        style={{ width: 120, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #E2E8F0", cursor: "zoom-in" }} />
                     ) : (
                       <div style={{ width: 120, height: 80, borderRadius: 6, border: "1px dashed #CBD5E1",
                         display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#94A3B8" }}>
@@ -578,6 +650,16 @@ export default function BookingDetail() {
             </div>
           )}
 
+      {viewingDoc && guestForm?.id_document && (
+        <div style={modalWrap} onClick={() => setViewingDoc(false)}>
+          <div style={{ maxWidth: "90vw", maxHeight: "90vh" }} onClick={e => e.stopPropagation()}>
+            <img src={guestForm.id_document} alt="Passport / ID scan"
+              style={{ maxWidth: "90vw", maxHeight: "80vh", display: "block", borderRadius: 8, boxShadow: "0 10px 40px rgba(0,0,0,0.4)" }} />
+            <button type="button" onClick={() => setViewingDoc(false)}
+              style={{ ...btn("ghost"), marginTop: 10, width: "100%" }}>Close</button>
+          </div>
+        </div>
+      )}
       {showCharge   && <ChargeModal  onClose={() => setShowCharge(false)}  onSave={async (p) => { await postFolioItem(id, p); setShowCharge(false); load(); }} />}
       {showPayment  && <PaymentModal balance={balance} onClose={() => setShowPayment(false)} onSave={async (p) => { await addBookingPayment(id, p); setShowPayment(false); load(); }} />}
       {showConfirm && confirmation && <ConfirmationModal data={confirmation} onClose={() => setShowConfirm(false)} />}

@@ -117,10 +117,10 @@ export const createWaste = async (req, res, next) => {
 
     // ── Insert waste record ──────────────────
     const wasteResult = await client.query(
-      `INSERT INTO "public"."Waste" ("rm_id", "waste_qty", "reason", "recorded_at")
-       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+      `INSERT INTO "public"."Waste" ("rm_id", "waste_qty", "reason", "recorded_at", "recorded_by")
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
        RETURNING "waste_id", "rm_id", "waste_qty", "reason", "recorded_at"`,
-      [rm_id, safeQty, reason?.trim() ?? null],
+      [rm_id, safeQty, reason?.trim() ?? null, req.user?.u_id ?? null],
     );
 
     // ── Reduce stock ─────────────────────────

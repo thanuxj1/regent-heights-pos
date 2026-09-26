@@ -22,12 +22,17 @@ export default function ProtectedRoute({ children, allowedRoles = [], orCapabili
   const role = Number(user.role_id);
   const roleOk = !allowedRoles.length || allowedRoles.map(Number).includes(role);
 
+  // A route can be unlocked by more than one capability (e.g. Supplier
+  // Management and Purchase Orders both reach /branch-admin/suppliers), so
+  // this accepts either a single key or a list and passes if any is held.
+  const capList = orCapability ? [].concat(orCapability) : [];
+
   // The role check alone doesn't let this person through, but a capability
   // grant might — don't decide (and redirect them away) on the empty Set
   // that exists before that grant has even been fetched.
-  if (!roleOk && orCapability && !capabilitiesLoaded) return null;
+  if (!roleOk && capList.length && !capabilitiesLoaded) return null;
 
-  const capOk = orCapability && capabilities?.has(orCapability);
+  const capOk = capList.some((c) => capabilities?.has(c));
 
   if (!roleOk && !capOk) {
     const home = roleHome(role);

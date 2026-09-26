@@ -5,6 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { getBranchById, updateBranch, getStayPolicy, updateStayPolicy } from "../../services/api";
 import { card, input, label, btn, errorBox } from "../hotel/ui";
 import DrawerPinCard from "../../components/branch-admin/DrawerPinCard";
+import ApprovalPinCard from "../../components/branch-admin/ApprovalPinCard";
 
 /**
  * The property's own details — the name, address and phone that print on every
@@ -258,6 +259,7 @@ export default function HotelProfile() {
           )}
 
           <DrawerPinCard />
+          <ApprovalPinCard />
         </main>
       </div>
     </div>

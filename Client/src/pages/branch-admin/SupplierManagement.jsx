@@ -418,12 +418,22 @@ const SupplierManagement = () => {
   // Sticky once true — switching to a shorter range that happens to be all
   // zero shouldn't make the whole chart (and its own range control) vanish.
   const [hasTrendHistory, setHasTrendHistory] = useState(false);
+  // Set only on a 403 from ledger/spend-trend — a cashier can reach this page
+  // with just PURCHASE_ORDERS, but every /suppliers* endpoint here still
+  // requires SUPPLIER_MANAGEMENT. Without this, that 403 renders identically
+  // to "no suppliers yet", which tells the cashier to go add one they can't.
+  const [accessDenied, setAccessDenied] = useState("");
 
   useEffect(() => {
     getSpendTrend(undefined, trendMonths).then((rows) => {
       setOverallTrend(rows);
       if (rows.some((t) => t.total > 0)) setHasTrendHistory(true);
-    }).catch(() => setOverallTrend([]));
+    }).catch((e) => {
+      setOverallTrend([]);
+      if (e?.response?.status === 403) {
+        setAccessDenied((prev) => prev || errorText(e, "You don't have Supplier Management access."));
+      }
+    });
   }, [trendMonths]);
 
   // New Supplier Modal State
@@ -441,8 +451,14 @@ const SupplierManagement = () => {
     try {
       const list = await getSupplierLedger();
       setSuppliers(Array.isArray(list) ? list : list?.suppliers || []);
+      setAccessDenied("");
     } catch (e) {
-      showToast(errorText(e, "Failed to load suppliers"), "error");
+      if (e?.response?.status === 403) {
+        setAccessDenied(errorText(e, "You don't have Supplier Management access."));
+        setSuppliers([]);
+      } else {
+        showToast(errorText(e, "Failed to load suppliers"), "error");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -560,18 +576,30 @@ const SupplierManagement = () => {
                   <h2 style={{ fontSize: "24px", fontWeight: "700", color: "#101828", margin: 0, letterSpacing: "-0.3px" }}>Supplier Directory</h2>
                   <p style={{ color: "#667085", margin: "2px 0 0", fontSize: "14px" }}>What you have ordered, what has arrived, and what you still owe.</p>
                 </div>
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  style={{
-                    background: "linear-gradient(135deg, #1565C0, #0D47A1)", color: "#fff", border: "none",
-                    padding: "11px 22px", borderRadius: "10px", fontWeight: "600", cursor: "pointer", fontSize: "14px",
-                    boxShadow: "0 2px 8px rgba(21,101,192,0.3)",
-                  }}
-                >
-                  + Add Supplier
-                </button>
+                {!accessDenied && (
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    style={{
+                      background: "linear-gradient(135deg, #1565C0, #0D47A1)", color: "#fff", border: "none",
+                      padding: "11px 22px", borderRadius: "10px", fontWeight: "600", cursor: "pointer", fontSize: "14px",
+                      boxShadow: "0 2px 8px rgba(21,101,192,0.3)",
+                    }}
+                  >
+                    + Add Supplier
+                  </button>
+                )}
               </div>
 
+              {accessDenied ? (
+                <div style={{
+                  background: "#FEF3F2", border: "1px solid #FDA29B", borderRadius: "14px",
+                  padding: "20px 24px", color: "#B42318",
+                }}>
+                  <strong style={{ display: "block", marginBottom: 4, fontSize: 15 }}>Supplier Management access required</strong>
+                  <span style={{ fontSize: 14 }}>{accessDenied}</span>
+                </div>
+              ) : (
+                <>
               {hasTrendHistory && (
                 <div style={{ marginBottom: "24px" }}>
                   <SpendTrendChart
@@ -670,6 +698,8 @@ const SupplierManagement = () => {
                     );
                   })}
                 </div>
+              )}
+                </>
               )}
             </>
           )}

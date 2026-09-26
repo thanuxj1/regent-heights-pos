@@ -313,15 +313,18 @@ export async function getTransactions(req, res, next) {
 
     if (kind === "all" || kind === "expense") {
       const r = await pool.query(
-        `SELECT exp_id, exp_date AS at, exp_amount AS amount, exp_category, exp_description
-         FROM "EXPENSE"
-         WHERE b_id = $1 AND exp_date BETWEEN $2::date AND $3::date
-         ORDER BY exp_date DESC`,
+        `SELECT e.exp_id, e.exp_date AS at, e.exp_amount AS amount, e.exp_category, e.exp_description,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
+         FROM "EXPENSE" e
+         LEFT JOIN "User" u ON u.u_id = e.created_by
+         WHERE e.b_id = $1 AND e.exp_date BETWEEN $2::date AND $3::date
+         ORDER BY e.exp_date DESC`,
         [b_id, from, to]
       );
       r.rows.forEach(x => out.push({
         at: x.at, type: `Expense (${x.exp_category})`, direction: "out",
         amount: num(x.amount), method: "—", reference: "", party: x.exp_description,
+        handled_by: x.handled_by || null,
         exp_id: x.exp_id,
       }));
     }
@@ -348,18 +351,21 @@ export async function getTransactions(req, res, next) {
     // counts it; this list, the one meant to be complete, did not).
     if (kind === "all" || kind === "supplier") {
       const r = await pool.query(
-        `SELECT sp.pay_id, sp.po_id, sp.payment_date AS at, sp.amount, sp.method,
-                s.sup_name AS party
+        `SELECT sp.pay_id, sp.po_id, sp.created_at AS at, sp.amount, sp.method,
+                s.sup_name AS party,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM supplier_payment sp
          JOIN purchase_order po ON po.po_id = sp.po_id
          JOIN "SUPPLIER" s ON s.sup_id = sp.sup_id
+         LEFT JOIN "User" u ON u.u_id = sp.recorded_by
          WHERE po.b_id = $1 AND sp.payment_date BETWEEN $2::date AND $3::date
-         ORDER BY sp.payment_date DESC`,
+         ORDER BY sp.created_at DESC`,
         [b_id, from, to]
       );
       r.rows.forEach(x => out.push({
         at: x.at, type: "Supplier payment", direction: "out",
         amount: num(x.amount), method: x.method, reference: `PO#${x.po_id}`, party: x.party,
+        handled_by: x.handled_by || null,
         pay_id: x.pay_id, po_id: x.po_id,
       }));
     }
@@ -370,9 +376,11 @@ export async function getTransactions(req, res, next) {
     if (kind === "all" || kind === "waste") {
       const r = await pool.query(
         `SELECT w.waste_id, w.recorded_at AS at, w.waste_qty * COALESCE(rm.unit_price, 0) AS amount,
-                rm.rm_name AS party, w.reason
+                rm.rm_name AS party, w.reason,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "public"."Waste" w
          JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+         LEFT JOIN "User" u ON u.u_id = w.recorded_by
          WHERE rm.b_id = $1 AND w.recorded_at::date BETWEEN $2::date AND $3::date
          ORDER BY w.recorded_at DESC`,
         [b_id, from, to]
@@ -380,6 +388,7 @@ export async function getTransactions(req, res, next) {
       r.rows.forEach(x => out.push({
         at: x.at, type: "Waste", direction: "out",
         amount: num(x.amount), method: "—", reference: x.reason || "", party: x.party,
+        handled_by: x.handled_by || null,
         waste_id: x.waste_id,
       }));
     }
@@ -389,15 +398,18 @@ export async function getTransactions(req, res, next) {
     // supplier payment is one row, not one per purchase order it covers).
     if (kind === "all" || kind === "delivery_cod") {
       const r = await pool.query(
-        `SELECT settlement_id, created_at AS at, amount, delivery_partner, method, note
-         FROM "DELIVERY_COD_SETTLEMENT"
-         WHERE b_id = $1 AND settled_date BETWEEN $2::date AND $3::date
-         ORDER BY created_at DESC`,
+        `SELECT s.settlement_id, s.created_at AS at, s.amount, s.delivery_partner, s.method, s.note,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
+         FROM "DELIVERY_COD_SETTLEMENT" s
+         LEFT JOIN "User" u ON u.u_id = s.created_by
+         WHERE s.b_id = $1 AND s.settled_date BETWEEN $2::date AND $3::date
+         ORDER BY s.created_at DESC`,
         [b_id, from, to]
       );
       r.rows.forEach(x => out.push({
         at: x.at, type: "Delivery COD Settlement", direction: "in",
         amount: num(x.amount), method: x.method, reference: x.note || "", party: x.delivery_partner,
+        handled_by: x.handled_by || null,
         settlement_id: x.settlement_id,
       }));
     }

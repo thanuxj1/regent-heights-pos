@@ -183,10 +183,35 @@ export default function TransactionDetailsModal({ item, onClose }) {
                   </p>
                 </div>
               )}
+              {item.type === 'purchase' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Supplier</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Recorded by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.handled_by || 'Not recorded'}</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-slate-500">
+                    Paid against purchase order {item.invoiceNo}. Open Supplier Ledger for the full order and payment history.
+                  </p>
+                </div>
+              )}
               {item.type === 'expense' && (
                 <div className="rounded-xl border border-slate-100 p-4 text-xs">
-                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Description</span>
-                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Description</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Recorded by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.handled_by || 'Not recorded'}</span>
+                    </div>
+                  </div>
                   <p className="mt-3 text-slate-500">{item.raw?.type || 'Expense'}, recorded on the Accounting page.</p>
                 </div>
               )}
@@ -203,15 +228,31 @@ export default function TransactionDetailsModal({ item, onClose }) {
               )}
               {item.type === 'waste' && (
                 <div className="rounded-xl border border-slate-100 p-4 text-xs">
-                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Item</span>
-                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Item</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Recorded by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.handled_by || 'Not recorded'}</span>
+                    </div>
+                  </div>
                   <p className="mt-3 text-slate-500">{item.raw?.reference || 'No reason recorded.'} — see Waste Tracking for the full record.</p>
                 </div>
               )}
               {item.type === 'cod' && (
                 <div className="rounded-xl border border-slate-100 p-4 text-xs">
-                  <span className="block text-slate-400 font-medium uppercase tracking-wider">Delivery Partner</span>
-                  <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Delivery Partner</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Recorded by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.handled_by || 'Not recorded'}</span>
+                    </div>
+                  </div>
                   <p className="mt-3 text-slate-500">
                     Cash-on-delivery cash settled by this partner{item.raw?.reference ? ` — ${item.raw.reference}` : ''}.
                     See Delivery COD for which orders it covered.

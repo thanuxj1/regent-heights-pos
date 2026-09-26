@@ -96,6 +96,14 @@ export async function countFreeRoomsOfType(client, { b_id, room_type_id, checkIn
   // still null) occupies a slot exactly as much as an assigned one does, but
   // `br.room_id = r.room_id` can never match a null room_id, so counting via
   // ROOM would silently ignore every type-only booking already on the books.
+  //
+  // This function only ever counts type-only slots — a reservation never
+  // claims a specific room (that's roomClash's job, and stays strict). So a
+  // room whose occupant is due out the very day being booked can count as
+  // free here too, same as getAvailability's own count for the booking
+  // form: no specific room is promised, so nothing is actually oversold.
+  // Without this, the form could offer "1 free" (its own same-day-aware
+  // count) and then refuse the booking it just offered.
   const { rows } = await client.query(
     `SELECT
        (SELECT COUNT(*)::int FROM "ROOM" r
@@ -107,7 +115,9 @@ export async function countFreeRoomsOfType(client, { b_id, room_type_id, checkIn
          WHERE br.room_type_id = $2 AND b.b_id = $1
            AND b.status = ANY($6::text[])
            AND ($5::int IS NULL OR b.booking_id <> $5::int)
-           AND b.check_in_date < $4::date AND ${effectiveCheckout("b")} > $3::date)
+           AND b.check_in_date < $4::date
+           AND (CASE WHEN b.status = 'checked_in' AND b.check_out_date = $3::date
+                     THEN b.check_out_date ELSE ${effectiveCheckout("b")} END) > $3::date)
        AS n`,
     [Number(b_id), Number(room_type_id), checkIn, checkOut, ignoreBookingId ?? null, ACTIVE]
   );

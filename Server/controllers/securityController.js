@@ -143,11 +143,12 @@ export async function clearApprovalPin(req, res, next) {
 export async function getSecurityOverview(req, res, next) {
   try {
     const b_id = writeBranchId(req);
-    const [{ rows: locs }, { rows: pins }] = await Promise.all([
+    const [{ rows: locs }, { rows: pins }, { rows: mine }] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int n FROM "LOGIN_LOCATION" WHERE b_id=$1 AND is_active`, [b_id]),
       pool.query(
         `SELECT COUNT(*)::int n FROM "User"
          WHERE "B_id"=$1 AND u_approval_pin IS NOT NULL AND u_status IS NOT FALSE`, [b_id]),
+      pool.query(`SELECT u_approval_pin IS NOT NULL AS set FROM "User" WHERE u_id=$1`, [req.user.u_id]),
     ]);
     res.json({
       login_locations_active: locs[0].n,
@@ -155,6 +156,7 @@ export async function getSecurityOverview(req, res, next) {
       managers_who_can_approve: pins[0].n,
       discount_needs_approval_above_pct: DISCOUNT_APPROVAL_PCT,
       your_current_address: callerIp(req),
+      your_pin_is_set: mine[0]?.set === true,
     });
   } catch (err) { next(err); }
 }

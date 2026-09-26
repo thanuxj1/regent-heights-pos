@@ -33,7 +33,13 @@ import { useAuth } from './context/AuthContext';
 // Mirrors the two capability keys (of the full backend catalog) that can
 // cross a role boundary here — see Server/middleware/authMiddleware.js's
 // CAPABILITIES for the source of truth; the full catalog is backend-only.
-const CAP = { CASHIER_POS_ACCESS: 'cashier_pos_access', RAW_MATERIALS: 'raw_materials', WASTE_TRACKING: 'waste_tracking', DELIVERY_MANAGEMENT: 'delivery_management' };
+const CAP = {
+  CASHIER_POS_ACCESS: 'cashier_pos_access', RAW_MATERIALS: 'raw_materials', WASTE_TRACKING: 'waste_tracking',
+  DELIVERY_MANAGEMENT: 'delivery_management', REPORTS_ACCOUNTING: 'reports_accounting',
+  SUPPLIER_MANAGEMENT: 'supplier_management', PURCHASE_ORDERS: 'purchase_orders', PRODUCT_MENU: 'product_menu',
+  HOTEL_MANAGEMENT: 'hotel_management', COMMISSION_AGENTS: 'commission_agents', USER_MANAGEMENT: 'user_management',
+  ACTIVITY_LOG: 'activity_log', BRANCH_SETTINGS: 'branch_settings', CASH_DRAWER_ADMIN: 'cash_drawer_admin',
+};
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminStatistics = lazy(() => import('./pages/admin/AdminStatistics'));
 const AdminTransactions = lazy(() => import('./pages/admin/Transactions'));
@@ -179,7 +185,7 @@ function App() {
       <Route
         path="/branch-admin/users"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.USER_MANAGEMENT}>
             <BranchAdminUserManagement />
           </ProtectedRoute>
         }
@@ -297,7 +303,7 @@ function App() {
       <Route
         path="/branch-admin/products"
         element={
-          <ProtectedRoute allowedRoles={[1]}>
+          <ProtectedRoute allowedRoles={[1]} orCapability={CAP.PRODUCT_MENU}>
             <ProductManagement />
           </ProtectedRoute>
         }
@@ -306,7 +312,7 @@ function App() {
       <Route
         path="/branch-admin/categories"
         element={
-          <ProtectedRoute allowedRoles={[1, 2, 6]}>
+          <ProtectedRoute allowedRoles={[1, 2, 6]} orCapability={CAP.PRODUCT_MENU}>
             <MenuCategories />
           </ProtectedRoute>
         }
@@ -315,7 +321,7 @@ function App() {
       <Route
         path="/branch-admin/hotel-profile"
         element={
-          <ProtectedRoute allowedRoles={[1, 2, 6]}>
+          <ProtectedRoute allowedRoles={[1, 2, 6]} orCapability={[CAP.BRANCH_SETTINGS, CAP.HOTEL_MANAGEMENT, CAP.CASH_DRAWER_ADMIN]}>
             <HotelProfile />
           </ProtectedRoute>
         }
@@ -456,7 +462,7 @@ function App() {
       <Route
         path="/branch-admin/suppliers"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={[CAP.SUPPLIER_MANAGEMENT, CAP.PURCHASE_ORDERS]}>
             <SupplierManagement />
           </ProtectedRoute>
         }
@@ -465,7 +471,7 @@ function App() {
       <Route
         path="/branch-admin/supplier-ledger"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={[CAP.SUPPLIER_MANAGEMENT, CAP.PURCHASE_ORDERS]}>
             <SupplierLedger />
           </ProtectedRoute>
         }
@@ -553,7 +559,7 @@ function App() {
         <Route
           path="/branch-admin/commission-agents"
           element={
-            <ProtectedRoute allowedRoles={[1, 2]}>
+            <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.COMMISSION_AGENTS}>
               <CommissionAgents />
             </ProtectedRoute>
           }
@@ -562,7 +568,7 @@ function App() {
         <Route
           path="/branch-admin/accounting"
           element={
-            <ProtectedRoute allowedRoles={[1, 2]}>
+            <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.REPORTS_ACCOUNTING}>
               <Accounting />
             </ProtectedRoute>
           }
@@ -604,7 +610,7 @@ function App() {
         <Route
           path="/branch-admin/activity"
           element={
-            <ProtectedRoute allowedRoles={[1, 2]}>
+            <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.ACTIVITY_LOG}>
               <ActivityLog />
             </ProtectedRoute>
           }
@@ -612,7 +618,7 @@ function App() {
         <Route
           path="/hotel/reports"
           element={
-            <ProtectedRoute allowedRoles={[1, 2]}>
+            <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.REPORTS_ACCOUNTING}>
               <Reports />
             </ProtectedRoute>
           }
@@ -652,7 +658,7 @@ function App() {
         <Route
           path="/hotel/room-types"
           element={
-            <ProtectedRoute allowedRoles={[1, 2]}>
+            <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.HOTEL_MANAGEMENT}>
               <RoomTypes />
             </ProtectedRoute>
           }
@@ -661,7 +667,7 @@ function App() {
         <Route
           path="/hotel/meal-plans"
           element={
-            <ProtectedRoute allowedRoles={[1, 2]}>
+            <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.HOTEL_MANAGEMENT}>
               <MealPlans />
             </ProtectedRoute>
           }

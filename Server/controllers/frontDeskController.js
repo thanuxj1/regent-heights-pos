@@ -6,6 +6,7 @@ import { hotelToday } from "../utils/hotelTime.js";
 import {
   emitSocketEvent, emitOrderEvent, getKitchenSocketRoom,
 } from "../utils/socket.js";
+import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 // The hotel's day, not GMT's. See utils/hotelTime.js.
@@ -285,7 +286,7 @@ export async function createRoomServiceOrder(req, res, next) {
   let client;
   try {
     client = await pool.connect();
-    const { room_id, items, notes, tax_pct } = req.body;
+    const { room_id, items, notes, tax_pct, discount_pct, approval_pin } = req.body;
     if (!room_id) { res.status(400); return next(new Error("room_id is required")); }
     await assertInScope(req, res, { table: "ROOM", idColumn: "room_id", id: room_id });
     if (!Array.isArray(items) || !items.length) {
@@ -324,7 +325,29 @@ export async function createRoomServiceOrder(req, res, next) {
 
     const priced = items.map(i => ({ ...i, qty: num(i.pro_quantity, 1) }));
 
-    const subtotal = priced.reduce((s, i) => s + num(i.unit_price) * i.qty, 0);
+    const lineSubtotal = priced.reduce((s, i) => s + num(i.unit_price) * i.qty, 0);
+
+    // Same rule as a till sale (createOrderWithItems): a discount past the
+    // house limit needs a manager's PIN. Without this, routing a discounted
+    // sale to a guest's room bill instead of Cash/Card skipped the check
+    // entirely — any PIN (or none) went through, because nothing here ever
+    // looked at discount_pct or approval_pin at all.
+    const discountPct = Math.min(100, Math.max(0, Number(discount_pct ?? 0)));
+    let discountApprover = null;
+    if (discountPct > DISCOUNT_APPROVAL_PCT) {
+      const approval = await requireApproval(req, {
+        pin: approval_pin, b_id,
+        what: `give a ${discountPct}% discount (over the ${DISCOUNT_APPROVAL_PCT}% limit)`,
+      });
+      if (!approval.ok) {
+        await client.query("ROLLBACK");
+        res.status(approval.status);
+        return next(new Error(approval.message));
+      }
+      discountApprover = approval.approver?.u_id ?? null;
+    }
+
+    const subtotal = +(lineSubtotal * (1 - discountPct / 100)).toFixed(2);
     const taxPct   = num(tax_pct, 0);
     const tax      = +(subtotal * taxPct / 100).toFixed(2);
     const total    = +(subtotal + tax).toFixed(2);
@@ -332,10 +355,11 @@ export async function createRoomServiceOrder(req, res, next) {
     const ord = await client.query(
       `INSERT INTO "ORDER"
          (or_tax, or_totalcost, "or_totalCostWtax", or_status, or_type,
-          u_id, b_id, room_id, folio_id)
-       VALUES ($1,$2,$3,'pending','room_service',$4,$5,$6,$7)
+          u_id, b_id, room_id, folio_id, discount_pct, discount_approved_by)
+       VALUES ($1,$2,$3,'pending','room_service',$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [tax, subtotal, total, req.user?.u_id || null, b_id, Number(room_id), folio_id]
+      [tax, subtotal, total, req.user?.u_id || null, b_id, Number(room_id), folio_id,
+       discountPct, discountApprover]
     );
     const order = ord.rows[0];
 
@@ -425,7 +449,8 @@ export async function chargeOrderToRoom(req, res, next) {
 
     await client.query("BEGIN");
     const found = await client.query(
-      `SELECT or_id, or_status, folio_id, payment_method, voided_by, b_id FROM "ORDER" WHERE or_id = $1 FOR UPDATE`,
+      `SELECT or_id, or_status, folio_id, payment_method, voided_by, b_id, discount_pct
+         FROM "ORDER" WHERE or_id = $1 FOR UPDATE`,
       [order_id]);
     if (!found.rows.length) { await client.query("ROLLBACK"); res.status(404); return next(new Error("Order not found")); }
     const o = found.rows[0];
@@ -457,7 +482,14 @@ export async function chargeOrderToRoom(req, res, next) {
     // up to date just before this call.
     const sum = await client.query(
       `SELECT COALESCE(SUM(total_price), 0) AS s FROM "ORDER_ITEM" WHERE order_id = $1`, [order_id]);
-    const subtotal = num(sum.rows[0].s);
+    const lineSubtotal = num(sum.rows[0].s);
+    // The order's own discount_pct was already validated and manager-approved
+    // (if it needed to be) when this order was first created as a KOT — this
+    // just carries it through. Recomputing the subtotal from the item total
+    // without applying it silently charged the guest full price, discarding
+    // an approval that had already happened.
+    const discountPct = Math.min(100, Math.max(0, num(found.rows[0].discount_pct, 0)));
+    const subtotal = +(lineSubtotal * (1 - discountPct / 100)).toFixed(2);
     const tax = +(subtotal * num(req.body?.tax_pct, 0) / 100).toFixed(2);
     const total = +(subtotal + tax).toFixed(2);
 

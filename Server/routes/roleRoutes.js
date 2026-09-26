@@ -6,7 +6,10 @@ import {
   updateRole,
   deleteRole,
 } from "../controllers/roleController.js";
-import { requireAuth, requireBranchAdminOr, requireCashierOrAbove, CAPABILITIES } from "../middleware/authMiddleware.js";
+import {
+  requireAuth, requireBranchAdminOr, requireCashierOrAbove, CAPABILITIES,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+} from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -17,8 +20,8 @@ router.use(requireAuth);
 // separate, more sensitive Roles Management) still needs to read it to
 // create/edit a user. Reading it isn't sensitive; only defining/removing
 // roles is.
-router.get("/", requireCashierOrAbove, getRoles);
-router.get("/:id", requireCashierOrAbove, getRoleById);
+router.get("/", requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getRoles);
+router.get("/:id", requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getRoleById);
 router.post("/", requireBranchAdminOr(CAPABILITIES.ROLES_MANAGEMENT), createRole);
 router.put("/:id", requireBranchAdminOr(CAPABILITIES.ROLES_MANAGEMENT), updateRole);
 router.delete("/:id", requireBranchAdminOr(CAPABILITIES.ROLES_MANAGEMENT), deleteRole);

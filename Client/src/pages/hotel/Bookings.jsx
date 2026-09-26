@@ -476,15 +476,23 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
     setPicked(p => p.map(x => x.room_id === roomId ? { ...x, rate_per_night: rate } : x));
 
   // Reserve N rooms of a type without picking which ones — the room is
-  // assigned later, at check-in. `cap` is how many of the type are still
-  // free for these dates minus whatever's already individually picked.
-  const incType = (type, cap) => setPicked(p => {
+  // assigned later, at check-in. Not capped to today's free count: the desk
+  // may deliberately take more than is free right now, trusting a check-out
+  // or a cancellation to free one before the guest arrives — the card shows
+  // a warning once picked goes past what's actually free, but the click
+  // itself isn't refused for that. It IS capped at the type's total physical
+  // room count, though: no amount of checkouts or cancellations can ever
+  // produce a 6th "Standard" room when only 5 exist, so letting the stepper
+  // climb past that (it hit 23 against 2 rooms once) was just a broken +
+  // button, not a deliberate overbook.
+  const incType = (type) => setPicked(p => {
     const existing = p.find(x => !x.room_id && x.room_type_id === type.room_type_id);
+    const total = Number(type.total_rooms) || 0;
     if (existing) {
-      if (existing.qty >= cap) return p;
+      if (total > 0 && existing.qty >= total) return p;
       return p.map(x => x === existing ? { ...x, qty: x.qty + 1 } : x);
     }
-    if (cap < 1) return p;
+    if (total <= 0) return p;
     return [...p, {
       room_id: null, room_type_id: type.room_type_id, type_name: type.type_name, qty: 1,
       rate_per_night: Number(type.base_rate) || 0,
@@ -637,6 +645,9 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
               arrival_time: arrivalTime, special_requests: specialRequests, remarks,
               rooms: roomsPayload(picked),
             });
+        // Not a blocker — the booking already went through — but this is
+        // exactly the kind of thing a desk should not find out about later.
+        if (saved?.warnings?.length) window.alert(saved.warnings.join("\n\n"));
         onCreated(saved);
       } catch (err) {
         setError(`${Object.keys(changed).length ? "The guest's details were updated, but the booking wasn't saved: " : ""}${
@@ -681,6 +692,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
         advance_payment: numOr(advance), advance_method: advanceMethod,
         rooms: roomsPayload(picked),
       });
+      if (bk?.warnings?.length) window.alert(bk.warnings.join("\n\n"));
       onCreated(bk);
     } catch (err) {
       setError(err?.response?.data?.message || "Could not create booking");
@@ -745,8 +757,11 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                 Booking for <strong style={{ color: "#1E293B" }}>{people} guest{people === 1 ? "" : "s"}</strong>
                 {pickedRoomCount > 0 && (
                   <span style={{ color: overCapacity ? "#B45309" : "#059669", fontWeight: 600 }}>
-                    {" · "}{pickedRoomCount} room{pickedRoomCount === 1 ? "" : "s"} selected, holding up to {capacity}
-                    {overCapacity ? " — above that" : " ✓"}
+                    {" · "}{pickedRoomCount} room{pickedRoomCount === 1 ? "" : "s"} selected
+                    {/* capacity is 0 when none of the picked types have a configured
+                        adult/child limit — "holding up to 0" would read as "this
+                        holds nobody", the opposite of what a missing limit means. */}
+                    {capacity > 0 ? `, holding up to ${capacity}${overCapacity ? " — above that" : " ✓"}` : " ✓"}
                   </span>
                 )}
               </div>
@@ -794,13 +809,21 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                 const pickedSpecific = picked.filter(p => p.room_id && p.room_type_id === t.room_type_id).length;
                 const typeOnly = picked.find(p => !p.room_id && p.room_type_id === t.room_type_id);
                 const cap = t.available_rooms.length - pickedSpecific;
-                // Rooms already free that day plus rooms a same-day checkout will
-                // free up — both are bookable now, just at different times.
+                // available_rooms already counts a same-day-turnover room as
+                // bookable (it's a category reservation, not a specific room —
+                // see getAvailability's count_turnovers) — sameDayCount is how
+                // many of that total are still physically occupied right now,
+                // not an extra count on top of it.
                 const sameDayCount = t.available_rooms.filter(r => r.leaving_that_day).length;
+                const freeNow = t.available_rooms.length - sameDayCount;
                 const full = t.available_rooms.length === 0;
+                const selected = Boolean(typeOnly);
                 return (
                 <div key={t.room_type_id}
-                  style={{ ...card, padding: 16, marginBottom: 12, opacity: full ? 0.8 : 1 }}>
+                  style={{ ...card, padding: 16, marginBottom: 12, opacity: full && !selected ? 0.8 : 1,
+                           border: selected ? "2px solid #1565C0" : card.border,
+                           background: selected ? "#F5F9FF" : "#fff",
+                           boxShadow: selected ? "0 2px 10px rgba(21,101,192,0.08)" : "none" }}>
                   <div style={{ display: "flex", gap: 12 }}>
                     <div style={{ width: 40, height: 40, borderRadius: 10, background: bg, color: fg,
                                   display: "flex", alignItems: "center", justifyContent: "center",
@@ -811,7 +834,14 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
                         <div>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: "#101828" }}>{t.type_name}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: 14, color: "#101828" }}>{t.type_name}</span>
+                            {selected && (
+                              <span style={{ ...badge({ bg: "#1565C0", fg: "#fff" }), display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                ✓ {typeOnly.qty} selected
+                              </span>
+                            )}
+                          </div>
                           <div style={{ fontSize: 12, color: "#667085", marginTop: 1 }}>
                             {(() => {
                               const who = [
@@ -852,7 +882,8 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                           </span>
                         ) : sameDayCount > 0 ? (
                           <span style={badge({ bg: "#EFF8FF", fg: "#175CD3" })}>
-                            {t.available_rooms.length} of {t.total_rooms} free · {sameDayCount} more once check-out is done
+                            {freeNow} of {t.total_rooms} free now
+                            {freeNow > 0 ? " · " : " — "}+{sameDayCount} once today's checkout{sameDayCount === 1 ? " finishes" : "s finish"}
                           </span>
                         ) : (
                           <span style={badge({ bg: "#ECFDF3", fg: "#067647" })}>
@@ -864,30 +895,58 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                       {/* A specific room is never picked here — only how many of this
                           type, and at what rate. Which physical room the guest gets
                           is a check-in decision, made when they are actually here,
-                          not something reserved days or months in advance. */}
-                      {!full && !inHouse && (
-                        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#F8FAFC",
-                                        border: "1px solid #E2E8F0", borderRadius: 10, padding: "4px 6px" }}>
-                            <button type="button" onClick={() => decType(t.room_type_id)} disabled={!typeOnly}
-                              style={{ width: 28, height: 28, borderRadius: 8, border: "1px solid #E2E8F0", background: "#fff",
-                                       fontSize: 15, fontWeight: 700, color: "#475569",
-                                       cursor: typeOnly ? "pointer" : "default", opacity: typeOnly ? 1 : 0.4 }}>−</button>
-                            <span style={{ fontSize: 14, fontWeight: 700, minWidth: 18, textAlign: "center" }}>{typeOnly?.qty || 0}</span>
-                            <button type="button" onClick={() => incType(t, cap)} disabled={!(typeOnly ? typeOnly.qty < cap : cap > 0)}
-                              style={{ width: 28, height: 28, borderRadius: 8, border: "1px solid #E2E8F0", background: "#fff",
-                                       fontSize: 15, fontWeight: 700, color: "#475569",
-                                       cursor: (typeOnly ? typeOnly.qty < cap : cap > 0) ? "pointer" : "default",
-                                       opacity: (typeOnly ? typeOnly.qty < cap : cap > 0) ? 1 : 0.4 }}>+</button>
-                          </div>
-                          <span style={{ fontSize: 11.5, color: "#94A3B8" }}>rooms of this type</span>
-                          {typeOnly && (
-                            <label style={{ ...label, fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>Rate/night
-                              <input type="number" min={0} step="0.01" value={typeOnly.rate_per_night}
-                                onChange={e => setTypeRate(t.room_type_id, e.target.value)}
-                                style={{ ...input, width: 90, padding: "4px 8px", fontSize: 12 }} />
-                            </label>
+                          not something reserved days or months in advance.
+                          Reservable even past today's count on purpose — a same-day
+                          check-out or a cancellation often frees a room before the
+                          new arrival, and the desk knows its own property better
+                          than a room count taken this second. This never blocks;
+                          it only warns once the count is exceeded, below. */}
+                      {!inHouse && (
+                        <div style={{ marginTop: 10 }}>
+                          {!selected ? (
+                            // Nothing chosen yet: one clear action, not a stepper
+                            // someone has to already understand to notice.
+                            <button type="button" onClick={() => incType(t)}
+                              style={{ ...btn("primary"), width: "100%", padding: "9px 12px", fontSize: 13,
+                                       display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                              + Select {t.type_name}
+                            </button>
+                          ) : (
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 11.5, color: "#475569", fontWeight: 600 }}>Rooms:</span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff",
+                                            border: "1px solid #CBD5E1", borderRadius: 10, padding: "4px 6px" }}>
+                                <button type="button" onClick={() => decType(t.room_type_id)}
+                                  style={{ width: 28, height: 28, borderRadius: 8, border: "1px solid #E2E8F0", background: "#fff",
+                                           fontSize: 15, fontWeight: 700, color: "#475569", cursor: "pointer" }}>−</button>
+                                <span style={{ fontSize: 14, fontWeight: 700, minWidth: 18, textAlign: "center" }}>{typeOnly.qty}</span>
+                                <button type="button" onClick={() => incType(t)}
+                                  disabled={typeOnly.qty >= t.total_rooms}
+                                  title={typeOnly.qty >= t.total_rooms ? `Only ${t.total_rooms} ${t.type_name} room${t.total_rooms === 1 ? "" : "s"} exist in total` : undefined}
+                                  style={{ width: 28, height: 28, borderRadius: 8, border: "1px solid #E2E8F0",
+                                           background: typeOnly.qty >= t.total_rooms ? "#F8FAFC" : "#fff",
+                                           fontSize: 15, fontWeight: 700,
+                                           color: typeOnly.qty >= t.total_rooms ? "#CBD5E1" : "#475569",
+                                           cursor: typeOnly.qty >= t.total_rooms ? "not-allowed" : "pointer" }}>+</button>
+                              </div>
+                              <label style={{ ...label, fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>Rate/night
+                                <input type="number" min={0} step="0.01" value={typeOnly.rate_per_night}
+                                  onChange={e => setTypeRate(t.room_type_id, e.target.value)}
+                                  style={{ ...input, width: 90, padding: "4px 8px", fontSize: 12, background: "#fff" }} />
+                              </label>
+                              <button type="button" onClick={() => setPicked(p => p.filter(x => !(!x.room_id && x.room_type_id === t.room_type_id)))}
+                                style={{ background: "none", border: "none", color: "#94A3B8", fontSize: 11.5,
+                                         cursor: "pointer", textDecoration: "underline", marginLeft: "auto" }}>
+                                Remove
+                              </button>
+                            </div>
                           )}
+                        </div>
+                      )}
+                      {typeOnly && typeOnly.qty > cap && (
+                        <div style={{ marginTop: 6, fontSize: 11.5, color: "#B45309", background: "#FFFBEB",
+                                      border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>
+                          ⚠ Booking {typeOnly.qty} past {cap} free of this type for these dates — {typeOnly.qty - cap} will need a room to free up (a checkout or a cancellation) before check-in.
                         </div>
                       )}
 
@@ -908,7 +967,11 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                                     // Still in the room: they keep it until the desk checks them out,
                                     // whatever date they were due to leave.
                                     ? ` — ${r.blocked_by.guest_name} is in the room (due out ${dmy(r.blocked_by.due_out)}); it is free once they are checked out`
-                                    : ` — ${r.blocked_by.guest_name}, ${dmy(r.blocked_by.check_in)} → ${dmy(r.blocked_by.check_out)}`)
+                                    : r.blocked_by.status === "reserved"
+                                      // No specific room to name here — this slot is held by a
+                                      // category-only reservation, not a room-level occupancy.
+                                      ? ` — reserved for ${r.blocked_by.guest_name} (${r.blocked_by.booking_ref}), ${dmy(r.blocked_by.check_in)} → ${dmy(r.blocked_by.check_out)}; no room assigned yet`
+                                      : ` — ${r.blocked_by.guest_name}, ${dmy(r.blocked_by.check_in)} → ${dmy(r.blocked_by.check_out)}`)
                                   : ""}
                               </span>
                             ))}

@@ -1,5 +1,8 @@
 import express from "express";
-import { requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
+import {
+  requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+} from "../middleware/authMiddleware.js";
 import {
   getDeliveryPartners,
   createDeliveryPartner,
@@ -13,8 +16,8 @@ const router = express.Router();
 // The POS needs the active list to build its partner picker — read is
 // operational, same tier as seeing outstanding COD. Adding/editing a
 // partner is a manager-tier action, same guard as recording a settlement.
-router.get("/", requireAuth, requireCashierOrAbove, getDeliveryPartners);
-router.get("/:key/analytics", requireAuth, requireCashierOrAbove, getDeliveryPartnerAnalytics);
+router.get("/", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getDeliveryPartners);
+router.get("/:key/analytics", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getDeliveryPartnerAnalytics);
 router.post("/", requireAuth, requireBranchAdminOr(CAPABILITIES.DELIVERY_MANAGEMENT), createDeliveryPartner);
 router.patch("/:id", requireAuth, requireBranchAdminOr(CAPABILITIES.DELIVERY_MANAGEMENT), updateDeliveryPartner);
 router.delete("/:id", requireAuth, requireBranchAdminOr(CAPABILITIES.DELIVERY_MANAGEMENT), deleteDeliveryPartner);

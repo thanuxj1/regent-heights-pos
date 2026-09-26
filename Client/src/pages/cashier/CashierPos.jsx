@@ -122,6 +122,7 @@ const CashierPos = () => {
   const approvalPinRef = useRef("");
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [pinEntry, setPinEntry] = useState("");
+  const [pinError, setPinError] = useState("");
   const [serviceFee, setServiceFee] = useState(0);
   const [heldOrders, setHeldOrders] = useState(() => {
     try {
@@ -738,12 +739,35 @@ const CashierPos = () => {
     }
   };
 
-  /** Manager has entered their PIN — carry straight on with the sale. */
+  /** Manager has entered their PIN — carry straight on with the sale. The
+   * box stays open through the attempt (not closed the moment Approve is
+   * clicked): the PIN is only ever actually checked server-side, so closing
+   * early meant a wrong PIN vanished the box and left the cashier reading a
+   * banner error instead of just being able to type it again. It only
+   * closes now on a real success, or if the cashier clicks Cancel. */
   const approveAndContinue = () => {
     approvalPinRef.current = pinEntry;
-    setPinPromptOpen(false);
-    setPinEntry("");
+    setPinError("");
     handleCheckout();
+  };
+
+  /**
+   * A checkout attempt failed after a PIN was submitted with it — if the
+   * failure was actually about the PIN, reopen the box with the reason
+   * instead of dropping it into the page's generic error banner where the
+   * cashier has to go looking for it and start the whole approval over.
+   * Returns true when it handled the error this way, so the caller skips
+   * its own setError for the same message.
+   */
+  const handlePossiblePinError = (msg) => {
+    if (approvalPinRef.current && /\bpin\b/i.test(msg || "")) {
+      approvalPinRef.current = "";
+      setPinEntry("");
+      setPinError(msg);
+      setPinPromptOpen(true);
+      return true;
+    }
+    return false;
   };
 
   const handleCheckout = async () => {
@@ -850,10 +874,9 @@ const CashierPos = () => {
           `Charged to Room ${room?.room_number ?? ""} — ${room?.guest_name ?? "guest"}. It will appear on their bill at check-out.`,
         );
       } catch (roomError) {
-        setError(
-          roomError?.response?.data?.message ||
-            "Could not charge that room. The guest may have checked out already.",
-        );
+        const roomErrMsg = roomError?.response?.data?.message
+          || "Could not charge that room. The guest may have checked out already.";
+        if (!handlePossiblePinError(roomErrMsg)) setError(roomErrMsg);
         // 409 means that room is no longer chargeable — the guest checked out
         // while the order was being rung up. Keeping it selected would let the
         // cashier press again and fail forever, so drop it and refresh the list
@@ -1018,12 +1041,11 @@ const CashierPos = () => {
         },
       });
     } catch (checkoutError) {
-      setError(
-        checkoutError?.response?.data?.error ||
+      const checkoutErrMsg = checkoutError?.response?.data?.error ||
         checkoutError?.response?.data?.message ||
         checkoutError.message ||
-        "Checkout failed",
-      );
+        "Checkout failed";
+      if (!handlePossiblePinError(checkoutErrMsg)) setError(checkoutErrMsg);
     } finally {
       setSubmitting(false);
     }
@@ -1213,29 +1235,36 @@ const CashierPos = () => {
                 A {Number(discountPct)}% discount is over the {DISCOUNT_LIMIT_PCT}% limit.
                 Ask a manager to enter their PIN.
               </p>
+              {pinError && (
+                <p className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm font-medium text-red-700">
+                  {pinError} Try again, or Cancel.
+                </p>
+              )}
               <input
                 type="password"
                 inputMode="numeric"
                 autoFocus
+                disabled={submitting}
                 value={pinEntry}
-                onChange={(e) => setPinEntry(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                onKeyDown={(e) => { if (e.key === "Enter" && pinEntry) approveAndContinue(); }}
+                onChange={(e) => { setPinEntry(e.target.value.replace(/\D/g, "").slice(0, 8)); setPinError(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && pinEntry && !submitting) approveAndContinue(); }}
                 placeholder="Manager PIN"
-                className="mt-4 w-full rounded-xl border border-slate-200 px-4 py-3 text-center text-lg tracking-[0.4em] outline-none focus:border-[#0A5BAE] focus:ring-1 focus:ring-[#0A5BAE]"
+                className="mt-4 w-full rounded-xl border border-slate-200 px-4 py-3 text-center text-lg tracking-[0.4em] outline-none focus:border-[#0A5BAE] focus:ring-1 focus:ring-[#0A5BAE] disabled:bg-slate-50"
               />
               <div className="mt-4 flex gap-3">
                 <button
-                  onClick={() => { setPinPromptOpen(false); setPinEntry(""); }}
-                  className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  disabled={submitting}
+                  onClick={() => { setPinPromptOpen(false); setPinEntry(""); setPinError(""); approvalPinRef.current = ""; }}
+                  className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                 >
                   Cancel
                 </button>
                 <button
-                  disabled={!pinEntry}
+                  disabled={!pinEntry || submitting}
                   onClick={approveAndContinue}
                   className="flex-1 rounded-xl bg-[#0A5BAE] py-2.5 text-sm font-semibold text-white hover:bg-[#094f96] disabled:opacity-40"
                 >
-                  Approve
+                  {submitting ? "Checking…" : "Approve"}
                 </button>
               </div>
             </div>

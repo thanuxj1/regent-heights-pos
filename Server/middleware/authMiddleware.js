@@ -245,6 +245,82 @@ export const ROLES = {
 };
 
 // ─────────────────────────────────────────────
+// REVOCABLE DEFAULTS
+// The mirror of CAPABILITIES above: instead of granting a slice of access a
+// role does NOT have by default, this switches off a slice it DOES have by
+// default, for one specific account, without touching the role itself or
+// anyone else holding it.
+// ─────────────────────────────────────────────
+export const DEFAULT_PERMISSIONS = {
+  POS_TERMINAL:     { key: "default_pos",              label: "Point of Sale (own terminal)", role: ROLES.CASHIER },
+  OWN_DRAWER:        { key: "default_drawer",            label: "Own Cash Drawer",              role: ROLES.CASHIER },
+  HOTEL_FRONT_DESK:  { key: "default_hotel_front_desk",  label: "Hotel Front Desk",             role: ROLES.CASHIER },
+  VIEW_DIRECTORY:    { key: "default_view_directory",    label: "Viewing Commission Agents, Delivery, Roles & Branches", role: ROLES.CASHIER },
+  WAITER_ORDERS:     { key: "default_orders",            label: "Take & Void Orders",           role: ROLES.WAITER },
+  WAITER_TABLES:     { key: "default_tables",            label: "Table Assignments",            role: ROLES.WAITER },
+  WAITER_MENU:       { key: "default_menu",              label: "Viewing the Menu & Order Board", role: ROLES.WAITER },
+  KITCHEN_BOARD:     { key: "default_board",             label: "Viewing the Order/Kitchen Board", role: ROLES.KITCHEN_STAFF },
+  KITCHEN_STATUS:    { key: "default_status",            label: "Marking Order Items Ready",    role: ROLES.KITCHEN_STAFF },
+  KITCHEN_STOCK:     { key: "default_stock",             label: "Low-Stock Alerts",             role: ROLES.KITCHEN_STAFF },
+};
+
+export const DEFAULT_PERMISSION_LIST = Object.values(DEFAULT_PERMISSIONS);
+
+const DEFAULT_REVOKE_TTL_MS = 30_000;
+const defaultRevokeCache = new Map(); // u_id -> { set: Set<string>, at }
+
+export function invalidateUserDefaultRevocations(u_id) {
+  defaultRevokeCache.delete(Number(u_id));
+}
+
+async function userRevokedDefaults(u_id) {
+  const now = Date.now();
+  const hit = defaultRevokeCache.get(Number(u_id));
+  if (hit && now - hit.at < DEFAULT_REVOKE_TTL_MS) return hit.set;
+
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      'SELECT default_key FROM "USER_DEFAULT_OVERRIDE" WHERE u_id = $1',
+      [Number(u_id)],
+    ));
+  } catch (err) {
+    console.warn(`[AUTH] default-revocation lookup failed for u_id=${u_id}: ${err.message}`);
+    if (hit) return hit.set;
+    return new Set();
+  }
+  const set = new Set(rows.map((r) => r.default_key));
+  defaultRevokeCache.set(Number(u_id), { set, at: now });
+  return set;
+}
+
+/**
+ * Sits alongside a route's normal role/capability guard, not in place of it.
+ * Inert for anyone whose role isn't the one `perm` names — so it can share a
+ * route with other roles unaffected by this specific toggle (e.g. Kitchen
+ * Staff and Waiter both hit canReadOrders; only a Cashier's own POS_TERMINAL
+ * default has anything to say about it). Branch Admin/Admin/Super Admin never
+ * carry role_id === perm.role, so they're never blocked by this.
+ */
+export function requireDefaultNotRevoked(perm) {
+  return async (req, res, next) => {
+    const roleId = req.user?.role_id != null ? Number(req.user.role_id) : undefined;
+    if (roleId !== perm.role) return next();
+
+    const uId = req.user?.u_id;
+    if (uId == null) return next();
+
+    const revoked = await userRevokedDefaults(uId);
+    if (revoked.has(perm.key)) {
+      return res.status(403).json({
+        message: `Your ${perm.label} access has been switched off by your administrator.`,
+      });
+    }
+    return next();
+  };
+}
+
+// ─────────────────────────────────────────────
 // ROLE MIDDLEWARE
 // Super Admin (6) bypasses ALL role checks automatically.
 // ─────────────────────────────────────────────

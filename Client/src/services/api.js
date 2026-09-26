@@ -433,6 +433,36 @@ export const updateUserCapabilities = async (userId, capabilities) => {
   return response.data;
 };
 
+export const getSecurityOverview = async () => {
+  const response = await api.get("/security/overview");
+  return response.data;
+};
+
+export const setApprovalPin = async (pin) => {
+  const response = await api.put("/security/approval-pin", { pin });
+  return response.data;
+};
+
+export const clearApprovalPin = async () => {
+  const response = await api.delete("/security/approval-pin");
+  return response.data;
+};
+
+export const getDefaultPermissionCatalog = async () => {
+  const response = await api.get("/default-permissions");
+  return response.data;
+};
+
+export const getUserDefaultRevocations = async (userId) => {
+  const response = await api.get(`/users/${userId}/default-permissions`);
+  return response.data;
+};
+
+export const updateUserDefaultRevocations = async (userId, revoked) => {
+  const response = await api.put(`/users/${userId}/default-permissions`, { revoked });
+  return response.data;
+};
+
 export const createBranch = async (branchData) => {
   const res = await api.post(`/branches`, branchData);
   return res.data;

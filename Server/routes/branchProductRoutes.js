@@ -5,6 +5,8 @@ import {
   CAPABILITIES,
   requireCashierOrAbove,
   requireWaiterOrAbove,
+  requireDefaultNotRevoked,
+  DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 import {
   getBranchProducts,
@@ -19,8 +21,11 @@ import {
 const router = express.Router();
 
 router.use(requireAuth);
-router.get("/", requireWaiterOrAbove, getBranchProducts);
-router.get("/:id", requireWaiterOrAbove, getBranchProductById);
+// A Waiter's own default, inert for Cashier/Kitchen/Admin — Cashier's own POS
+// menu view isn't touched by a Waiter's "Viewing the Menu" toggle.
+const waiterMenu = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.WAITER_MENU);
+router.get("/", requireWaiterOrAbove, waiterMenu, getBranchProducts);
+router.get("/:id", requireWaiterOrAbove, waiterMenu, getBranchProductById);
 router.post("/", requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU), createBranchProduct);
 router.put("/:id", requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU), updateBranchProduct);
 // A manager's count of what is on the shelf — with a reason, on the record.

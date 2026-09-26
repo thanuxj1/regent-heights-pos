@@ -12,6 +12,7 @@ import plusImage from "../../assets/images/Plus circle.png";
 import {
     getBranches, getRoles, getUserById, updateUser,
     getCapabilityCatalog, getUserCapabilities, updateUserCapabilities,
+    getDefaultPermissionCatalog, getUserDefaultRevocations, updateUserDefaultRevocations,
 } from "../../services/api";
 import { staffRoles, isAdminRole } from "../../constants/roles";
 import ToggleSwitch from "../../components/super-admin/ToggleSwitch";
@@ -49,6 +50,13 @@ const EditUser = () => {
     const [capLoading, setCapLoading] = useState(false);
     const [capError, setCapError] = useState("");
     const [savingCapKey, setSavingCapKey] = useState(null);
+
+    // Default permissions — the mirror of the grants above: what this
+    // account's role already includes automatically, which an admin can
+    // switch off for this one account without touching the role itself.
+    const [defaultCatalog, setDefaultCatalog] = useState([]);
+    const [revokedDefaults, setRevokedDefaults] = useState(new Set());
+    const [savingDefaultKey, setSavingDefaultKey] = useState(null);
     const currentRoleId = formData.role ? Number(formData.role) : null;
     const showPermissions = !isLoadingUser && currentRoleId != null && !isAdminRole(currentRoleId);
 
@@ -132,13 +140,17 @@ const EditUser = () => {
             try {
                 setCapLoading(true);
                 setCapError("");
-                const [catalog, granted] = await Promise.all([
+                const [catalog, granted, defaultCat, defaultRevoked] = await Promise.all([
                     getCapabilityCatalog(),
                     getUserCapabilities(resolvedUserId),
+                    getDefaultPermissionCatalog(),
+                    getUserDefaultRevocations(resolvedUserId),
                 ]);
                 if (cancelled) return;
                 setCapabilityCatalog(catalog || []);
                 setGrantedCapabilities(new Set(granted?.capabilities || []));
+                setDefaultCatalog((defaultCat || []).filter((d) => d.role === currentRoleId));
+                setRevokedDefaults(new Set(defaultRevoked?.revoked || []));
             } catch (error) {
                 if (!cancelled) setCapError(error?.response?.data?.message || "Failed to load permissions");
             } finally {
@@ -162,6 +174,24 @@ const EditUser = () => {
             setCapError(error?.response?.data?.message || "Failed to update permission");
         } finally {
             setSavingCapKey(null);
+        }
+    };
+
+    // The toggle's checked state is "on" (not revoked); the server stores the
+    // opposite (a row = revoked), so turning the switch OFF adds the key here.
+    const toggleDefault = async (key, nextChecked) => {
+        const next = new Set(revokedDefaults);
+        if (nextChecked) next.delete(key); else next.add(key);
+        setRevokedDefaults(next); // optimistic
+        setSavingDefaultKey(key);
+        setCapError("");
+        try {
+            await updateUserDefaultRevocations(resolvedUserId, [...next]);
+        } catch (error) {
+            setRevokedDefaults(revokedDefaults); // revert on failure
+            setCapError(error?.response?.data?.message || "Failed to update permission");
+        } finally {
+            setSavingDefaultKey(null);
         }
     };
 
@@ -518,13 +548,46 @@ const EditUser = () => {
                                         <p style={{ margin: "0 0 14px", fontSize: "12px", color: "#8a94ab" }}>
                                             Grant this account extra access beyond their role. Each toggle takes effect immediately.
                                         </p>
+
+                                        {defaultCatalog.length > 0 && (
+                                            <>
+                                                <div style={{ fontSize: "12px", fontWeight: 700, color: "#166534", marginBottom: "8px" }}>
+                                                    Default Permissions — built into the {roleLabel} role, switch off to restrict this one account
+                                                </div>
+                                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 24px", marginBottom: "20px" }}>
+                                                    {defaultCatalog.map((d) => {
+                                                        const on = !revokedDefaults.has(d.key);
+                                                        return (
+                                                            <div key={d.key} style={{
+                                                                display: "flex", alignItems: "center", justifyContent: "space-between",
+                                                                padding: "10px 14px", borderRadius: "10px",
+                                                                background: on ? "#F0FDF4" : "#FEF2F2",
+                                                                border: on ? "1px solid #BBF7D0" : "1px solid #FECACA",
+                                                            }}>
+                                                                <span style={{ fontSize: "13px", color: on ? "#166534" : "#991B1B" }}>{d.label}</span>
+                                                                <ToggleSwitch
+                                                                    checked={on}
+                                                                    disabled={savingDefaultKey === d.key}
+                                                                    onChange={(next) => toggleDefault(d.key, next)}
+                                                                />
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </>
+                                        )}
+
+                                        <div style={{ fontSize: "12px", fontWeight: 700, color: "#1e2d4e", marginBottom: "8px" }}>
+                                            Additional Permissions — extra access you can grant
+                                        </div>
                                         {capError && <p style={{ margin: "0 0 14px", color: "#C62828", fontSize: "13px" }}>{capError}</p>}
                                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 24px" }}>
                                             {capabilityCatalog.map((cap) => (
                                                 <div key={cap.key} style={{
                                                     display: "flex", alignItems: "center", justifyContent: "space-between",
-                                                    padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
-                                                    border: cap.sensitive ? "1px solid #fde68a" : "1px solid transparent",
+                                                    padding: "10px 14px", borderRadius: "10px",
+                                                    background: grantedCapabilities.has(cap.key) ? "#F0FDF4" : "#f8fafc",
+                                                    border: cap.sensitive ? "1px solid #fde68a" : grantedCapabilities.has(cap.key) ? "1px solid #BBF7D0" : "1px solid transparent",
                                                 }}>
                                                     <span style={{ fontSize: "13px", color: "#334155", display: "flex", alignItems: "center", gap: "8px" }}>
                                                         {cap.label}

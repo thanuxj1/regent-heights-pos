@@ -235,10 +235,10 @@ export async function createSupplierPayment(req, res, next) {
     }
 
     const result = await client.query(
-      `INSERT INTO supplier_payment (sup_id, po_id, amount, method, payment_date)
-       VALUES ($1, $2, $3, $4, COALESCE($5::DATE, CURRENT_DATE))
+      `INSERT INTO supplier_payment (sup_id, po_id, amount, method, payment_date, recorded_by)
+       VALUES ($1, $2, $3, $4, COALESCE($5::DATE, CURRENT_DATE), $6)
        RETURNING pay_id, sup_id, po_id, amount, method, payment_date`,
-      [parsedSupId, parsedPoId, parsedAmount, method, payment_date || null],
+      [parsedSupId, parsedPoId, parsedAmount, method, payment_date || null, req.user?.u_id ?? null],
     );
     await client.query("COMMIT");
 

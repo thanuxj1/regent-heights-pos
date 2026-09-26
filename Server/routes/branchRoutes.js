@@ -6,6 +6,8 @@ import {
   CAPABILITIES,
   requireCashierOrAbove,
   requireWaiterOrAbove,
+  requireDefaultNotRevoked,
+  DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 import {
   getBranches,
@@ -18,7 +20,11 @@ import {
 const router = express.Router();
 
 router.use(requireAuth);
-router.get("/", requireCashierOrAbove, getBranches);
+// The full list is the Cashier-tier "browse branches" view; a single branch's
+// own details (GET /:id) stay open to every floor role — Waiter and Kitchen
+// Staff need their own property's info too, so that one isn't part of this
+// default and can't be switched off.
+router.get("/", requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getBranches);
 router.get("/:id", requireWaiterOrAbove, getBranchById);
 router.post("/", requireAdmin, createBranch);
 // The Administrator may edit its own property (guarded inside the controller);

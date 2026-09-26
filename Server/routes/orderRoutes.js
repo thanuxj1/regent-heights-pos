@@ -16,6 +16,8 @@ import {
   requireAuth,
   requireRole,
   ROLES,
+  requireDefaultNotRevoked,
+  DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -70,6 +72,13 @@ const canVoidOrder = requireRole(
   "Cashier, Waiter, Branch Admin or Admin",
 );
 
+// Each role's own default, inert for anyone else's role (see
+// requireDefaultNotRevoked) — safe to chain on the same shared route.
+const posTerminal   = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.POS_TERMINAL);   // Cashier's "ring up sales"
+const waiterOrders   = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.WAITER_ORDERS);  // Waiter's "take & void orders"
+const kitchenBoard   = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.KITCHEN_BOARD);  // Kitchen's "view the board"
+const kitchenStatus  = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.KITCHEN_STATUS); // Kitchen's "mark items ready"
+
 // ─────────────────────────────────────────────
 // ROUTES
 // ─────────────────────────────────────────────
@@ -78,23 +87,25 @@ const canVoidOrder = requireRole(
 router.get("/", requireAuth, canReadOrders, getAllOrders);
 
 // GET /orders/board — what the kitchen is working on now. Before "/:id".
-router.get("/board", requireAuth, canReadOrders, getKitchenBoard);
+router.get("/board", requireAuth, canReadOrders, kitchenBoard, getKitchenBoard);
 
 // GET /orders/:id
 router.get("/:id", requireAuth, canReadOrders, getOrderById);
 
 // POST /orders
-router.post("/", requireAuth, canCreateOrder, createOrder);
+router.post("/", requireAuth, canCreateOrder, posTerminal, waiterOrders, createOrder);
 
 // POST /orders/with-items — the whole sale in one transaction, safe to resend.
 // This is what the till uses, online or flushing its offline queue.
-router.post("/with-items", requireAuth, canCreateOrder, createOrderWithItems);
+router.post("/with-items", requireAuth, canCreateOrder, posTerminal, waiterOrders, createOrderWithItems);
 
 // Must be before "/:id"
 router.patch(
   "/:id/status",
   requireAuth,
   canUpdateOrderStatus,
+  posTerminal,
+  kitchenStatus,
   updateOrderStatus,
 );
 
@@ -105,7 +116,7 @@ router.put("/:id", requireAuth, canEditOrder, updateOrder);
 router.patch("/:id", requireAuth, canEditOrder, patchOrder);
 
 // DELETE /orders/:id
-router.post("/:id/void", requireAuth, canVoidOrder, voidOrder);
+router.post("/:id/void", requireAuth, canVoidOrder, posTerminal, waiterOrders, voidOrder);
 router.delete("/:id", requireAuth, canDeleteOrder, deleteOrder);
 
 export default router;

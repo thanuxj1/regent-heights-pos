@@ -3,6 +3,9 @@ import {
   getCapabilityCatalog,
   getUserCapabilities,
   setUserCapabilities,
+  getDefaultPermissionCatalog,
+  getUserDefaultRevocations,
+  setUserDefaultRevocations,
 } from "../controllers/userCapabilityController.js";
 import { requireAuth, requireBranchAdminOrAdmin } from "../middleware/authMiddleware.js";
 
@@ -37,5 +40,17 @@ router.get(
 );
 
 router.put("/users/:id/capabilities", requireAuth, requireBranchAdminOrAdmin, setUserCapabilities);
+
+router.get("/default-permissions", requireAuth, requireBranchAdminOrAdmin, getDefaultPermissionCatalog);
+
+router.get(
+  "/users/:id/default-permissions",
+  requireAuth,
+  (req, res, next) =>
+    Number(req.user.u_id) === Number(req.params.id) ? next() : requireBranchAdminOrAdmin(req, res, next),
+  getUserDefaultRevocations,
+);
+
+router.put("/users/:id/default-permissions", requireAuth, requireBranchAdminOrAdmin, setUserDefaultRevocations);
 
 export default router;

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   requireAuth, requireBranchAdminOr, CAPABILITIES, requireCashierOrAbove,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
 } from "../middleware/authMiddleware.js";
 import {
   getRoomTypes, getRoomTypeById, createRoomType, updateRoomType, deleteRoomType,
@@ -33,7 +34,7 @@ const router = Router();
  * Nothing on the waiter or kitchen screens calls this module, so none of them
  * lose a feature to these guards.
  */
-router.use(requireAuth, requireCashierOrAbove);
+router.use(requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.HOTEL_FRONT_DESK));
 
 // ─── Property setup — the owner defines it, everyone else reads it ───────────
 router.get("/room-types",        getRoomTypes);

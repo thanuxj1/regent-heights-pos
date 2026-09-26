@@ -6,6 +6,16 @@ import { branchClause } from "../utils/scope.js";
 // at the pass, not the day's history.
 export const READY_WINDOW_MINUTES = 30;
 
+// A "Waiting"/"Cooking" order older than this drops off the board too — not
+// because it's done (nothing here marks it complete or touches its status;
+// the order and its data are untouched and still on the full Orders page),
+// only because a ticket from many hours ago is never actually still being
+// cooked in real service; it's the board never being cleared. Left showing,
+// real new arrivals get buried under it. Deliberately far longer than the
+// Ready window above: unlike a finished dish, this is still-unfulfilled
+// work, so the cutoff errs toward keeping it visible.
+export const STALE_PENDING_HOURS = 4;
+
 /**
  * GET /api/orders/board — what the kitchen is working on right now at the
  * caller's own property: every order waiting or being prepared, and those
@@ -19,13 +29,14 @@ export const READY_WINDOW_MINUTES = 30;
  */
 export async function getKitchenBoard(req, res) {
   try {
-    const values = [READY_WINDOW_MINUTES];
+    const values = [READY_WINDOW_MINUTES, STALE_PENDING_HOURS];
     // The kitchen's own screens want what is at the pass. The till wants that
     // and everything still unpaid, because a ticket the kitchen finished an
     // hour ago is money nobody has collected yet — and it is the same list to
     // the person standing at the counter. Only who sent it differs.
     const forTheTill = String(req.query.scope || "") === "till";
-    const atThePass = `(o.or_status IN ('pending', 'preparing')
+    const atThePass = `((o.or_status IN ('pending', 'preparing')
+            AND (o.or_date + o.or_time) > NOW() - make_interval(hours => $2::int))
         OR (o.or_status = 'completed'
             AND o.status_changed_at > NOW() - make_interval(mins => $1::int)))`;
     const unpaid = `(o.payment_method IS NULL AND o.or_status <> 'cancelled'
