@@ -25,8 +25,16 @@ function normalizeBranchId(body) {
   return body?.B_id ?? body?.b_id ?? body?.branch_id;
 }
 
+// Pinned to one branch: a real Branch Admin, but also anyone else who isn't
+// company-wide or platform-wide — a Cashier delegated the "User Management"
+// capability is exactly as branch-level as a Branch Admin for this purpose.
+// Only Admin (company-wide) and Super Admin (platform-wide) are not pinned.
+// This mirrors utils/scope.js's branchScope() rule: the branch comes from the
+// token, never from the request, and defaults to fail-closed.
 function getScopedBranchId(req) {
-  return req.user?.role_id === ROLES.BRANCH_ADMIN ? req.user?.b_id : null;
+  const roleId = Number(req.user?.role_id);
+  if (roleId === ROLES.ADMIN || roleId === ROLES.SUPER_ADMIN) return null;
+  return req.user?.b_id ?? null;
 }
 
 function ensureBranchAdminHasBranch(req, res) {
@@ -55,6 +63,18 @@ const ROLE_NAMES = {
   [ROLES.WAITER]: "Waiter", [ROLES.KITCHEN_STAFF]: "Kitchen Staff",
 };
 const roleName = (roleId) => ROLE_NAMES[Number(roleId)] || `role ${roleId}`;
+
+// A capability (e.g. "User Management") can hand a Cashier the ability to
+// edit/delete accounts in their own branch — it must never hand them power
+// over an account that already outranks their own, no matter which field is
+// being touched. Without this, a delegated Cashier could reset their own
+// Branch Admin's password or deactivate them.
+function ensureNotEditingAbove(existingRoleId, res, req) {
+  if (rankOf(existingRoleId) > rankOf(req?.user?.role_id)) {
+    res.status(403);
+    throw new Error("You cannot modify an account that outranks your own.");
+  }
+}
 
 // A retired role keeps its row so old records still read correctly, but it must
 // never land on a live account again. Enforced here as well as in the picker —
@@ -104,7 +124,7 @@ function normalizeOptionalPositiveInt(value, fieldName) {
 export async function getUsers(req, res, next) {
   try {
     ensureBranchAdminHasBranch(req, res);
-    const { role_id, com_id, b_id } = req.user;
+    const { role_id, com_id } = req.user;
 
     let query = `SELECT u.u_id, u.u_fname, u.u_lname, u.u_email, u.u_connumber, u.role_id, r.role_name, u.u_status, u.u_image, u."B_id" as b_id,
                         b."B_name" as branch_name,
@@ -115,15 +135,16 @@ export async function getUsers(req, res, next) {
                  LEFT JOIN "Branch" b ON b."B_id" = u."B_id"
                  LEFT JOIN "Company" c1 ON b.com_id = c1.com_id
                  LEFT JOIN "Company" c2 ON u.com_id = c2.com_id`;
-    
+
     let params = [];
 
+    const scopedBranchId = getScopedBranchId(req);
     if (role_id === ROLES.ADMIN && com_id != null) {
       query += ` WHERE COALESCE(u.com_id, b.com_id) = $1`;
       params.push(com_id);
-    } else if (role_id === ROLES.BRANCH_ADMIN && b_id != null) {
+    } else if (scopedBranchId) {
       query += ` WHERE b."B_id" = $1`;
-      params.push(b_id);
+      params.push(scopedBranchId);
     }
 
     query += ` ORDER BY u.u_id`;
@@ -212,7 +233,7 @@ export async function createUser(req, res, next) {
       B_id = scopedBranchId
         ? Number(scopedBranchId)
         : normalizeOptionalPositiveInt(requestedBranchId, "B_id");
-      
+
       // B_id is required for cashier, waiter, kitchen staff, but optional for branch admin
       if (!B_id && Number(role_id) !== ROLES.BRANCH_ADMIN) {
         res.status(400);
@@ -309,6 +330,10 @@ export async function updateUser(req, res, next) {
       throw new Error("User not found");
     }
 
+    // No field of this edit may touch an account that already outranks the
+    // caller — a delegated capability is not a promotion.
+    ensureNotEditingAbove(existingUser.rows[0].role_id, res, req);
+
     // Determine target role (use provided role_id, fallback to existing role_id)
     const targetRoleId = role_id !== undefined ? Number(role_id) : Number(existingUser.rows[0].role_id);
 
@@ -346,7 +371,7 @@ export async function updateUser(req, res, next) {
       } else {
         B_id = scopedBranchId ? Number(scopedBranchId) : existingUser.rows[0].B_id;
       }
-      
+
       // B_id is required for cashier, waiter, kitchen staff, but optional for branch admin
       if (!B_id && targetRoleId !== ROLES.BRANCH_ADMIN) {
         res.status(400);
@@ -478,11 +503,22 @@ export async function deleteUser(req, res, next) {
     }
 
     // Read the row first: once it is gone there is nothing left to name in the
-    // log, and "deleted user 15" is not an audit trail.
-    const result = await pool.query(
-      `DELETE FROM "User" WHERE u_id = $1 ${branchFilter}
-       RETURNING u_id, u_fname, u_lname, u_email, role_id, "B_id" AS b_id`,
+    // log, and "deleted user 15" is not an audit trail. It also lets the rank
+    // check below run before anything is destroyed.
+    const target = await pool.query(
+      `SELECT u_id, u_fname, u_lname, u_email, role_id, "B_id" AS b_id FROM "User" WHERE u_id = $1 ${branchFilter}`,
       params
+    );
+    if (target.rows.length === 0) {
+      res.status(404);
+      throw new Error("User not found");
+    }
+    ensureNotEditingAbove(target.rows[0].role_id, res, req);
+
+    const result = await pool.query(
+      `DELETE FROM "User" WHERE u_id = $1
+       RETURNING u_id, u_fname, u_lname, u_email, role_id, "B_id" AS b_id`,
+      [id]
     );
 
     if (result.rows.length === 0) {
@@ -512,4 +548,3 @@ export async function deleteUser(req, res, next) {
     next(err);
   }
 }
-

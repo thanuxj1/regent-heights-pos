@@ -243,6 +243,14 @@ export const deleteRecipeByProduct = async (productId) => {
   return response.data;
 };
 
+// Replaces a product's whole recipe in one transaction — use this instead of
+// deleteRecipeByProduct + createRecipeBulk, which left the recipe empty on
+// the server if the create half failed after the delete had already committed.
+export const replaceRecipeForProduct = async (productId, ingredients) => {
+  const response = await api.put(`/recipes/product/${productId}`, { ingredients });
+  return response.data;
+};
+
 export const getLowStockMaterials = async () => {
   const response = await api.get("/raw-materials/low-stock");
   return response.data;

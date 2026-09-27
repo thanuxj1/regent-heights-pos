@@ -1,6 +1,7 @@
 // controllers/deliveryController.js
 import { body, param, query, validationResult } from "express-validator";
 import pool from "../config/database.js";
+import { branchClause } from "../utils/scope.js";
 
 // ─── DB-Aligned Constants ─────────────────────────────────────────────────────
 const DELIVERY_STATUSES = [
@@ -77,12 +78,19 @@ const handleDbError = (err, res, next) => {
 };
 
 // ─── Helper: load delivery from DB ───────────────────────────────────────────
-// Used by PUT and DELETE so validators can inspect current delivery_status
+// Used by PUT and DELETE so validators can inspect current delivery_status.
+// A DELIVERY row has no branch of its own — it belongs to one through its
+// order — so the scope check joins to "ORDER" and 404s (not 403) a delivery
+// outside the caller's branch, same as everywhere else a stranger shouldn't
+// learn a row exists at all.
 const loadDelivery = async (req, res, next) => {
   try {
+    const params = [req.params.id];
+    const scope = branchClause(req, "o.b_id", params);
     const { rows } = await pool.query(
-      'SELECT * FROM "DELIVERY" WHERE delivery_id = $1',
-      [req.params.id],
+      `SELECT d.* FROM "DELIVERY" d JOIN "ORDER" o ON o.or_id = d.or_id
+        WHERE d.delivery_id = $1${scope ? ` AND ${scope}` : ""}`,
+      params,
     );
     if (!rows.length) {
       return res
@@ -151,20 +159,26 @@ export async function getDeliveries(req, res, next) {
     const values = [];
     let idx = 1;
 
+    const scope = branchClause(req, "o.b_id", values);
+    if (scope) {
+      conditions.push(scope);
+      idx = values.length + 1;
+    }
     if (delivery_status) {
-      conditions.push(`delivery_status  = $${idx++}`);
+      conditions.push(`d.delivery_status  = $${idx++}`);
       values.push(delivery_status);
     }
     if (delivery_partner) {
-      conditions.push(`delivery_partner = $${idx++}`);
+      conditions.push(`d.delivery_partner = $${idx++}`);
       values.push(delivery_partner);
     }
     if (or_id) {
-      conditions.push(`or_id            = $${idx++}`);
+      conditions.push(`d.or_id            = $${idx++}`);
       values.push(or_id);
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const from = `FROM "DELIVERY" d JOIN "ORDER" o ON o.or_id = d.or_id`;
 
     const [
       {
@@ -172,14 +186,14 @@ export async function getDeliveries(req, res, next) {
       },
       { rows: data },
     ] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM "DELIVERY" ${where}`, values),
+      pool.query(`SELECT COUNT(*) ${from} ${where}`, values),
       pool.query(
         `SELECT
-           delivery_id, delivery_partner, delivery_address,
-           contact_number, delivery_status, estimated_time,
-           delivery_fee, or_id
-         FROM "DELIVERY" ${where}
-         ORDER BY delivery_id DESC
+           d.delivery_id, d.delivery_partner, d.delivery_address,
+           d.contact_number, d.delivery_status, d.estimated_time,
+           d.delivery_fee, d.or_id
+         ${from} ${where}
+         ORDER BY d.delivery_id DESC
          LIMIT $${idx++} OFFSET $${idx++}`,
         [...values, +limit, offset],
       ),
@@ -208,9 +222,12 @@ export const getDeliveryByIdValidation = [v_deliveryId, validate];
 
 export async function getDeliveryById(req, res, next) {
   try {
+    const params = [req.params.id];
+    const scope = branchClause(req, "o.b_id", params);
     const { rows } = await pool.query(
-      'SELECT * FROM "DELIVERY" WHERE delivery_id = $1',
-      [req.params.id],
+      `SELECT d.* FROM "DELIVERY" d JOIN "ORDER" o ON o.or_id = d.or_id
+        WHERE d.delivery_id = $1${scope ? ` AND ${scope}` : ""}`,
+      params,
     );
 
     if (!rows.length) {
@@ -300,17 +317,20 @@ export const createDeliveryValidation = [
       return true;
     }),
 
-  // or_id — FK → public.ORDER(or_id), must exist and be a delivery-type order
+  // or_id — FK → public.ORDER(or_id), must exist, be in the caller's own
+  // branch, and be a delivery-type order
   body("or_id")
     .notEmpty()
     .withMessage("or_id is required")
     .isInt({ min: 1 })
     .withMessage("or_id must be a positive integer")
     .toInt()
-    .custom(async (or_id) => {
+    .custom(async (or_id, { req }) => {
+      const params = [or_id];
+      const scope = branchClause(req, "b_id", params);
       const { rows } = await pool.query(
-        'SELECT or_type, or_status FROM "ORDER" WHERE or_id = $1',
-        [or_id],
+        `SELECT or_type, or_status FROM "ORDER" WHERE or_id = $1${scope ? ` AND ${scope}` : ""}`,
+        params,
       );
       if (!rows.length) {
         throw new Error(`Order ${or_id} does not exist`);
@@ -451,10 +471,12 @@ export const updateDeliveryValidation = [
     .isInt({ min: 1 })
     .withMessage("or_id must be a positive integer")
     .toInt()
-    .custom(async (or_id) => {
+    .custom(async (or_id, { req }) => {
+      const params = [or_id];
+      const scope = branchClause(req, "b_id", params);
       const { rows } = await pool.query(
-        'SELECT or_id FROM "ORDER" WHERE or_id = $1',
-        [or_id],
+        `SELECT or_id FROM "ORDER" WHERE or_id = $1${scope ? ` AND ${scope}` : ""}`,
+        params,
       );
       if (!rows.length) throw new Error(`Order ${or_id} does not exist`);
       return true;
@@ -485,6 +507,8 @@ export async function updateDelivery(req, res, next) {
       or_id,
     } = req.body;
 
+    // req.delivery was loaded (and branch-scoped) by loadDelivery — a
+    // delivery outside the caller's branch already 404'd before reaching here.
     const { rows } = await pool.query(
       `UPDATE "DELIVERY"
        SET
@@ -546,6 +570,7 @@ export const deleteDeliveryValidation = [
 
 export async function deleteDelivery(req, res, next) {
   try {
+    // req.delivery was loaded (and branch-scoped) by loadDelivery.
     const { rows } = await pool.query(
       'DELETE FROM "DELIVERY" WHERE delivery_id = $1 RETURNING delivery_id',
       [req.params.id],

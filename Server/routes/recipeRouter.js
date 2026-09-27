@@ -6,6 +6,7 @@ import {
   getRecipesByProduct,
   createRecipe,
   createRecipeBulk,
+  replaceRecipeForProduct,
   updateRecipe,
   deleteRecipe,
   deleteRecipeByProduct,
@@ -19,6 +20,7 @@ router.use(requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU));
 // ── Static routes first (before /:id) ────────
 router.get("/product/:pro_id", getRecipesByProduct);
 router.post("/bulk", createRecipeBulk);
+router.put("/product/:pro_id", replaceRecipeForProduct);
 router.delete("/product/:pro_id", deleteRecipeByProduct);
 
 // ── Standard CRUD ─────────────────────────────

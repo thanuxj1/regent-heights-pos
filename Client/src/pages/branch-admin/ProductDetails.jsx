@@ -3,7 +3,7 @@ import { FaArrowLeft, FaUpload } from "react-icons/fa";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
-import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct } from "../../services/api";
+import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct, updateBranchProduct } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { readImageFile } from "../../utils/readImageFile";
 
@@ -72,6 +72,10 @@ const ProductDetails = () => {
 	const [categories, setCategories] = useState([]);
 	const [product, setProduct] = useState(null);
 	const [branchQty, setBranchQty] = useState(null);
+	// The menu item this branch actually sells — its own price/discount/tax
+	// row, separate from the master Product this form otherwise edits. null
+	// when this product has never been added to this branch's menu.
+	const [branchProductId, setBranchProductId] = useState(null);
 	const { user } = useAuth();
 
 	const [form, setForm] = useState({
@@ -104,6 +108,7 @@ const ProductDetails = () => {
 				setProduct(productData);
 				const mine = (Array.isArray(branchRows) ? branchRows : []).filter((r) => Number(r.pro_id) === Number(productId));
 				setBranchQty(mine.length ? mine.reduce((sum, r) => sum + Number(r.pro_quantity ?? r.pro_qty ?? 0), 0) : null);
+				setBranchProductId(mine.length ? mine[0].Bpro_id : null);
 				setCategories(Array.isArray(categoryData) ? categoryData : []);
 				setForm({
 					pro_name: productData?.pro_name || "",
@@ -196,6 +201,16 @@ const ProductDetails = () => {
 				track_inventory: form.track_inventory,
 			});
 			setProduct(updated);
+			// The till never reads this master Product row for price — it reads
+			// this branch's own Branch_Product row. Without this, "Selling Price"
+			// here would show a success message and change nothing anyone pays.
+			if (branchProductId) {
+				await updateBranchProduct(branchProductId, {
+					pro_price: Number(form.pro_price),
+					discount_pct: Number(form.discount_pct) || 0,
+					tax_group: Number(form.tax_group) || 0,
+				});
+			}
 			setSuccess("Product updated successfully");
 			setTimeout(() => setSuccess(""), 2200);
 		} catch (err) {

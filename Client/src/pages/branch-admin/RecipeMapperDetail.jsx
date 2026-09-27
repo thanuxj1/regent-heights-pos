@@ -9,8 +9,7 @@ import {
   getProducts,
   getRawMaterials,
   getRecipesByProduct,
-  createRecipeBulk,
-  deleteRecipeByProduct,
+  replaceRecipeForProduct,
 } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 
@@ -173,38 +172,27 @@ const RecipeMapperDetail = () => {
   };
 
   const handleSaveMapping = async () => {
-    const snapshot = [...recipeItems]; // keep backup in case create fails after delete
+    const snapshot = [...recipeItems]; // keep backup in case the save fails
     try {
       setSavingMapping(true);
       setError("");
       setNotice("");
 
-      await deleteRecipeByProduct(productId);
+      // One request, one transaction on the server: either the whole recipe
+      // is replaced or none of it is. This used to be a delete followed by a
+      // separate create — if the create failed, the product's recipe was
+      // already gone, silently, while this same catch block claimed nothing
+      // had been persisted.
+      const ingredients = recipeItems.map((item) => ({
+        rawmaterial_id: Number(item.rawmaterial_id),
+        quantity_req: Number(item.quantity_req),
+        unit: item.rm_unit || null,
+      }));
 
-      if (recipeItems.length === 0) {
-        setNotice("Recipe cleared.");
-        return;
-      }
+      const saved = await replaceRecipeForProduct(productId, ingredients);
 
-      const payload = {
-        pro_id: Number(productId),
-        ingredients: recipeItems.map((item) => ({
-          rawmaterial_id: Number(item.rawmaterial_id),
-          quantity_req: Number(item.quantity_req),
-          unit: item.rm_unit || null,
-        })),
-      };
-
-      await createRecipeBulk(payload);
-
-      const refreshed = await getRecipesByProduct(productId);
-      const ingredients = Array.isArray(refreshed?.ingredients)
-        ? refreshed.ingredients
-        : Array.isArray(refreshed)
-          ? refreshed
-          : [];
-      setRecipeItems(ingredients);
-      setNotice("Ingredients mapping saved.");
+      setRecipeItems(Array.isArray(saved?.ingredients) ? saved.ingredients : []);
+      setNotice(ingredients.length === 0 ? "Recipe cleared." : "Ingredients mapping saved.");
     } catch (err) {
       // Restore local state so user doesn't lose their work
       setRecipeItems(snapshot);

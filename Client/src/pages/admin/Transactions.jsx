@@ -284,30 +284,3 @@ export default function Transactions() {
     </div>
   );
 }
-//   const [loading, setLoading] = useState(false);
-//   const [transactions, setTransactions] = useState([]);
-//   const [selected, setSelected] = useState(null);
-//   const [pageSize] = useState(10);
-//         // numeric branch filter (null = no branch filter)
-//         const branchFilter =
-//           filters.branch !== "all" && filters.branch !== undefined && filters.branch !== null
-//             ? Number(filters.branch)
-//             : null;
-//   const branchId = po?.b_id ?? po?.B_id ?? p.b_id ?? p.B_id ?? null;
-//   const branchName =
-//     po?.B_name ??
-//     po?.b_name ??
-//     branchById[branchId]?.B_name ??
-//     p.B_name ??
-//     p.b_name ??
-//     null;
-//     load();
-//   }, [filters.branch]); // re-run when branch selection changes
-
-//   const filtered = useMemo(() => {
-//     return transactions.filter((t) => {
-//       if (filters.tab === "income" && t.type !== "sale") return false;
-//       if (filters.tab === "expense" && t.type !== "purchase") return false;
-//   return (
-//     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-800 antialiased">
-//       <Sidebar />

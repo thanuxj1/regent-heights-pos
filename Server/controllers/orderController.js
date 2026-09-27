@@ -458,6 +458,9 @@ export const updateOrder = async (req, res) => {
       table_id,
       payment_method,
       delivery_partner,
+      discount_pct,
+      service_fee,
+      approval_pin,
     } = req.body;
 
     // ── Required fields for full update ──
@@ -480,7 +483,7 @@ export const updateOrder = async (req, res) => {
     const existing = await pool.query(
       // discount_pct and service_fee come along so the settle-time total check
       // below allows for a discount that was properly declared and approved.
-      `SELECT or_status, discount_pct, service_fee, payment_method FROM "ORDER" WHERE or_id = $1`,
+      `SELECT or_status, discount_pct, service_fee, discount_approved_by, payment_method FROM "ORDER" WHERE or_id = $1`,
       [id],
     );
     if (!existing.rows.length) {
@@ -560,6 +563,34 @@ export const updateOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: typeError });
     }
 
+    // A waiter-placed order has never had a discount or service fee on it —
+    // createWaiterOrder never accepts either — so this is the cashier's only
+    // chance to declare one before the sale settles. Undeclared (both
+    // omitted from the request), the order keeps whatever it already had.
+    const discountRequested = discount_pct !== undefined;
+    const resolvedDiscountPct = discountRequested
+      ? Math.min(100, Math.max(0, Number(discount_pct) || 0))
+      : Number(existing.rows[0].discount_pct ?? 0);
+    const resolvedServiceFee = service_fee !== undefined
+      ? Math.max(0, Number(service_fee) || 0)
+      : Number(existing.rows[0].service_fee ?? 0);
+
+    // A discount past the house limit needs a manager's PIN, exactly like at
+    // creation — settling an order is the only place a waiter-placed ticket
+    // can ever pick one up, so the approval gate has to live here too.
+    let discountApprovedBy = existing.rows[0].discount_approved_by ?? null;
+    if (discountRequested && resolvedDiscountPct > DISCOUNT_APPROVAL_PCT
+        && resolvedDiscountPct !== Number(existing.rows[0].discount_pct ?? 0)) {
+      const approval = await requireApproval(req, {
+        pin: approval_pin, b_id,
+        what: `give a ${resolvedDiscountPct}% discount (over the ${DISCOUNT_APPROVAL_PCT}% limit)`,
+      });
+      if (!approval.ok) {
+        return res.status(approval.status).json({ success: false, error: approval.message });
+      }
+      discountApprovedBy = approval.approver?.u_id ?? null;
+    }
+
     // ── Settling a sale: does the total match what is actually on it? ──
     //
     // This route sets the total before any lines exist, so it cannot be checked
@@ -582,9 +613,7 @@ export const updateOrder = async (req, res) => {
       );
       const expected = Number(priced.rows[0].expected);
       const claimed = parseFloat(or_totalcost);
-      const declaredDiscount = Number(existing.rows[0].discount_pct ?? 0);
-      const afterDiscount = expected * (1 - declaredDiscount / 100)
-                          + Number(existing.rows[0].service_fee ?? 0);
+      const afterDiscount = expected * (1 - resolvedDiscountPct / 100) + resolvedServiceFee;
 
       // Generous on purpose: rounding, tax groups and per-item promos differ by
       // pennies between the till and this sum. Catching a bent total, not audit.
@@ -632,7 +661,10 @@ export const updateOrder = async (req, res) => {
          table_id           = $9,
          payment_method     = COALESCE($11, payment_method),
          session_id         = COALESCE(session_id, $12),
-         delivery_partner   = $13
+         delivery_partner   = $13,
+         discount_pct       = $14,
+         service_fee        = $15,
+         discount_approved_by = $16
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -649,6 +681,9 @@ export const updateOrder = async (req, res) => {
         tender,
         drawerId,
         resolvedDeliveryPartner,
+        resolvedDiscountPct,
+        resolvedServiceFee,
+        discountApprovedBy,
       ],
     );
 

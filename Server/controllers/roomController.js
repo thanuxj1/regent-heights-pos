@@ -460,4 +460,3 @@ export async function deleteRoom(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// Meal plan CRUD removed — meal plan module has been retired.

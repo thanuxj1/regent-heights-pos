@@ -1,4 +1,5 @@
 import pool from "../config/database.js";
+import { branchClause } from "../utils/scope.js";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -84,10 +85,13 @@ export const createWaste = async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    // ── Raw material must exist ──────────────
+    // ── Raw material must exist, and belong to this caller's branch ──
+    const rmParams = [rm_id];
+    const rmScope = branchClause(req, '"b_id"', rmParams);
     const rmCheck = await client.query(
-      'SELECT "rm_id", "rm_name", "stock_qty", "unit_price" FROM "public"."Raw_Material" WHERE "rm_id" = $1',
-      [rm_id],
+      `SELECT "rm_id", "rm_name", "stock_qty", "unit_price" FROM "public"."Raw_Material"
+        WHERE "rm_id" = $1${rmScope ? ` AND ${rmScope}` : ""}`,
+      rmParams,
     );
     if (rmCheck.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -160,6 +164,8 @@ export const createWaste = async (req, res, next) => {
 // ─────────────────────────────────────────────
 export const getAllWaste = async (req, res, next) => {
   try {
+    const params = [];
+    const scope = branchClause(req, 'rm."b_id"', params);
     const result = await pool.query(
       `SELECT
         w."waste_id",
@@ -171,7 +177,9 @@ export const getAllWaste = async (req, res, next) => {
         w."recorded_at"
        FROM "public"."Waste" w
        JOIN "public"."Raw_Material" rm ON rm."rm_id" = w."rm_id"
+       ${scope ? `WHERE ${scope}` : ""}
        ORDER BY w."recorded_at" DESC`,
+      params,
     );
 
     res.json(result.rows.map(toResponseRow));
@@ -186,6 +194,8 @@ export const getAllWaste = async (req, res, next) => {
 // ─────────────────────────────────────────────
 export const getWastePercentage = async (req, res, next) => {
   try {
+    const params = [];
+    const scope = branchClause(req, 'rm."b_id"', params);
     const result = await pool.query(
       `SELECT
         rm."rm_id",
@@ -204,8 +214,10 @@ export const getWastePercentage = async (req, res, next) => {
         END AS waste_percentage
        FROM "public"."Raw_Material" rm
        LEFT JOIN "public"."Waste" w ON w."rm_id" = rm."rm_id"
+       ${scope ? `WHERE ${scope}` : ""}
        GROUP BY rm."rm_id", rm."rm_name", rm."unit", rm."stock_qty", rm."unit_price"
        ORDER BY waste_percentage DESC`,
+      params,
     );
 
     res.json(result.rows);
@@ -226,6 +238,8 @@ export const getWasteById = async (req, res, next) => {
       throw new Error("Invalid waste id.");
     }
 
+    const params = [id];
+    const scope = branchClause(req, 'rm."b_id"', params);
     const result = await pool.query(
       `SELECT
         w."waste_id",
@@ -237,8 +251,8 @@ export const getWasteById = async (req, res, next) => {
         w."recorded_at"
        FROM "public"."Waste" w
        JOIN "public"."Raw_Material" rm ON rm."rm_id" = w."rm_id"
-       WHERE w."waste_id" = $1`,
-      [id],
+       WHERE w."waste_id" = $1${scope ? ` AND ${scope}` : ""}`,
+      params,
     );
 
     if (result.rows.length === 0) {
@@ -292,13 +306,15 @@ export const updateWaste = async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    // ── Fetch existing record ────────────────
+    // ── Fetch existing record, scoped to this caller's branch ──
+    const fetchParams = [id];
+    const fetchScope = branchClause(req, 'rm."b_id"', fetchParams);
     const oldWaste = await client.query(
       `SELECT w."waste_id", w."rm_id", w."waste_qty", rm."stock_qty", rm."rm_name", rm."unit_price"
        FROM "public"."Waste" w
        JOIN "public"."Raw_Material" rm ON rm."rm_id" = w."rm_id"
-       WHERE w."waste_id" = $1`,
-      [id],
+       WHERE w."waste_id" = $1${fetchScope ? ` AND ${fetchScope}` : ""}`,
+      fetchParams,
     );
     if (oldWaste.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -378,10 +394,14 @@ export const deleteWaste = async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    // ── Fetch record before delete ───────────
+    // ── Fetch record before delete, scoped to this caller's branch ──
+    const fetchParams = [id];
+    const fetchScope = branchClause(req, 'rm."b_id"', fetchParams);
     const wasteRecord = await client.query(
-      'SELECT "rm_id", "waste_qty" FROM "public"."Waste" WHERE "waste_id" = $1',
-      [id],
+      `SELECT w."rm_id", w."waste_qty" FROM "public"."Waste" w
+       JOIN "public"."Raw_Material" rm ON rm."rm_id" = w."rm_id"
+       WHERE w."waste_id" = $1${fetchScope ? ` AND ${fetchScope}` : ""}`,
+      fetchParams,
     );
     if (wasteRecord.rows.length === 0) {
       await client.query("ROLLBACK");

@@ -1,4 +1,5 @@
 import pool from "../config/database.js";
+import { branchClause, writeBranchId } from "../utils/scope.js";
 
 // Shared validator
 function validateTerminalFields({ Ter_name, B_id }, isCreate = false) {
@@ -30,11 +31,15 @@ function validateTerminalFields({ Ter_name, B_id }, isCreate = false) {
 // GET /api/terminals
 export async function getTerminals(req, res, next) {
   try {
+    const params = [];
+    const scope = branchClause(req, 't."B_id"', params);
     const result = await pool.query(
       `SELECT t."Ter_id", t."Ter_name", t."B_id", b."B_name"
        FROM "Terminal" t
        LEFT JOIN "Branch" b ON t."B_id" = b."B_id"
+       ${scope ? `WHERE ${scope}` : ""}
        ORDER BY t."Ter_id"`,
+      params,
     );
     res.json(result.rows);
   } catch (err) {
@@ -52,12 +57,14 @@ export async function getTerminalById(req, res, next) {
       return next(new Error("Invalid terminal ID"));
     }
 
+    const params = [id];
+    const scope = branchClause(req, 't."B_id"', params);
     const result = await pool.query(
       `SELECT t."Ter_id", t."Ter_name", t."B_id", b."B_name"
        FROM "Terminal" t
        LEFT JOIN "Branch" b ON t."B_id" = b."B_id"
-       WHERE t."Ter_id" = $1`,
-      [id],
+       WHERE t."Ter_id" = $1${scope ? ` AND ${scope}` : ""}`,
+      params,
     );
 
     if (result.rows.length === 0) {
@@ -81,10 +88,12 @@ export async function getTerminalsByBranch(req, res, next) {
       return next(new Error("Invalid branch ID"));
     }
 
-    // Confirm branch exists
+    // Confirm the branch exists AND is one this caller may see.
+    const branchParams = [branchId];
+    const branchScopeCond = branchClause(req, '"B_id"', branchParams);
     const branchCheck = await pool.query(
-      'SELECT "B_id" FROM "Branch" WHERE "B_id" = $1',
-      [branchId],
+      `SELECT "B_id" FROM "Branch" WHERE "B_id" = $1${branchScopeCond ? ` AND ${branchScopeCond}` : ""}`,
+      branchParams,
     );
     if (branchCheck.rows.length === 0) {
       res.status(404);
@@ -109,7 +118,11 @@ export async function getTerminalsByBranch(req, res, next) {
 // POST /api/terminals
 export async function createTerminal(req, res, next) {
   try {
-    const { Ter_name, B_id } = req.body;
+    const { Ter_name } = req.body;
+    // A branch-level caller can only ever create a terminal in their own
+    // branch — writeBranchId ignores whatever B_id the request body sent for
+    // them. Only Admin/Super Admin can name another branch.
+    const B_id = writeBranchId(req, req.body?.B_id);
 
     const errors = validateTerminalFields({ Ter_name, B_id }, true);
     if (errors.length > 0) {
@@ -119,10 +132,12 @@ export async function createTerminal(req, res, next) {
 
     const trimmedName = Ter_name.trim();
 
-    // Confirm branch exists
+    // Confirm the branch exists and is one this caller may write into.
+    const branchParams = [B_id];
+    const branchScopeCond = branchClause(req, '"B_id"', branchParams);
     const branchCheck = await pool.query(
-      'SELECT "B_id" FROM "Branch" WHERE "B_id" = $1',
-      [B_id],
+      `SELECT "B_id" FROM "Branch" WHERE "B_id" = $1${branchScopeCond ? ` AND ${branchScopeCond}` : ""}`,
+      branchParams,
     );
     if (branchCheck.rows.length === 0) {
       res.status(400);
@@ -168,7 +183,11 @@ export async function createTerminal(req, res, next) {
 export async function updateTerminal(req, res, next) {
   try {
     const { id } = req.params;
-    const { Ter_name, B_id } = req.body;
+    const { Ter_name } = req.body;
+    // Same rule as create: a branch-level caller can't move a terminal to
+    // another branch, whatever B_id the request body carries.
+    const requestedBId = req.body?.B_id;
+    const B_id = requestedBId !== undefined ? writeBranchId(req, requestedBId) : undefined;
 
     if (isNaN(Number(id))) {
       res.status(400);
@@ -187,21 +206,25 @@ export async function updateTerminal(req, res, next) {
       return next(new Error(errors.join("; ")));
     }
 
-    // Confirm terminal exists
+    // Confirm the terminal exists and is one this caller may touch.
+    const existingParams = [id];
+    const existingScope = branchClause(req, '"B_id"', existingParams);
     const existing = await pool.query(
-      'SELECT "Ter_id", "B_id" FROM "Terminal" WHERE "Ter_id" = $1',
-      [id],
+      `SELECT "Ter_id", "B_id" FROM "Terminal" WHERE "Ter_id" = $1${existingScope ? ` AND ${existingScope}` : ""}`,
+      existingParams,
     );
     if (existing.rows.length === 0) {
       res.status(404);
       return next(new Error("Terminal not found"));
     }
 
-    // Confirm new branch exists if B_id is being changed
+    // Confirm new branch exists (and is in scope) if B_id is being changed
     if (B_id !== undefined) {
+      const branchParams = [B_id];
+      const branchScopeCond = branchClause(req, '"B_id"', branchParams);
       const branchCheck = await pool.query(
-        'SELECT "B_id" FROM "Branch" WHERE "B_id" = $1',
-        [B_id],
+        `SELECT "B_id" FROM "Branch" WHERE "B_id" = $1${branchScopeCond ? ` AND ${branchScopeCond}` : ""}`,
+        branchParams,
       );
       if (branchCheck.rows.length === 0) {
         res.status(400);
@@ -263,9 +286,11 @@ export async function deleteTerminal(req, res, next) {
       return next(new Error("Invalid terminal ID"));
     }
 
+    const params = [id];
+    const scope = branchClause(req, '"B_id"', params);
     const result = await pool.query(
-      'DELETE FROM "Terminal" WHERE "Ter_id" = $1 RETURNING "Ter_id"',
-      [id],
+      `DELETE FROM "Terminal" WHERE "Ter_id" = $1${scope ? ` AND ${scope}` : ""} RETURNING "Ter_id"`,
+      params,
     );
 
     if (result.rows.length === 0) {

@@ -68,12 +68,20 @@ export async function getBranches(req, res, next) {
 
     const params = [];
 
-    if (role_id === ROLES.ADMIN && com_id != null) {
-      query += ` WHERE b."com_id" = $1`;
-      params.push(com_id);
+    if (role_id === ROLES.SUPER_ADMIN) {
+      // sees every company's branches — no filter.
     } else if (role_id === ROLES.BRANCH_ADMIN && b_id != null) {
       query += ` WHERE b."B_id" = $1`;
       params.push(b_id);
+    } else if (com_id != null) {
+      // Admin (company-wide) and any branch-level role browsing the
+      // directory (Cashier/Waiter/Kitchen with VIEW_DIRECTORY) — their own
+      // company's branches, never another tenant's.
+      query += ` WHERE b."com_id" = $1`;
+      params.push(com_id);
+    } else {
+      // No company on the token at all — fail closed, not open.
+      query += ` WHERE FALSE`;
     }
 
     query += ` ORDER BY b."B_id"`;
@@ -98,7 +106,7 @@ export async function getBranchById(req, res, next) {
     }
 
     const branchId = Number(id);
-    
+
     // Check permissions for non-admin roles
     if (
       role_id === ROLES.BRANCH_ADMIN ||
@@ -123,9 +131,9 @@ export async function getBranchById(req, res, next) {
       LEFT JOIN "Company" c ON b."com_id" = c."com_id"
       WHERE b."B_id" = $1
     `;
-    
+
     const queryParams = [branchId];
-    
+
     // Add company filter for admin users
     if (role_id === ROLES.ADMIN && com_id != null) {
       query += ` AND b."com_id" = $2`;
@@ -229,19 +237,23 @@ export async function updateBranch(req, res, next) {
       throw new Error("Invalid branch ID.");
     }
 
-    // The Administrator owns one property and may keep its own details current
-    // — the name, address and phone that print on every bill. It may not touch
-    // anybody else's, nor move itself to another company, nor switch itself off.
-    const isOwner = Number(req.user?.role_id) === ROLES.BRANCH_ADMIN;
-    if (isOwner && Number(id) !== Number(req.user?.b_id)) {
+    // Anyone reaching this route who isn't company-wide or platform-wide
+    // owns exactly one property — the Branch Admin holds that role
+    // natively, and a Cashier delegated the BRANCH_SETTINGS capability is
+    // just as branch-pinned for this purpose. Either way: may keep its own
+    // details current — the name, address and phone that print on every
+    // bill — but may not touch anybody else's, move itself to another
+    // company, or switch itself off.
+    const isBranchScoped = ![ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(Number(req.user?.role_id));
+    if (isBranchScoped && Number(id) !== Number(req.user?.b_id)) {
       res.status(404);
       throw new Error("Not found");
     }
 
     const { B_name, B_email, B_conNo, B_address, status, B_status } = req.body;
-    const com_id = isOwner ? undefined : req.body.com_id;
+    const com_id = isBranchScoped ? undefined : req.body.com_id;
     // Accept both 'status' and 'B_status' from the client
-    const newStatus = isOwner ? undefined : (B_status !== undefined ? B_status : status);
+    const newStatus = isBranchScoped ? undefined : (B_status !== undefined ? B_status : status);
 
     // Must send at least one field
     const hasAnyField = [

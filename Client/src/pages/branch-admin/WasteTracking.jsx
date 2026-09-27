@@ -13,8 +13,7 @@ import {
 } from "../../services/api";
 import { dayKey, todayKey } from "../../utils/dates";
 import { exportCsv, dateCell } from "../../utils/exportCsv";
-
-const ROLES = { SUPER_ADMIN: 6 };
+import { ROLE } from "../../constants/roles";
 
 function fmtQty(n) {
   return Number(Number(n).toFixed(3)).toString();
@@ -31,7 +30,7 @@ export default function WasteTracking() {
   // Editing/deleting a record is Admin-only on the backend (a retired role
   // nobody holds today) or Super Admin, which bypasses every role check.
   // Showing the controls to anyone else would just 403 on click.
-  const canEditDelete = Number(user?.role_id) === ROLES.SUPER_ADMIN;
+  const canEditDelete = Number(user?.role_id) === ROLE.SUPER_ADMIN;
 
   const [materials, setMaterials] = useState([]);
   const [waste, setWaste] = useState([]);

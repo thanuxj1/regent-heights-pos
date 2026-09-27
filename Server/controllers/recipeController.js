@@ -458,6 +458,140 @@ export async function createRecipeBulk(req, res, next) {
 }
 
 // ─────────────────────────────────────────────
+// PUT /api/recipes/product/:pro_id
+// Replace a product's whole recipe in one transaction.
+//
+// The client used to do this as two separate requests — DELETE then
+// POST /bulk (which refuses outright if any recipe rows still exist, which
+// is exactly why the delete ran first). If the create failed after the
+// delete had already committed, the product's recipe was simply gone: empty
+// on the server, while the UI's own error message claimed nothing had
+// changed. One transaction means a failed replace leaves the old recipe
+// exactly as it was.
+// ─────────────────────────────────────────────
+export async function replaceRecipeForProduct(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const { pro_id } = req.params;
+    const { ingredients } = req.body;
+
+    if (!isPositiveInt(pro_id)) {
+      res.status(400);
+      throw new Error("Invalid pro_id.");
+    }
+    if (!Array.isArray(ingredients)) {
+      res.status(400);
+      throw new Error("ingredients must be an array.");
+    }
+    if (ingredients.length > 50) {
+      res.status(400);
+      throw new Error("A recipe cannot have more than 50 ingredients.");
+    }
+
+    for (let i = 0; i < ingredients.length; i++) {
+      const item = ingredients[i];
+      const pos = `ingredients[${i}]`;
+      if (item.rawmaterial_id === undefined || item.rawmaterial_id === null) {
+        res.status(400);
+        throw new Error(`${pos}: rawmaterial_id is required.`);
+      }
+      if (item.quantity_req === undefined || item.quantity_req === null) {
+        res.status(400);
+        throw new Error(`${pos}: quantity_req is required.`);
+      }
+      if (!isPositiveInt(item.rawmaterial_id)) {
+        res.status(400);
+        throw new Error(`${pos}: rawmaterial_id must be a positive integer.`);
+      }
+      if (!isValidQuantity(item.quantity_req)) {
+        res.status(400);
+        throw new Error(
+          `${pos}: quantity_req must be a positive number no greater than 99999.999.`,
+        );
+      }
+      if (item.unit !== undefined && item.unit !== null && !VALID_UNITS.includes(item.unit)) {
+        res.status(400);
+        throw new Error(
+          `${pos}: Unit "${item.unit}" is not valid. Allowed: ${VALID_UNITS.join(", ")}`,
+        );
+      }
+    }
+
+    const rmIds = ingredients.map((i) => i.rawmaterial_id);
+    if (new Set(rmIds).size !== rmIds.length) {
+      res.status(400);
+      throw new Error("ingredients list contains duplicate rawmaterial_id entries.");
+    }
+
+    const productCheck = await pool.query(
+      'SELECT "pro_id", "pro_name", "Com_id" FROM "public"."Product" WHERE "pro_id" = $1',
+      [pro_id],
+    );
+    if (productCheck.rows.length === 0) {
+      res.status(404);
+      throw new Error("Product not found.");
+    }
+    if (req.user.role_id !== ROLES.SUPER_ADMIN && productCheck.rows[0].Com_id !== req.user.com_id) {
+      res.status(403);
+      throw new Error("You do not have permission to change this product's recipe.");
+    }
+
+    if (rmIds.length && req.user.role_id !== ROLES.SUPER_ADMIN) {
+      const rmCheck = await pool.query(
+        'SELECT "rm_id" FROM "public"."Raw_Material" WHERE "rm_id" = ANY($1) AND "Com_id" = $2',
+        [rmIds, req.user.com_id],
+      );
+      if (rmCheck.rows.length !== rmIds.length) {
+        res.status(403);
+        throw new Error("One or more raw materials do not exist or do not belong to your company.");
+      }
+    }
+
+    await client.query("BEGIN");
+
+    await client.query('DELETE FROM "public"."RECIPE" WHERE "pro_id" = $1', [pro_id]);
+
+    const inserted = [];
+    for (const item of ingredients) {
+      const safeQty = roundQuantity(item.quantity_req);
+      const result = await client.query(
+        `INSERT INTO "public"."RECIPE" ("quantity_req", "pro_id", "rawmaterial_ID", "unit")
+         VALUES ($1, $2, $3, $4)
+         RETURNING
+           "recipe_id",
+           "quantity_req",
+           "pro_id",
+           "rawmaterial_ID" AS "rawmaterial_id",
+           "unit"`,
+        [safeQty, pro_id, item.rawmaterial_id, item.unit || null],
+      );
+      inserted.push(toResponseRow(result.rows[0]));
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      pro_id: parseInt(pro_id),
+      pro_name: productCheck.rows[0].pro_name,
+      ingredients: inserted,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err?.code === "23503") {
+      res.status(400);
+      return next(new Error("Invalid foreign key: one or more rawmaterial_id values do not exist."));
+    }
+    if (err?.code === "23505") {
+      res.status(409);
+      return next(new Error("Duplicate entry: one or more raw materials are already in this recipe."));
+    }
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+// ─────────────────────────────────────────────
 // PUT /api/recipes/:id
 // ─────────────────────────────────────────────
 export async function updateRecipe(req, res, next) {

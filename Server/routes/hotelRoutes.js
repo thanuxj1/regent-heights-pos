@@ -65,8 +65,6 @@ router.delete("/rooms/:id", requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT),
 router.get("/policy",       getStayPolicy);
 router.put("/policy",       requireBranchAdminOr(CAPABILITIES.HOTEL_MANAGEMENT), updateStayPolicy);
 
-// Meal plan routes removed — meal plan module has been retired.
-
 // ─── Guests ──────────────────────────────────────────────────────────────────
 router.get("/guest-directory",    getGuestDirectory);
 router.get("/guests",             getGuests);

@@ -2,6 +2,13 @@
 // warnings (never a hard block), check-in room assignment, folio, payments,
 // cancellation, and the stay policy.
 import { ctx, api, t, eq, ok, status, section, finish } from "./lib.mjs";
+// Raw UTC math here used to coincide with the server's own hotel-local
+// "today" (utils/hotelTime.js) only by accident, for whatever few hours of
+// the run happened to fall inside the UTC/Asia-Colombo offset window — this
+// file passed or failed depending on what time of day it happened to run,
+// not on whether the code was actually right. hotelDay() matches the
+// server's own definition of "today" instead.
+import { hotelDay } from "../utils/hotelTime.js";
 
 const { A, stamp } = await ctx();
 const owner = A.owner.token;
@@ -31,8 +38,12 @@ await t("cashier cannot create a room type (needs Hotel & Room Management)", asy
   ok(res.status === 403, `expected 403, got ${res.status}`);
 });
 
-const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-const dayAfter = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+// Named for the two dates a one-night booking needs (check-in, check-out),
+// not for their distance from real "today" — the check-in section below
+// checks this booking in immediately, so it has to be dated for the hotel's
+// *today*, not tomorrow.
+const tomorrow = hotelDay(0);
+const dayAfter = hotelDay(1);
 
 section("category-only booking & overbooking-as-warning");
 let bookingId1, bookingId2, bookingId3;

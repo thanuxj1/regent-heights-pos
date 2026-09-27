@@ -16,11 +16,7 @@ import {
   ROLES,
 } from "../middleware/authMiddleware.js";
 
-const router = Router();
-
-function Router() {
-  return express.Router();
-}
+const router = express.Router();
 
 router.use(requireAuth);
 

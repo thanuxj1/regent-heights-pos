@@ -51,7 +51,6 @@ const HotelManagement = () => {
   const [deleteError, setDeleteError] = useState("");
   // What the delete would take with it, fetched as the dialog opens.
   const [deleteImpact, setDeleteImpact] = useState(null);
-  const [successMessage, setSuccessMessage] = useState("");
   const [togglingId, setTogglingId] = useState(null);
   const { toasts, removeToast, toast } = useToast();
   const [formData, setFormData] = useState({
@@ -184,7 +183,6 @@ const HotelManagement = () => {
       
       setIsModalOpen(false);
       fetchData();
-      setTimeout(() => setSuccessMessage(""), 3000);
     } catch (err) {
       console.error("Error saving company:", err);
       setModalError(err.response?.data?.message || err.message || "Failed to save company.");
@@ -266,20 +264,6 @@ const HotelManagement = () => {
               Manage all companies and their subscriptions
             </p>
           </div>
-
-          {successMessage && (
-            <div style={{
-              padding: "12px 18px",
-              background: successMessage.toLowerCase().includes("deleted") ? "#FEF2F2" : "#ECFDF5",
-              border: successMessage.toLowerCase().includes("deleted") ? "1px solid #FEE2E2" : "1px solid #A7F3D0",
-              color: successMessage.toLowerCase().includes("deleted") ? "#EF4444" : "#065F46",
-              borderRadius: 8, fontSize: 14, fontWeight: 600,
-              marginBottom: 20, display: "flex", alignItems: "center", gap: 8
-            }}>
-              <span style={{ fontSize: 16 }}>{successMessage.toLowerCase().includes("deleted") ? "🗑️" : "✓"}</span>
-              {successMessage}
-            </div>
-          )}
 
           <div
             style={{

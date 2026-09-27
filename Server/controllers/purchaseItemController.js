@@ -175,6 +175,8 @@ export async function getPurchaseItemById(req, res, next) {
          rm.rm_id,
          rm.rm_name,
          rm.unit        AS rm_unit,
+         pi.pro_id,
+         p.pro_name,
          b."B_id"       AS branch_id,
          b."B_name"     AS branch_name,
          c.com_id       AS company_id,
@@ -183,7 +185,8 @@ export async function getPurchaseItemById(req, res, next) {
        JOIN purchase_order po ON po.po_id = pi.po_id
        JOIN "Branch"       b  ON b."B_id" = po.b_id
        JOIN "Company"      c  ON c.com_id = b.com_id
-       JOIN "Raw_Material" rm ON rm.rm_id = pi.rm_id
+       LEFT JOIN "Raw_Material" rm ON rm.rm_id = pi.rm_id
+       LEFT JOIN "Product"      p  ON p.pro_id = pi.pro_id
        WHERE pi.pi_id = $1`;
     const params = [id];
 

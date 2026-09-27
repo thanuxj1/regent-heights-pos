@@ -940,6 +940,12 @@ const CashierPos = () => {
           table_id: editingOrderTableId ?? null,
           payment_method: String(effectivePaymentMethod || "cash").toLowerCase(),
           delivery_partner: effectiveDeliveryPartner,
+          // A waiter-placed ticket has never had a discount or service fee on
+          // it — this settle step is the only chance to declare one, same as
+          // a fresh cart's createOrderWithItems call below.
+          discount_pct: Number(discountPct || 0),
+          service_fee: Number(serviceFee || 0),
+          ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         });
       } else {
         // The sale gets its key here, before the first attempt. Everything after
