@@ -1,9 +1,20 @@
 name: Deploy to production
 
 # Pushing to main builds the client and ships both server and client to the
-# DigitalOcean droplet, then restarts the app. There is no automatic rollback
-# on a failed health check — the previous version is kept as a timestamped
-# backup on the server; see regent-heights-ops/RUNBOOK.md for how to restore it.
+# DigitalOcean droplet, runs any pending database migrations, then restarts
+# the app. There is no automatic rollback on a failed health check — the
+# previous version is kept as a timestamped backup on the server; see
+# regent-heights-ops/RUNBOOK.md for how to restore it.
+#
+# Migrations run with `set -e`, after the new code is swapped in but before
+# pm2 restarts — so a failed migration fails the whole deploy and the old
+# process keeps running on the old (still-matching) schema, instead of
+# restarting into new code that expects a table or column that was never
+# created. This is exactly the gap that let migrations 044-048 ship without
+# ever reaching production's own database: the old pipeline shipped code
+# only, and a page whose query needed one of those migrations threw an
+# unhandled 500 on every load until someone happened to run migrate.js by
+# hand.
 
 on:
   push:
@@ -56,7 +67,7 @@ jobs:
           tar -czf - -C Client/dist . \
             | ssh "$DEPLOY_USER@$DEPLOY_HOST" "tar -xzf - -C /home/appuser/app-web-new"
 
-      - name: Install server dependencies, swap, restart
+      - name: Install server dependencies, swap, migrate, restart
         run: |
           ssh "$DEPLOY_USER@$DEPLOY_HOST" '
             set -e
@@ -68,6 +79,7 @@ jobs:
             mv /home/appuser/app-web "/home/appuser/app-web-backup-$TS"
             mv /home/appuser/app-web-new /home/appuser/app-web
             chmod -R o+rX /home/appuser/app /home/appuser/app-web
+            cd /home/appuser/app && node scripts/migrate.js
             pm2 restart regent-heights
           '
 
