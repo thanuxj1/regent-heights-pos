@@ -126,12 +126,13 @@ export async function createSupplier(req, res, next) {
       "sup_address",
     ]);
 
-    const { sup_name, sup_email, sup_contact, sup_address } = body;
+    const { sup_name, sup_email, sup_address } = body;
+    // Only the name is required — a blank contact is the same as none.
+    const sup_contact = typeof body.sup_contact === "string" ? body.sup_contact.trim() || undefined : body.sup_contact;
 
-    // ── Required fields ── (email is optional: many local suppliers have none)
-    if (!sup_name || !sup_contact) {
+    if (!sup_name) {
       res.status(400);
-      throw new Error("sup_name and sup_contact are required");
+      throw new Error("sup_name is required");
     }
 
     // ── Name validation (shared helper) ──
@@ -153,16 +154,18 @@ export async function createSupplier(req, res, next) {
       }
     }
 
-    // ── Contact type guard ──
-    if (typeof sup_contact !== "string") {
-      res.status(400);
-      throw new Error("sup_contact must be a string");
-    }
-    if (!validateContact(sup_contact)) {
-      res.status(400);
-      throw new Error(
-        "sup_contact must be a valid phone number (7–30 characters, digits and +, -, spaces allowed)",
-      );
+    // ── Contact guard (only when one was given) ──
+    if (sup_contact !== undefined && sup_contact !== null) {
+      if (typeof sup_contact !== "string") {
+        res.status(400);
+        throw new Error("sup_contact must be a string");
+      }
+      if (!validateContact(sup_contact)) {
+        res.status(400);
+        throw new Error(
+          "sup_contact must be a valid phone number (7–30 characters, digits and +, -, spaces allowed)",
+        );
+      }
     }
 
     // ── Address validation ──
@@ -215,18 +218,20 @@ export async function createSupplier(req, res, next) {
     }
 
     // ── Duplicate contact check ──
-    const dupContactParams = resolvedComId ? [sup_contact, resolvedComId] : [sup_contact];
-    const dupContact = await pool.query(dupContactQuery, dupContactParams);
-    if (dupContact.rows.length > 0) {
-      res.status(409);
-      throw new Error("A supplier with this contact number already exists");
+    if (sup_contact) {
+      const dupContactParams = resolvedComId ? [sup_contact, resolvedComId] : [sup_contact];
+      const dupContact = await pool.query(dupContactQuery, dupContactParams);
+      if (dupContact.rows.length > 0) {
+        res.status(409);
+        throw new Error("A supplier with this contact number already exists");
+      }
     }
 
     const result = await pool.query(
       `INSERT INTO "SUPPLIER" (sup_name, sup_email, sup_contact, sup_address, "Com_id")
        VALUES ($1, $2, $3, $4, $5)
        RETURNING sup_id, sup_name, sup_email, sup_contact, sup_address`,
-      [sup_name, sup_email ? sup_email.toLowerCase() : null, sup_contact, sup_address || null, resolvedComId],
+      [sup_name, sup_email ? sup_email.toLowerCase() : null, sup_contact || null, sup_address || null, resolvedComId],
     );
 
     res.status(201).json(result.rows[0]);

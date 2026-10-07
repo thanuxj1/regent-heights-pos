@@ -307,7 +307,7 @@ function SupplierDetailView({ supplier, onBack, showToast }) {
       <div style={{ background: "#fff", padding: "24px", borderRadius: "16px", border: "1px solid #E4E7EC", marginBottom: "24px" }}>
         <h2 style={{ margin: "0 0 12px 0", color: "#101828" }}>{supplier.sup_name}</h2>
         <div style={{ display: "flex", gap: "24px", flexWrap: "wrap", color: "#667085", fontSize: "14px" }}>
-          <span>📞 {supplier.sup_contact}</span>
+          {supplier.sup_contact && <span>📞 {supplier.sup_contact}</span>}
           {supplier.sup_email && <span>📧 {supplier.sup_email}</span>}
           {supplier.sup_address && <span>📍 {supplier.sup_address}</span>}
         </div>
@@ -490,12 +490,12 @@ const SupplierManagement = () => {
       if (!name || name.length < 2) throw new Error("Supplier name must be at least 2 characters");
       
       const contact = (newSupplier.sup_contact || "").trim();
-      if (!contact || contact.length < 7) throw new Error("Please enter a valid contact number");
+      if (contact && contact.length < 7) throw new Error("That contact number looks too short — or leave it blank");
 
       setIsCreating(true);
       await createSupplier({
         sup_name: name,
-        sup_contact: contact,
+        sup_contact: contact || undefined,
         sup_email: newSupplier.sup_email?.trim() || undefined,
         sup_address: newSupplier.sup_address?.trim() || undefined,
       });
@@ -540,7 +540,7 @@ const SupplierManagement = () => {
                   <input style={field} value={newSupplier.sup_name} onChange={(e) => setNewSupplier({...newSupplier, sup_name: e.target.value})} placeholder="e.g., Fresh Farms" />
                 </div>
                 <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#64748B", marginBottom: "4px" }}>Contact Number *</label>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#64748B", marginBottom: "4px" }}>Contact Number (optional)</label>
                   <input style={field} value={newSupplier.sup_contact} onChange={(e) => setNewSupplier({...newSupplier, sup_contact: e.target.value})} placeholder="07XXXXXXXX" />
                 </div>
                 <div>
@@ -671,7 +671,7 @@ const SupplierManagement = () => {
                         </div>
                         <div style={{ padding: "0 24px 16px", fontSize: "13.5px", color: "#475467", display: "flex", flexDirection: "column", gap: "7px" }}>
                           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                            <span style={{ opacity: 0.6 }}>📞</span> <span>{sup.sup_contact}</span>
+                            {sup.sup_contact ? (<><span style={{ opacity: 0.6 }}>📞</span> <span>{sup.sup_contact}</span></>) : <span style={{ opacity: 0.6 }}>No contact number</span>}
                           </div>
                           {sup.sup_email && (
                             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>

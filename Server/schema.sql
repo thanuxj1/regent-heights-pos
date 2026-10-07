@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS "SUPPLIER" (
     sup_id      SERIAL PRIMARY KEY,
     sup_name    VARCHAR(120) NOT NULL,
     sup_email   VARCHAR(150) NOT NULL,
-    sup_contact VARCHAR(30)  NOT NULL,
+    sup_contact VARCHAR(30),
     sup_address VARCHAR(100),
     "Com_id"    INTEGER REFERENCES "Company"(com_id)
 );

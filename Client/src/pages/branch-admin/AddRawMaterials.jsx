@@ -625,7 +625,7 @@ const AddRawMaterials = () => {
       else if (!/^[\w\s\-().&/,]+$/.test(name)) supplierErrors.sup_name = "Contains characters that aren't allowed";
 
       const contact = String(supplier.sup_contact || "").trim();
-      if (!/^[0-9+\-\s()]{7,30}$/.test(contact)) supplierErrors.sup_contact = "7–30 digits (+ - ( ) and spaces allowed)";
+      if (contact && !/^[0-9+\-\s()]{7,30}$/.test(contact)) supplierErrors.sup_contact = "7–30 digits (+ - ( ) and spaces allowed)";
 
       const email = (supplier.sup_email || "").trim();
       if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 150)) {
@@ -638,7 +638,7 @@ const AddRawMaterials = () => {
       if (address.length > 100) supplierErrors.sup_address = "Keep it under 100 characters";
 
       if (!Object.keys(supplierErrors).length) {
-        cleanSupplier = { sup_name: name, sup_email: email ? email.toLowerCase() : undefined, sup_contact: contact, sup_address: address || null };
+        cleanSupplier = { sup_name: name, sup_email: email ? email.toLowerCase() : undefined, sup_contact: contact || undefined, sup_address: address || null };
       }
     } else if (!supplier.sup_id) {
       supplierErrors.sup_id = "Choose the supplier you bought from";
@@ -1045,7 +1045,7 @@ const AddRawMaterials = () => {
                   <div>
                     {[
                       ["sup_name", "Supplier name *", "text", "e.g. Fresh Farm Traders"],
-                      ["sup_contact", "Contact number *", "tel", "e.g. 0771234567"],
+                      ["sup_contact", "Contact number (optional)", "tel", "e.g. 0771234567"],
                       ["sup_email", "Email (optional)", "email", ""],
                       ["sup_address", "Address (optional)", "text", ""],
                     ].map(([field, label, type, placeholder]) => (
