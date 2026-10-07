@@ -149,43 +149,49 @@ export default function Reports() {
 
   const exportSummaryCsv = () => {
     if (!data) return;
+    const d = data.by_department;
     const pct = (v) => `${v}%`;
-    const head = ["Metric", "Value"];
-    const section = (title) => [`— ${title} —`, ""];
+    const head = ["Item", "Amount (LKR)", "Note"];
+    const line = (label, value, note = "") => [label, value, note];
+    const title = (t) => [t.toUpperCase(), "", ""];
+    const totalCosts = data.expenses.total + data.expenses.commissions;
     const rows = [
-      ["Report period", `${from} to ${to} (${data.range.days} day${data.range.days === 1 ? "" : "s"})`],
+      line("Profit report", `${from} to ${to}`, `${data.range.days} day(s)`),
       [],
-      section("REVENUE"),
-      ["Hotel (rooms, meals, room service)", money(data.revenue.hotel)],
-      ["Restaurant (walk-in)", money(data.revenue.restaurant)],
-      ["   of which delivery charges (already included above)", money(data.revenue.delivery_charges ?? 0)],
-      ["Total revenue", money(data.revenue.total)],
+      title("Summary"),
+      line("Total revenue", money(data.revenue.total), "Hotel + restaurant"),
+      line("Total costs", money(totalCosts), "Everything paid out"),
+      line("NET PROFIT", money(data.profit.net), `Revenue minus costs — ${pct(data.profit.margin_pct)} of revenue`),
       [],
-      section("EXPENSES"),
-      ...data.expenses.by_category.map(c => [CAT_LABEL[c.exp_category] || c.exp_category, money(Number(c.total))]),
-      ["Agent commissions", money(data.expenses.commissions)],
-      ["Total expenses", money(data.expenses.total + data.expenses.commissions)],
+      title("Hotel"),
+      line("Revenue", money(d.hotel.revenue), "Rooms, meals and room service charged to guests"),
+      line("  Agent commissions", money(d.hotel.costs.commissions)),
+      line("  Hotel supplies bought", money(d.hotel.costs.supplies_bought), "Cleaning products and other consumables, as paid"),
+      line("  Hotel supplies wasted", money(d.hotel.costs.supplies_wasted)),
+      line("Hotel costs", money(d.hotel.cost_total)),
+      line("HOTEL PROFIT (before shared costs)", money(d.hotel.profit)),
       [],
-      section("PROFIT"),
-      ["Net profit (revenue − expenses)", money(data.profit.net)],
-      ["Profit margin (net profit ÷ revenue)", pct(data.profit.margin_pct)],
+      title("Restaurant"),
+      line("Revenue", money(d.restaurant.revenue), `${d.restaurant.orders} orders`),
+      line("  of which delivery charges", money(d.restaurant.delivery_charges ?? 0), "Already included in revenue"),
+      line("  Food and drink bought", money(d.restaurant.costs.food_and_drink_bought), "Ingredients and resale products, as paid to suppliers"),
+      line("  Food wasted", money(d.restaurant.costs.food_wasted)),
+      line("  Raw materials, packaging, delivery costs", money(d.restaurant.costs.raw_materials_packaging_delivery), "Recorded expenses"),
+      line("Restaurant costs", money(d.restaurant.cost_total)),
+      line("RESTAURANT PROFIT (before shared costs)", money(d.restaurant.profit)),
+      line("Dish profit (food sold vs what it cost to make)", money(data.product_profit?.profit ?? 0), `${pct(data.product_profit?.margin_pct ?? 0)} margin — see Product Profit`),
       [],
-      section("HOTEL PERFORMANCE"),
-      ["Occupancy rate", pct(data.occupancy.occupancy_pct)],
-      ["Room-nights sold", data.occupancy.rooms_sold],
-      ["Room-nights available", data.occupancy.rooms_available],
-      ["ADR — average daily rate per room sold", money(data.occupancy.adr)],
-      ["RevPAR — revenue per available room", money(data.occupancy.revpar)],
-      ["Restaurant orders", data.restaurant_orders],
+      title("Shared costs (not split between hotel and restaurant)"),
+      ...d.shared.by_category.map(c => line(`  ${CAT_LABEL[c.exp_category] || c.exp_category}`, money(c.total))),
+      line("Shared costs", money(d.shared.total), "Nothing says whose these are, so they are not guessed at"),
       [],
-      section("DISH PROFIT (food sold vs what it cost)"),
-      ["Dish sales (before bill-level discount, service, tax)", money(data.product_profit?.sales ?? 0)],
-      ["Cost of those dishes", money(data.product_profit?.cost ?? 0)],
-      ["Dish profit", money(data.product_profit?.profit ?? 0)],
-      ["Dish margin", pct(data.product_profit?.margin_pct ?? 0)],
-      ["Products with no cost price set", data.product_profit?.products_without_cost ?? 0],
+      title("How it adds up"),
+      line("Hotel profit", money(d.hotel.profit)),
+      line("Restaurant profit", money(d.restaurant.profit)),
+      line("Less shared costs", money(-d.shared.total)),
+      line("NET PROFIT", money(data.profit.net), `${pct(data.profit.margin_pct)} of revenue`),
     ];
-    downloadCsv(`profit_summary_${from}_to_${to}`, head, rows);
+    downloadCsv(`profit_report_${from}_to_${to}`, head, rows);
   };
 
   const maxDay = useMemo(() => {
@@ -246,8 +252,12 @@ export default function Reports() {
                 data.profit.net >= 0 ? "#1565C0" : "#B91C1C", "#EFF6FF", `${data.profit.margin_pct}% margin`],
               ["Dish Profit", money(data.product_profit?.profit ?? 0), "#92400E", "#FEF3C7",
                 `${data.product_profit?.margin_pct ?? 0}% margin on food sold`],
-              ["Occupancy", `${data.occupancy.occupancy_pct}%`, "#6B21A8", "#F3E8FF",
-                `${data.occupancy.rooms_sold} of ${data.occupancy.rooms_available} room-nights`],
+              ["Hotel Profit", money(data.by_department?.hotel.profit ?? 0),
+                (data.by_department?.hotel.profit ?? 0) >= 0 ? "#6B21A8" : "#B91C1C", "#F3E8FF",
+                `revenue ${money(data.by_department?.hotel.revenue ?? 0)} · before shared costs`],
+              ["Restaurant Profit", money(data.by_department?.restaurant.profit ?? 0),
+                (data.by_department?.restaurant.profit ?? 0) >= 0 ? "#9A3412" : "#B91C1C", "#FFEDD5",
+                `revenue ${money(data.by_department?.restaurant.revenue ?? 0)} · before shared costs`],
             ].map(([k, v, fg, bg, sub]) => (
               <div key={k} style={{ background: bg, borderRadius: 12, padding: "16px 20px" }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>{k}</div>
@@ -297,19 +307,39 @@ export default function Reports() {
                     <strong style={{ color: "#1E293B" }}>{money(data.revenue.delivery_charges ?? 0)}</strong>
                   </div>
 
+                  {/* Who earned what: each side's own costs, then the costs nobody can
+                      assign to one side, then the total that matches Net Profit above. */}
                   <div style={{ marginTop: 24, background: "#F8FAFC", borderRadius: 10, padding: 16 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: "#1E293B", marginBottom: 10 }}>Hotel Performance</div>
-                    {[
-                      ["ADR (average daily rate)", money(data.occupancy.adr)],
-                      ["RevPAR (revenue per available room)", money(data.occupancy.revpar)],
-                      ["Room-nights sold", data.occupancy.rooms_sold],
-                      ["Restaurant orders", data.restaurant_orders],
-                    ].map(([k, v]) => (
-                      <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13 }}>
-                        <span style={{ color: "#64748B" }}>{k}</span>
-                        <span style={{ color: "#1E293B", fontWeight: 600 }}>{v}</span>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: "#1E293B", marginBottom: 10 }}>Profit by department</div>
+                    {data.by_department && [
+                      ["Hotel", data.by_department.hotel, "#6B21A8"],
+                      ["Restaurant", data.by_department.restaurant, "#9A3412"],
+                    ].map(([name, dep, color]) => (
+                      <div key={name} style={{ padding: "6px 0", borderBottom: "1px solid #E2E8F0" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color }}>
+                          <span>{name}</span><span>{money(dep.profit)}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#64748B" }}>
+                          Revenue {money(dep.revenue)} − its own costs {money(dep.cost_total)}
+                        </div>
                       </div>
                     ))}
+                    {data.by_department && (
+                      <>
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", fontSize: 13 }}>
+                          <span style={{ color: "#64748B" }}>Shared costs (utilities, salaries, …)</span>
+                          <span style={{ color: "#B91C1C", fontWeight: 600 }}>−{money(data.by_department.shared.total)}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, fontWeight: 700 }}>
+                          <span style={{ color: "#1E293B" }}>Net profit</span>
+                          <span style={{ color: data.profit.net >= 0 ? "#1565C0" : "#B91C1C" }}>{money(data.profit.net)}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
+                          Shared costs have no owner in the books, so they are shown once rather than split by guesswork.
+                          {" "}{data.restaurant_orders} restaurant order(s) in this range.
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 

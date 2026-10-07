@@ -218,6 +218,74 @@ export async function getSummary(req, res, next) {
     const roomsAvailable = num(occupancy.rows[0].n) * spanDays;
     const roomsSold = num(roomNights.rows[0].sold);
 
+    // ── Hotel vs restaurant ──────────────────────────────────────────────
+    // Money out is split only where the books say which side it belongs to:
+    //   hotel      — hotel supplies bought, agent commissions, hotel supplies wasted
+    //   restaurant — food & drink bought and wasted, raw materials / packaging / delivery costs
+    //   shared     — everything else (utilities, salaries, maintenance, marketing, other):
+    //                nothing says whose they are, so they are shown on their own, not guessed at.
+    // The three always add up to the money-out figure the net profit uses.
+    const supSplit = await pool.query(
+      `SELECT COALESCE(SUM(sp.amount * COALESCE(sh.share, 0)), 0) AS hotel
+       FROM supplier_payment sp
+       JOIN purchase_order po ON po.po_id = sp.po_id
+       LEFT JOIN (
+         SELECT pi.po_id,
+                SUM(CASE WHEN rm.item_category = 'supply' THEN COALESCE(pi.price, pi.qty * pi.unit_price, 0) ELSE 0 END)
+                  / NULLIF(SUM(COALESCE(pi.price, pi.qty * pi.unit_price, 0)), 0) AS share
+         FROM purchase_item pi
+         LEFT JOIN "Raw_Material" rm ON rm.rm_id = pi.rm_id
+         GROUP BY pi.po_id
+       ) sh ON sh.po_id = po.po_id
+       WHERE po.b_id = $1 AND sp.payment_date BETWEEN $2::date AND $3::date`,
+      [b_id, from, to]
+    );
+    const wasteSplit = await pool.query(
+      `SELECT COALESCE(SUM(w.waste_qty * COALESCE(rm.unit_price, 0)) FILTER (WHERE rm.item_category = 'supply'), 0) AS hotel
+       FROM "public"."Waste" w
+       JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
+       WHERE rm.b_id = $1 AND w.recorded_at::date BETWEEN $2::date AND $3::date`,
+      [b_id, from, to]
+    );
+    const hotelSupplies = num(supSplit.rows[0].hotel);
+    const hotelWaste = num(wasteSplit.rows[0].hotel);
+    const expCat = Object.fromEntries(expByCat.rows.map(r => [r.exp_category, num(r.total)]));
+    const HOTEL_EXP = ["commission"];
+    const REST_EXP = ["raw_materials", "food_packets", "delivery"];
+    const sumOf = (keys) => keys.reduce((n, k) => n + (expCat[k] || 0), 0);
+    const hotelExpCommission = sumOf(HOTEL_EXP);
+    const restExpenses = sumOf(REST_EXP);
+    const sharedByCat = Object.entries(expCat)
+      .filter(([k]) => !HOTEL_EXP.includes(k) && !REST_EXP.includes(k))
+      .map(([k, v]) => ({ exp_category: k, total: +v.toFixed(2) }))
+      .sort((a, b) => b.total - a.total);
+    const sharedTotal = sharedByCat.reduce((n, c) => n + c.total, 0);
+
+    const hotelCosts = {
+      commissions: +(commTotal + hotelExpCommission).toFixed(2),
+      supplies_bought: +hotelSupplies.toFixed(2),
+      supplies_wasted: +hotelWaste.toFixed(2),
+    };
+    const hotelCostTotal = hotelCosts.commissions + hotelCosts.supplies_bought + hotelCosts.supplies_wasted;
+    const restCosts = {
+      food_and_drink_bought: +(supTotal - hotelSupplies).toFixed(2),
+      food_wasted: +(wasteTotal - hotelWaste).toFixed(2),
+      raw_materials_packaging_delivery: +restExpenses.toFixed(2),
+    };
+    const restCostTotal = restCosts.food_and_drink_bought + restCosts.food_wasted + restCosts.raw_materials_packaging_delivery;
+    const byDepartment = {
+      hotel: {
+        revenue: hotelRev, costs: hotelCosts, cost_total: +hotelCostTotal.toFixed(2),
+        profit: +(hotelRev - hotelCostTotal).toFixed(2),
+      },
+      restaurant: {
+        revenue: restRev, delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        costs: restCosts, cost_total: +restCostTotal.toFixed(2),
+        profit: +(restRev - restCostTotal).toFixed(2),
+      },
+      shared: { by_category: sharedByCat, total: +sharedTotal.toFixed(2) },
+    };
+
     const prod = await productProfitRows(b_id, from, to);
     const prodSales = prod.reduce((n, p) => n + p.sales, 0);
     const prodCost = prod.reduce((n, p) => n + p.cost, 0);
@@ -226,6 +294,7 @@ export async function getSummary(req, res, next) {
       range: { from, to, days: spanDays },
       // Dish-level profit: what the food sold for against what it cost. A different
       // view from "profit" below (cash in less cash out) — see productProfitRows.
+      by_department: byDepartment,
       product_profit: {
         sales: +prodSales.toFixed(2), cost: +prodCost.toFixed(2),
         profit: +(prodSales - prodCost).toFixed(2),
