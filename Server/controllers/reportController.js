@@ -346,6 +346,74 @@ export async function getProductProfit(req, res, next) {
 }
 
 /**
+ * GET /api/reports/purchases?b_id=&from=&to=
+ * Every purchase order placed in the range: what was bought, from whom, what it
+ * came to, what has been paid and what is still owed.
+ */
+export async function getPurchases(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    if (!b_id) { res.status(400); return next(new Error("b_id is required")); }
+    const from = req.query.from || daysAgo(29);
+    const to   = req.query.to   || todayStr();
+
+    const lines = await pool.query(
+      `SELECT po.po_id, po.order_date, po.received_date, po.status, s.sup_name,
+              rm.rm_name, pi.qty, pi.unit_price,
+              COALESCE(pi.price, pi.qty * pi.unit_price, 0) AS line_total
+       FROM purchase_order po
+       JOIN "SUPPLIER" s ON s.sup_id = po.sup_id
+       LEFT JOIN purchase_item pi ON pi.po_id = po.po_id
+       LEFT JOIN "Raw_Material" rm ON rm.rm_id = pi.rm_id
+       WHERE po.b_id = $1 AND po.order_date::date BETWEEN $2::date AND $3::date
+       ORDER BY po.order_date DESC, po.po_id DESC, pi.pi_id`,
+      [b_id, from, to]
+    );
+    const paid = await pool.query(
+      `SELECT sp.po_id, SUM(sp.amount) AS paid
+       FROM supplier_payment sp
+       JOIN purchase_order po ON po.po_id = sp.po_id
+       WHERE po.b_id = $1 AND po.order_date::date BETWEEN $2::date AND $3::date
+       GROUP BY sp.po_id`,
+      [b_id, from, to]
+    );
+    const paidBy = Object.fromEntries(paid.rows.map(r => [r.po_id, num(r.paid)]));
+
+    const orders = new Map();
+    const flat = [];
+    for (const r of lines.rows) {
+      if (!orders.has(r.po_id)) {
+        orders.set(r.po_id, {
+          po_id: r.po_id, order_date: r.order_date, received_date: r.received_date,
+          status: r.status, supplier: r.sup_name, total: 0, paid: paidBy[r.po_id] || 0,
+        });
+      }
+      orders.get(r.po_id).total += num(r.line_total);
+      if (r.rm_name) {
+        flat.push({
+          po_id: r.po_id, order_date: r.order_date, supplier: r.sup_name, status: r.status,
+          item: r.rm_name, qty: num(r.qty), unit_price: num(r.unit_price), line_total: num(r.line_total),
+        });
+      }
+    }
+    const list = [...orders.values()].map(o => ({
+      ...o, total: +o.total.toFixed(2), balance: +(o.total - o.paid).toFixed(2),
+    }));
+    res.json({
+      range: { from, to },
+      orders: list,
+      lines: flat,
+      totals: {
+        orders: list.length,
+        purchased: +list.reduce((s, o) => s + o.total, 0).toFixed(2),
+        paid: +list.reduce((s, o) => s + o.paid, 0).toFixed(2),
+        owed: +list.reduce((s, o) => s + o.balance, 0).toFixed(2),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+/**
  * GET /api/reports/transactions?b_id=&from=&to=&kind=
  * A flat, exportable ledger — every money movement in one list.
  */
@@ -388,7 +456,7 @@ export async function getTransactions(req, res, next) {
       // order here too would count the same sale twice in this ledger.
       const r = await pool.query(
         `SELECT o.or_id, o.or_date AS at, COALESCE(o."or_totalCostWtax", o.or_totalcost, 0) AS amount,
-                o.delivery_charge,
+                o.delivery_charge, o.payment_method,
                 o.or_type, o.u_id AS handled_by_id, c.cust_name AS party,
                 NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "ORDER" o
@@ -402,7 +470,7 @@ export async function getTransactions(req, res, next) {
       );
       r.rows.forEach(x => out.push({
         at: x.at, type: `Restaurant (${x.or_type || "order"})`, direction: "in",
-        amount: num(x.amount), method: "—", reference: `#${x.or_id}`, party: x.party,
+        amount: num(x.amount), method: x.payment_method || "—", reference: `#${x.or_id}`, party: x.party,
         handled_by: x.handled_by || null, handled_by_id: x.handled_by_id ?? null,
         or_id: x.or_id,
         // Part of `amount`, shown on its own for a delivery order.

@@ -986,6 +986,10 @@ export const getReportProducts = async (params = {}) => {
   const res = await api.get("/reports/products", { params });
   return res.data ?? { products: [], totals: {} };
 };
+export const getReportPurchases = async (params = {}) => {
+  const res = await api.get("/reports/purchases", { params });
+  return res.data ?? { orders: [], lines: [], totals: {} };
+};
 export const getReportTransactions = async (params = {}) => {
   const res = await api.get("/reports/transactions", { params });
   return res.data ?? { transactions: [], totals: {} };

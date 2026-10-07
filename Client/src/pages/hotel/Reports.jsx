@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
-import { getReportSummary, getReportTransactions, getReportProducts } from "../../services/api";
+import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
@@ -83,6 +83,55 @@ export default function Reports() {
     downloadCsv(`product_profit_${from}_to_${to}`, head, rows);
   };
 
+  // The four reports the owners ask for, each its own file. They are built from the
+  // full ledger for the range, whatever the Transactions tab is currently filtered to.
+  const fullLedger = async () => (await getReportTransactions({ b_id: branchId, from, to, kind: "all" })).transactions ?? [];
+  const clockOf = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? "" : d.toTimeString().slice(0, 5); };
+  const methodOf = (m) => (m && m !== "—" ? String(m).replace(/_/g, " ") : "");
+  const subtotals = (rows, keyFn) => {
+    const by = {};
+    rows.forEach(r => { const k = keyFn(r) || "unspecified"; by[k] = (by[k] || 0) + r.signed; });
+    return Object.entries(by).sort((a, b) => b[1] - a[1]);
+  };
+
+  const exportRevenueCsv = async () => {
+    const all = (await fullLedger()).filter(t => /^(Hotel payment|Restaurant|Delivery COD)/.test(t.type))
+      .map(t => ({ ...t, signed: t.direction === "out" ? -t.amount : t.amount }));
+    const head = ["Date", "Time", "Source", "Amount (refunds negative)", "Of which delivery charge", "Payment method", "Reference", "Customer / guest", "Handled by"];
+    const rows = all.map(t => [dateCell(dayKey(t.at)), clockOf(t.at), t.type, t.signed,
+      t.delivery_charge > 0 ? t.delivery_charge : "", methodOf(t.method), t.reference || "", t.party || "", t.handled_by || ""]);
+    rows.push([], ["TOTAL REVENUE", "", "", all.reduce((s, t) => s + t.signed, 0)]);
+    rows.push([], ["BY SOURCE"], ...subtotals(all, t => t.type.replace(/\s*\(.*\)/, "")).map(([k, v]) => [k, "", "", v]));
+    rows.push([], ["BY PAYMENT METHOD"], ...subtotals(all, t => methodOf(t.method)).map(([k, v]) => [k, "", "", v]));
+    downloadCsv(`revenue_${from}_to_${to}`, head, rows);
+  };
+
+  const exportExpensesCsv = async () => {
+    const all = (await fullLedger()).filter(t => /^(Expense|Commission|Waste)/.test(t.type))
+      .map(t => ({ ...t, signed: t.amount }));
+    const head = ["Date", "Time", "Type", "Amount", "Description / party", "Reference", "Recorded by"];
+    const rows = all.map(t => [dateCell(dayKey(t.at)), clockOf(t.at), t.type, t.amount, t.party || "", t.reference || "", t.handled_by || ""]);
+    rows.push([], ["TOTAL EXPENSES", "", "", all.reduce((s, t) => s + t.amount, 0)]);
+    rows.push([], ["BY TYPE"], ...subtotals(all, t => t.type).map(([k, v]) => [k, "", "", v]));
+    rows.push([], ["Supplier purchases are in the Purchasing report."]);
+    downloadCsv(`expenses_${from}_to_${to}`, head, rows);
+  };
+
+  const exportPurchasingCsv = async () => {
+    const p = await getReportPurchases({ b_id: branchId, from, to });
+    const head = ["PO #", "Order date", "Supplier", "Status", "Item", "Qty", "Unit price", "Line total", "PO total", "Paid", "Still owed"];
+    const first = new Set();
+    const rows = (p.lines ?? []).map(l => {
+      const o = (p.orders ?? []).find(x => x.po_id === l.po_id);
+      const isFirst = !first.has(l.po_id); first.add(l.po_id);
+      return [l.po_id, dateCell(dayKey(l.order_date)), l.supplier, l.status, l.item, l.qty, l.unit_price, l.line_total,
+        isFirst ? o?.total : "", isFirst ? o?.paid : "", isFirst ? o?.balance : ""];
+    });
+    const t = p.totals ?? {};
+    rows.push([], ["TOTAL PURCHASED", "", "", "", "", "", "", "", t.purchased], ["TOTAL PAID", "", "", "", "", "", "", "", t.paid], ["STILL OWED TO SUPPLIERS", "", "", "", "", "", "", "", t.owed]);
+    downloadCsv(`purchasing_${from}_to_${to}`, head, rows);
+  };
+
   const exportSummaryCsv = () => {
     if (!data) return;
     const pct = (v) => `${v}%`;
@@ -160,12 +209,11 @@ export default function Reports() {
             style={{ ...input, width: 150 }} />
         </div>
         <div style={{ flex: 1 }} />
-        <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>
-          Export Profit Summary
-        </button>
-        <button onClick={exportCsv} disabled={!ledger?.transactions?.length} style={btn("ghost")}>
-          Export Transactions
-        </button>
+        <button onClick={exportRevenueCsv} disabled={!data} style={btn("ghost")}>Revenue report</button>
+        <button onClick={exportExpensesCsv} disabled={!data} style={btn("ghost")}>Expenses report</button>
+        <button onClick={exportPurchasingCsv} disabled={!data} style={btn("ghost")}>Purchasing report</button>
+        <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>Profit report</button>
+        <button onClick={exportCsv} disabled={!ledger?.transactions?.length} style={btn("ghost")}>All transactions</button>
       </div>
 
       {loading ? (
