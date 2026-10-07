@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
-import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables } from "../../services/api";
+import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables, getBranchById } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
 import { exportCsv as downloadCsv, dateCell } from "../../utils/exportCsv";
+import { downloadProfitReportPdf } from "../../utils/profitReportPdf";
 
 const PRESETS = [
   ["Today",        () => [today(), today()]],
@@ -147,6 +148,18 @@ export default function Reports() {
     downloadCsv(`who_we_owe_${payables.as_of}`, head, rows);
   };
 
+  // The statement an auditor can read cold: every line explained, notes at the end.
+  const exportProfitPdf = async () => {
+    if (!data) return;
+    let propertyName = "";
+    try {
+      const b = await getBranchById(branchId);
+      propertyName = b?.B_name ?? b?.data?.B_name ?? "";
+    } catch { /* the statement is still valid without a name on it */ }
+    const preparedBy = [user?.u_fname, user?.u_lname].filter(Boolean).join(" ") || user?.u_email || "";
+    downloadProfitReportPdf({ data, payables, from, to, propertyName, preparedBy });
+  };
+
   const exportSummaryCsv = () => {
     if (!data) return;
     const d = data.by_department;
@@ -169,7 +182,7 @@ export default function Reports() {
       line("  Hotel supplies bought", money(d.hotel.costs.supplies_bought), "Cleaning products and other consumables, as paid"),
       line("  Hotel supplies wasted", money(d.hotel.costs.supplies_wasted)),
       line("Hotel costs", money(d.hotel.cost_total)),
-      line("HOTEL PROFIT (before shared costs)", money(d.hotel.profit)),
+      line("HOTEL PROFIT (before whole-property costs)", money(d.hotel.profit)),
       [],
       title("Restaurant"),
       line("Revenue", money(d.restaurant.revenue), `${d.restaurant.orders} orders`),
@@ -178,17 +191,17 @@ export default function Reports() {
       line("  Food wasted", money(d.restaurant.costs.food_wasted)),
       line("  Raw materials, packaging, delivery costs", money(d.restaurant.costs.raw_materials_packaging_delivery), "Recorded expenses"),
       line("Restaurant costs", money(d.restaurant.cost_total)),
-      line("RESTAURANT PROFIT (before shared costs)", money(d.restaurant.profit)),
+      line("RESTAURANT PROFIT (before whole-property costs)", money(d.restaurant.profit)),
       line("Dish profit (food sold vs what it cost to make)", money(data.product_profit?.profit ?? 0), `${pct(data.product_profit?.margin_pct ?? 0)} margin — see Product Profit`),
       [],
-      title("Shared costs (not split between hotel and restaurant)"),
+      title("Costs for the whole property (not divided between hotel and restaurant)"),
       ...d.shared.by_category.map(c => line(`  ${CAT_LABEL[c.exp_category] || c.exp_category}`, money(c.total))),
-      line("Shared costs", money(d.shared.total), "Nothing says whose these are, so they are not guessed at"),
+      line("Total costs for the whole property", money(d.shared.total), d.shared.total > 0 ? "Utilities, salaries, maintenance etc. They serve both sides, so they are shown once" : "None recorded in this period"),
       [],
       title("How it adds up"),
       line("Hotel profit", money(d.hotel.profit)),
       line("Restaurant profit", money(d.restaurant.profit)),
-      line("Less shared costs", money(-d.shared.total)),
+      line("Less: costs for the whole property", money(-d.shared.total)),
       line("NET PROFIT", money(data.profit.net), `${pct(data.profit.margin_pct)} of revenue`),
     ];
     downloadCsv(`profit_report_${from}_to_${to}`, head, rows);
@@ -234,7 +247,8 @@ export default function Reports() {
         <button onClick={exportExpensesCsv} disabled={!data} style={btn("ghost")}>Expenses report</button>
         <button onClick={exportPurchasingCsv} disabled={!data} style={btn("ghost")}>Purchasing report</button>
         <button onClick={exportPayablesCsv} disabled={!payables} style={btn("ghost")}>Who we owe</button>
-        <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>Profit report</button>
+        <button onClick={exportProfitPdf} disabled={!data} style={btn("ghost")}>Profit report (PDF)</button>
+        <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>Profit report (Excel)</button>
         <button onClick={exportCsv} disabled={!ledger?.transactions?.length} style={btn("ghost")}>All transactions</button>
       </div>
 
@@ -254,10 +268,10 @@ export default function Reports() {
                 `${data.product_profit?.margin_pct ?? 0}% margin on food sold`],
               ["Hotel Profit", money(data.by_department?.hotel.profit ?? 0),
                 (data.by_department?.hotel.profit ?? 0) >= 0 ? "#6B21A8" : "#B91C1C", "#F3E8FF",
-                `revenue ${money(data.by_department?.hotel.revenue ?? 0)} · before shared costs`],
+                `revenue ${money(data.by_department?.hotel.revenue ?? 0)} · before whole-property costs`],
               ["Restaurant Profit", money(data.by_department?.restaurant.profit ?? 0),
                 (data.by_department?.restaurant.profit ?? 0) >= 0 ? "#9A3412" : "#B91C1C", "#FFEDD5",
-                `revenue ${money(data.by_department?.restaurant.revenue ?? 0)} · before shared costs`],
+                `revenue ${money(data.by_department?.restaurant.revenue ?? 0)} · before whole-property costs`],
             ].map(([k, v, fg, bg, sub]) => (
               <div key={k} style={{ background: bg, borderRadius: 12, padding: "16px 20px" }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>{k}</div>
@@ -327,7 +341,7 @@ export default function Reports() {
                     {data.by_department && (
                       <>
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", fontSize: 13 }}>
-                          <span style={{ color: "#64748B" }}>Shared costs (utilities, salaries, …)</span>
+                          <span style={{ color: "#64748B" }}>Costs for the whole property (utilities, salaries, …)</span>
                           <span style={{ color: "#B91C1C", fontWeight: 600 }}>−{money(data.by_department.shared.total)}</span>
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, fontWeight: 700 }}>
@@ -335,7 +349,7 @@ export default function Reports() {
                           <span style={{ color: data.profit.net >= 0 ? "#1565C0" : "#B91C1C" }}>{money(data.profit.net)}</span>
                         </div>
                         <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
-                          Shared costs have no owner in the books, so they are shown once rather than split by guesswork.
+                          These costs serve both the hotel and the restaurant, so they are shown once and not divided.
                           {" "}{data.restaurant_orders} restaurant order(s) in this range.
                         </div>
                       </>
