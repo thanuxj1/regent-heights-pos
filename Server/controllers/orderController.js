@@ -92,23 +92,14 @@ function validateCosts(or_tax, or_totalcost, or_totalCostWtax) {
   return null;
 }
 
-/**
- * Validates order type business rules:
- * - delivery → cust_id required (unless skipCustCheck is true — a cashier
- *   placing a delivery-partner order never has a registered customer to
- *   pick; the partner is the party of record, not the end customer)
- * - dine-in → table_id required (unless skipTableCheck is true, e.g. cashier counter dine-in)
- * Returns an error string or null if valid.
- */
-function validateTypeConstraints(or_type, cust_id, table_id, skipTableCheck = false, skipCustCheck = false) {
-  if (or_type === "dine-in" && !table_id && !skipTableCheck) {
-    return "table_id is required for dine-in orders";
-  }
-  if (or_type === "delivery" && !cust_id && !skipCustCheck) {
-    return "cust_id is required for delivery orders";
-  }
-  return null;
-}
+// There is deliberately no rule here that a dine-in order names a table or a
+// delivery order names a customer. Both used to be required — except from a
+// Cashier — which meant an Administrator ringing a sale at the till was refused
+// "table_id is required for dine-in orders" / "cust_id is required for delivery
+// orders" for a table plan and a customer list the property does not keep. The
+// till never sends either (a table is picked on the waiter's screen, and a
+// delivery's party of record is the partner), so the rule could only ever fire
+// for the wrong person. A dine-in sale with no table is a counter sale.
 
 /**
  * Checks whether a status transition is legal.
@@ -293,14 +284,6 @@ export const createOrder = async (req, res) => {
     const costError = validateCosts(or_tax, or_totalcost, or_totalCostWtax);
     if (costError) {
       return res.status(400).json({ success: false, error: costError });
-    }
-
-    // ── Type-specific business rules ──
-    // Cashiers doing counter dine-in may not have a table_id (no waiter flow involved)
-    const isCashierOrder = req.user?.role_id === ROLES.CASHIER;
-    const typeError = validateTypeConstraints(or_type, cust_id, table_id, isCashierOrder && !table_id, isCashierOrder);
-    if (typeError) {
-      return res.status(400).json({ success: false, error: typeError });
     }
 
     if (req.user?.role_id === ROLES.WAITER) {
@@ -556,13 +539,6 @@ export const updateOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: costError });
     }
 
-    // ── Type-specific business rules ──
-    const isCashierUpdate = req.user?.role_id === ROLES.CASHIER;
-    const typeError = validateTypeConstraints(or_type, cust_id, table_id, isCashierUpdate && !table_id, isCashierUpdate);
-    if (typeError) {
-      return res.status(400).json({ success: false, error: typeError });
-    }
-
     // A waiter-placed order has never had a discount or service fee on it —
     // createWaiterOrder never accepts either — so this is the cashier's only
     // chance to declare one before the sale settles. Undeclared (both
@@ -769,7 +745,6 @@ export const patchOrder = async (req, res) => {
     }
 
     // ── Validate type if being changed ──
-    const newType = incoming.or_type ?? current.or_type;
     if (incoming.or_type && !VALID_TYPES.includes(incoming.or_type)) {
       return res
         .status(400)
@@ -808,14 +783,6 @@ export const patchOrder = async (req, res) => {
       if (costError) {
         return res.status(400).json({ success: false, error: costError });
       }
-    }
-
-    // ── Type-specific business rules using merged state ──
-    const newCustId = incoming.cust_id ?? current.cust_id;
-    const newTableId = incoming.table_id ?? current.table_id;
-    const typeError = validateTypeConstraints(newType, newCustId, newTableId);
-    if (typeError) {
-      return res.status(400).json({ success: false, error: typeError });
     }
 
     // ── Build dynamic UPDATE ──
@@ -1142,14 +1109,6 @@ export const createOrderWithItems = async (req, res) => {
 
   const costError = validateCosts(order.or_tax ?? 0, order.or_totalcost, order.or_totalCostWtax);
   if (costError) return res.status(400).json({ success: false, error: costError });
-
-  const isCashierOrder = req.user?.role_id === ROLES.CASHIER;
-  const typeError = validateTypeConstraints(
-    order.or_type, order.cust_id, order.table_id,
-    isCashierOrder && !order.table_id,
-    isCashierOrder,
-  );
-  if (typeError) return res.status(400).json({ success: false, error: typeError });
 
   for (const [i, it] of items.entries()) {
     if (!it?.Bpro_id) {
