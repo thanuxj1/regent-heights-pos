@@ -117,6 +117,7 @@ const ProductDetails = () => {
 					category: productData?.cat_name || categoryData.find(c => c.cat_id === productData?.cat_id)?.cat_name || "General",
 					pro_qty: productData?.pro_qty == null ? "" : String(Number(productData.pro_qty)),
 					// What the till sells from: this branch's menu count, not the storeroom.
+					count_note: "",
 					ready_qty: mine.length ? String(mine.reduce((sum, r) => sum + Number(r.pro_quantity ?? r.pro_qty ?? 0), 0)) : "",
 					pro_price: String(productData?.pro_price ?? ""),
 					cost_price: String(productData?.cost_price ?? productData?.pro_price ?? ""),
@@ -195,16 +196,16 @@ const ProductDetails = () => {
 			return;
 		}
 		if (form.track_inventory && branchProductId && form.ready_qty !== "" && !(Number(form.ready_qty) >= 0)) {
-			setError("Ready to sell can't be below 0");
+			setError("In stock can't be below 0");
 			return;
 		}
 		const countChanged = form.track_inventory && branchProductId && form.ready_qty !== "" && Number(form.ready_qty) !== Number(branchQty);
 		if (countChanged && !Number.isInteger(Number(form.ready_qty))) {
-			setError("Ready to sell must be a whole number");
+			setError("In stock must be a whole number");
 			return;
 		}
-		if (countChanged && form.count_note.trim().length < 3) {
-			setError("Say why the ready-to-sell count changed (a few words) — it is kept on the record.");
+		if (countChanged && (form.count_note || "").trim().length < 3) {
+			setError("Say why the stock number changed (a few words, in the box under In stock) — it is kept on the record.");
 			return;
 		}
 		if (!(Number(form.discount_pct || 0) >= 0 && Number(form.discount_pct || 0) <= 100)) {
@@ -246,7 +247,7 @@ const ProductDetails = () => {
 				// A change to the shelf count goes through Count, which keeps the reason on the
 				// record (the server refuses a bare edit). Only when it was actually changed.
 				if (countChanged) {
-					await countBranchProduct(branchProductId, { counted: Number(form.ready_qty), note: form.count_note.trim() });
+					await countBranchProduct(branchProductId, { counted: Number(form.ready_qty), note: (form.count_note || "").trim() });
 					setBranchQty(Number(form.ready_qty));
 					setForm((prev) => ({ ...prev, count_note: "" }));
 				}
@@ -383,8 +384,8 @@ const ProductDetails = () => {
 														: "This is what the till sells from. It goes down by itself as it sells; change it to correct a miscount."}
 												</span>
 												{branchQty !== null && form.ready_qty !== "" && Number(form.ready_qty) !== Number(branchQty) && (
-													<input type="text" maxLength={200} style={{ ...fieldInput, marginTop: 6 }} value={form.count_note}
-														placeholder="Why? e.g. recount, stock arrived" onChange={handleFieldChange("count_note")} />
+													<input type="text" maxLength={200} style={{ ...fieldInput, marginTop: 6, border: (form.count_note || "").trim().length < 3 ? "1px solid #F59E0B" : fieldInput.border }} value={form.count_note}
+														placeholder="Required: why did the count change? e.g. recount, stock arrived" onChange={handleFieldChange("count_note")} />
 												)}
 											</label>
 											{branchQty !== null && Number(form.pro_qty) > 0 ? (
@@ -444,6 +445,8 @@ const ProductDetails = () => {
 
 							<div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 24, paddingTop: 20, borderTop: "1px solid #E2E8F0" }}>
 								{success && <span style={{ marginRight: "auto", color: "#15803D", fontSize: 13, fontWeight: 600 }}>{success}</span>}
+								{/* Beside the button, where the person who just pressed it is looking — the same message also sits at the top of the page, out of sight once they have scrolled down to Save. */}
+								{error && !success && <span role="alert" style={{ marginRight: "auto", color: "#B91C1C", fontSize: 13, fontWeight: 600 }}>{error}</span>}
 								<button type="button" onClick={handleDelete} disabled={saving} style={{ padding: "10px 16px", border: "1px solid #FECACA", borderRadius: 8, fontWeight: 600, color: "#DC2626", background: "#fff", cursor: saving ? "wait" : "pointer", fontSize: 13 }}>
 									Delete
 								</button>
