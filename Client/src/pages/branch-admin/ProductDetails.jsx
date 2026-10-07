@@ -3,7 +3,7 @@ import { FaArrowLeft, FaUpload } from "react-icons/fa";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
-import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct, updateBranchProduct } from "../../services/api";
+import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct, updateBranchProduct, countBranchProduct } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { readImageFile } from "../../utils/readImageFile";
 
@@ -82,6 +82,8 @@ const ProductDetails = () => {
 		pro_name: "",
 		category: "General",
 		pro_qty: "",
+		ready_qty: "",
+		count_note: "",
 		pro_price: "",
 		cost_price: "",
 		pro_image: "",
@@ -114,6 +116,8 @@ const ProductDetails = () => {
 					pro_name: productData?.pro_name || "",
 					category: productData?.cat_name || categoryData.find(c => c.cat_id === productData?.cat_id)?.cat_name || "General",
 					pro_qty: productData?.pro_qty == null ? "" : String(Number(productData.pro_qty)),
+					// What the till sells from: this branch's menu count, not the storeroom.
+					ready_qty: mine.length ? String(mine.reduce((sum, r) => sum + Number(r.pro_quantity ?? r.pro_qty ?? 0), 0)) : "",
 					pro_price: String(productData?.pro_price ?? ""),
 					cost_price: String(productData?.cost_price ?? productData?.pro_price ?? ""),
 					pro_image: productData?.pro_image || "",
@@ -174,6 +178,19 @@ const ProductDetails = () => {
 			setError("Enter how many are on the rack now");
 			return;
 		}
+		if (form.track_inventory && branchProductId && form.ready_qty !== "" && !(Number(form.ready_qty) >= 0)) {
+			setError("Ready to sell can't be below 0");
+			return;
+		}
+		const countChanged = form.track_inventory && branchProductId && form.ready_qty !== "" && Number(form.ready_qty) !== Number(branchQty);
+		if (countChanged && !Number.isInteger(Number(form.ready_qty))) {
+			setError("Ready to sell must be a whole number");
+			return;
+		}
+		if (countChanged && form.count_note.trim().length < 3) {
+			setError("Say why the ready-to-sell count changed (a few words) — it is kept on the record.");
+			return;
+		}
 		if (!(Number(form.discount_pct || 0) >= 0 && Number(form.discount_pct || 0) <= 100)) {
 			setError("Discount must be between 0 and 100");
 			return;
@@ -210,6 +227,13 @@ const ProductDetails = () => {
 					discount_pct: Number(form.discount_pct) || 0,
 					tax_group: Number(form.tax_group) || 0,
 				});
+				// A change to the shelf count goes through Count, which keeps the reason on the
+				// record (the server refuses a bare edit). Only when it was actually changed.
+				if (countChanged) {
+					await countBranchProduct(branchProductId, { counted: Number(form.ready_qty), note: form.count_note.trim() });
+					setBranchQty(Number(form.ready_qty));
+					setForm((prev) => ({ ...prev, count_note: "" }));
+				}
 			}
 			setSuccess("Product updated successfully");
 			setTimeout(() => setSuccess(""), 2200);
@@ -333,19 +357,31 @@ const ProductDetails = () => {
 									</div>
 
 									{form.track_inventory ? (
+										<>
 										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-											<label style={fieldLabel}>In the storeroom
+											<label style={fieldLabel}>Ready to sell (what the till sells from)
+												<input type="number" min="0" style={fieldInput} value={form.ready_qty} disabled={branchQty === null} placeholder={branchQty === null ? "Not on the menu yet" : ""} onChange={handleFieldChange("ready_qty")} />
+												<span style={{ display: "block", marginTop: 4, fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>
+													{branchQty === null ? "Add this product to the menu first." : "Goes down by itself as it sells. Change it to correct a miscount."}
+												</span>
+												{branchQty !== null && form.ready_qty !== "" && Number(form.ready_qty) !== Number(branchQty) && (
+													<input type="text" maxLength={200} style={{ ...fieldInput, marginTop: 6 }} value={form.count_note}
+														placeholder="Why? e.g. recount, stock arrived" onChange={handleFieldChange("count_note")} />
+												)}
+											</label>
+											<label style={fieldLabel}>Spare in the storeroom
 												<input type="number" min="0" style={fieldInput} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
 												<span style={{ display: "block", marginTop: 4, fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>
-													{branchQty === null
-														? "Not on the menu yet."
-														: `${Number(branchQty)} more are on the menu, ready to sell (use Restock on the Products list to move more).`}
+													Not sold from here. Use Restock on the Products list to move some onto the menu.
 												</span>
 											</label>
+										</div>
+										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
 											<label style={fieldLabel}>Warn me when it drops to
 												<input type="number" min="0" style={fieldInput} value={form.low_stock} onChange={handleFieldChange("low_stock")} />
 											</label>
 										</div>
+										</>
 									) : (
 										<p style={{ margin: "10px 0 0", fontSize: 11, color: "#64748B", lineHeight: 1.5 }}>
 											It will always be on the till and will never read "out of stock". If you write its ingredients on the Recipes page, the till works out how many portions the store allows and takes them out as it sells.
