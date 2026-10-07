@@ -16,8 +16,18 @@ import ApprovalPinCard from "../../components/branch-admin/ApprovalPinCard";
  * hotel. This shows the four fields that appear on paperwork, nothing else.
  */
 export default function HotelProfile() {
-  const { user } = useAuth();
+  const { user, capabilities } = useAuth();
   const branchId = user?.b_id ?? user?.B_id ?? null;
+
+  // A cashier can reach this page through any of three separate grants, and each
+  // card on it belongs to one of them. Show only what this person may use: a card
+  // they cannot save only produced "no permission" when they tried, and the PIN
+  // cards asked the server for things it would not tell them.
+  const isManager = [1, 2, 6].includes(Number(user?.role_id));
+  const can = (key) => isManager || Boolean(capabilities?.has(key));
+  const canEditProperty = can("branch_settings");
+  const canEditPolicy = can("hotel_management");
+  const canDrawerPin = can("cash_drawer_admin");
 
   const [form, setForm] = useState({ B_name: "", B_address: "", B_conNo: "", B_email: "" });
   const [loading, setLoading] = useState(true);
@@ -102,6 +112,7 @@ export default function HotelProfile() {
       <div style={{ flex: 1, marginLeft: "var(--sidebar-w, 240px)", display: "flex", flexDirection: "column" }}>
         <Header title="Hotel Profile" />
         <main style={{ flex: 1, padding: 24, overflowY: "auto" }}>
+          {canEditProperty && (
           <div style={{ ...card, maxWidth: 640, padding: 28 }}>
             <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: "#1E293B" }}>
               Your property
@@ -132,8 +143,11 @@ export default function HotelProfile() {
               </form>
             )}
           </div>
+          )}
 
-          {policy && (
+          {!canEditProperty && error && <div style={{ ...errorBox, maxWidth: 640 }}>{error}</div>}
+
+          {canEditPolicy && policy && (
             <div style={{ ...card, maxWidth: 640, padding: 28, marginTop: 20 }}>
               <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: "#1E293B" }}>
                 Stay policy
@@ -258,8 +272,8 @@ export default function HotelProfile() {
             </div>
           )}
 
-          <DrawerPinCard />
-          <ApprovalPinCard />
+          {canDrawerPin && <DrawerPinCard />}
+          {isManager && <ApprovalPinCard />}
         </main>
       </div>
     </div>

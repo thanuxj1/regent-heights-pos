@@ -2,12 +2,15 @@
 // delivery order: validated server-side, added after tax, stored on the order
 // and surfaced in the reports without being counted twice.
 import { ctx, api, t, eq, ok, status, section, finish } from "./lib.mjs";
+// The hotel's calendar day, as the server dates sales — not UTC's, which runs
+// 5½ hours behind Sri Lanka and named the wrong day every evening after 18:30 UTC.
+import { hotelToday } from "../utils/hotelTime.js";
 
 const { A, stamp } = await ctx();
 const owner = A.owner.token;
 const cashier = A.cashier.token;
 
-const today = new Date().toISOString().slice(0, 10);
+const today = hotelToday();
 let bproId;
 
 const order = (tag, over = {}, charge) => ({

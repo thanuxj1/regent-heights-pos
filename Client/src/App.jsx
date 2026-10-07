@@ -203,7 +203,7 @@ function App() {
       <Route
         path="/branch-admin/users/add"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.USER_MANAGEMENT}>
             <BranchAdminAddUser />
           </ProtectedRoute>
         }
@@ -221,7 +221,7 @@ function App() {
       <Route
         path="/branch-admin/users/:userId/edit"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.USER_MANAGEMENT}>
             <BranchAdminEditUser />
           </ProtectedRoute>
         }
@@ -339,7 +339,7 @@ function App() {
       <Route
         path="/branch-admin/products/add"
         element={
-          <ProtectedRoute allowedRoles={[1]}>
+          <ProtectedRoute allowedRoles={[1]} orCapability={CAP.PRODUCT_MENU}>
             <AddProduct />
           </ProtectedRoute>
         }
@@ -348,7 +348,7 @@ function App() {
       <Route
         path="/branch-admin/products/:productId"
         element={
-          <ProtectedRoute allowedRoles={[1]}>
+          <ProtectedRoute allowedRoles={[1]} orCapability={CAP.PRODUCT_MENU}>
             <ProductDetails />
           </ProtectedRoute>
         }
@@ -357,7 +357,7 @@ function App() {
       <Route
         path="/branch-admin/products/:productId/edit"
         element={
-          <ProtectedRoute allowedRoles={[1]}>
+          <ProtectedRoute allowedRoles={[1]} orCapability={CAP.PRODUCT_MENU}>
             <ProductDetails />
           </ProtectedRoute>
         }
@@ -366,7 +366,7 @@ function App() {
       <Route
         path="/branch-admin/products/:productId/delete"
         element={
-          <ProtectedRoute allowedRoles={[1]}>
+          <ProtectedRoute allowedRoles={[1]} orCapability={CAP.PRODUCT_MENU}>
             <ProductDetails />
           </ProtectedRoute>
         }
@@ -384,7 +384,7 @@ function App() {
       <Route
         path="/branch-admin/raw-ingredient"
         element={
-          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.RAW_MATERIALS}>
+          <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.PURCHASE_ORDERS}>
             <AddRawMaterials />
           </ProtectedRoute>
         }

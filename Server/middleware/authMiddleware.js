@@ -158,7 +158,11 @@ export const CAPABILITIES = {
   USER_MANAGEMENT:     { key: "user_management",      label: "User Management", sensitive: true },
   ROLES_MANAGEMENT:    { key: "roles_management",     label: "Roles Management", sensitive: true, hidden: true },
   SECURITY_SETTINGS:   { key: "security_settings",    label: "Security Settings", sensitive: true, hidden: true },
-  CASHIER_POS_ACCESS:  { key: "cashier_pos_access",   label: "Cashier POS Terminal" },
+  // hidden: meant to hand a waiter or kitchen account the till, but the till's own
+  // endpoints are cashier-level, and extra permissions now apply to Cashier
+  // accounts only (see grantsApply below) — so it could never work. A person who
+  // needs the till is given the Cashier role instead.
+  CASHIER_POS_ACCESS:  { key: "cashier_pos_access",   label: "Cashier POS Terminal", hidden: true },
 };
 
 export const CAPABILITY_LIST = Object.values(CAPABILITIES);
@@ -201,29 +205,57 @@ async function userCapabilities(u_id) {
 }
 
 /**
+ * Extra permissions are for Cashier accounts. The pages they open sit in the
+ * back-office screens, and read data that is cashier-level (lists of roles,
+ * delivery partners, rooms and so on). A waiter or kitchen account holding one
+ * reached a page it could not navigate to, that then failed to load half of
+ * what it needed. A person who needs back-office access is made a Cashier and
+ * given the slices they need. Grants left on an account whose role later
+ * changed are ignored rather than quietly honoured.
+ */
+export const grantsApply = (roleId) => Number(roleId) === ROLES.CASHIER;
+
+const isManager = (roleId) =>
+  roleId === ROLES.SUPER_ADMIN || roleId === ROLES.BRANCH_ADMIN || roleId === ROLES.ADMIN;
+
+/** Does this signed-in person hold this capability (and is it one that applies to them)? */
+export async function holdsCapability(req, capability) {
+  const roleId = req.user?.role_id != null ? Number(req.user.role_id) : undefined;
+  if (!grantsApply(roleId) || req.user?.u_id == null) return false;
+  const caps = await userCapabilities(req.user.u_id);
+  return caps.has(capability.key);
+}
+
+/**
  * Branch Admin/Owner/Super Admin always pass, same as requireBranchAdminOrAdmin.
- * Anyone else passes only if this specific capability has been granted to
- * them — independent of role_id, so a cashier can hold exactly one slice of
- * admin-tier access without being promoted.
+ * A cashier passes only if this specific capability has been granted to
+ * them, so they can hold exactly one slice of admin-tier access without
+ * being promoted.
  */
 export function requireBranchAdminOr(capability) {
+  return requireBranchAdminOrAny([capability]);
+}
+
+/**
+ * The same, for something more than one grant should open — the supplier list,
+ * say, which both Supplier Management and Purchase Orders need to work.
+ */
+export function requireBranchAdminOrAny(capabilities) {
   return async (req, res, next) => {
     const roleId = req.user?.role_id != null ? Number(req.user.role_id) : undefined;
+    if (isManager(roleId)) return next();
 
-    if (roleId === ROLES.SUPER_ADMIN || roleId === ROLES.BRANCH_ADMIN || roleId === ROLES.ADMIN) {
-      return next();
-    }
-
-    const uId = req.user?.u_id;
-    if (uId == null) {
+    if (req.user?.u_id == null) {
       return res.status(403).json({ message: "Your account doesn't have a role assigned yet. Please contact your administrator." });
     }
 
-    const caps = await userCapabilities(uId);
-    if (caps.has(capability.key)) return next();
+    for (const capability of capabilities) {
+      if (await holdsCapability(req, capability)) return next();
+    }
 
+    const needed = capabilities.map((c) => c.label).join(" or ");
     return res.status(403).json({
-      message: `You don't have permission to perform this action. ${capability.label} access is required.`,
+      message: `You don't have permission to perform this action. ${needed} access is required.`,
     });
   };
 }
@@ -302,7 +334,12 @@ async function userRevokedDefaults(u_id) {
  * default has anything to say about it). Branch Admin/Admin/Super Admin never
  * carry role_id === perm.role, so they're never blocked by this.
  */
-export function requireDefaultNotRevoked(perm) {
+//
+// `unless`: a capability that needs this same read to do its job. A cashier whose
+// "viewing commission agents" default was switched off but who was then handed
+// Commission Agents management must still be able to list the agents they manage
+// — the grant is the more specific instruction.
+export function requireDefaultNotRevoked(perm, { unless = [] } = {}) {
   return async (req, res, next) => {
     const roleId = req.user?.role_id != null ? Number(req.user.role_id) : undefined;
     if (roleId !== perm.role) return next();
@@ -312,6 +349,9 @@ export function requireDefaultNotRevoked(perm) {
 
     const revoked = await userRevokedDefaults(uId);
     if (revoked.has(perm.key)) {
+      for (const capability of [].concat(unless)) {
+        if (await holdsCapability(req, capability)) return next();
+      }
       return res.status(403).json({
         message: `Your ${perm.label} access has been switched off by your administrator.`,
       });

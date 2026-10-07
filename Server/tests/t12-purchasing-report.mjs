@@ -1,11 +1,14 @@
 // t12-purchasing-report.mjs — the purchasing report, and the payment method that
 // restaurant rows carry in the transactions ledger.
 import { ctx, api, t, eq, ok, status, section, finish } from "./lib.mjs";
+// The hotel's calendar day, as the server dates sales — not UTC's, which runs
+// 5½ hours behind Sri Lanka and named the wrong day every evening after 18:30 UTC.
+import { hotelToday } from "../utils/hotelTime.js";
 
 const { A, stamp } = await ctx();
 const owner = A.owner.token;
 const cashier = A.cashier.token;
-const today = new Date().toISOString().slice(0, 10);
+const today = hotelToday();
 
 let supId, rmId, poId, bproId;
 

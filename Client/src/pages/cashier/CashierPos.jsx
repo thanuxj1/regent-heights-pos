@@ -40,6 +40,7 @@ import {
   updateOrder,
   deleteOrderItem,
   getDeliveryPartners,
+  getUserDefaultRevocations,
 } from "../../services/api";
 import { connectSocket } from "../../services/socket";
 import { staleWhileRevalidate } from "../../services/localCache";
@@ -213,6 +214,10 @@ const CashierPos = () => {
   const [showKitchenModal, setShowKitchenModal] = useState(false);
   const [loadingKitchen, setLoadingKitchen] = useState(false);
   const [kitchenFilter, setKitchenFilter] = useState("all");
+  // The owner can switch this person's till off (Edit User → Default Permissions).
+  // The server then refuses every sale, but the till still opened as normal and
+  // the cashier only found out when a sale failed. Say so the moment it opens.
+  const [tillSwitchedOff, setTillSwitchedOff] = useState(false);
   // A delivery whose rider has come back with the cash: { order, amount }.
   const [payingOrder, setPayingOrder] = useState(null);
   const [payingBusy, setPayingBusy] = useState(false);
@@ -251,6 +256,15 @@ const CashierPos = () => {
       setLoadingWaiterOrders(false);
     }
   };
+
+  useEffect(() => {
+    if (!user?.u_id || Number(user?.role_id) !== 3) return undefined;
+    let alive = true;
+    getUserDefaultRevocations(user.u_id)
+      .then((r) => { if (alive) setTillSwitchedOff((r?.revoked || []).includes("default_pos")); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [user?.u_id, user?.role_id]);
 
   const fetchKitchenBoard = async () => {
     try {
@@ -1396,6 +1410,13 @@ const CashierPos = () => {
               className="shrink-0 rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100">
               Dismiss
             </button>
+          </div>
+        ) : null}
+
+        {tillSwitchedOff ? (
+          <div className="mb-5 rounded-2xl border border-rose-300 bg-rose-100 px-4 py-3 text-sm font-semibold text-rose-800">
+            Your till access has been switched off by your administrator, so sales cannot be
+            rung up from this account. Ask them to switch it back on.
           </div>
         ) : null}
 

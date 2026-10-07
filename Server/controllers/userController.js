@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
 import pool from "../config/database.js";
-import { ROLES, invalidateUserStatus } from "../middleware/authMiddleware.js";
+import {
+  ROLES, invalidateUserStatus, invalidateUserCapabilities, invalidateUserDefaultRevocations,
+} from "../middleware/authMiddleware.js";
 import { logActivity } from "../utils/activityLog.js";
 import { textField, emailField, phoneField, invalid } from "../utils/validate.js";
 
@@ -459,6 +461,17 @@ export async function updateUser(req, res, next) {
     // next request instead of up to 30 seconds later.
     invalidateUserStatus(id);
     const saved = result.rows[0];
+
+    // Permissions were set for the old role: extra grants only ever apply to a
+    // Cashier, and a switched-off default names one role's own access. Carried
+    // across a role change they would either do nothing or — worse — come back
+    // unseen if the person is ever made a Cashier again. Start clean.
+    if (role_id !== undefined && Number(role_id) !== Number(existingUser.rows[0].role_id)) {
+      await pool.query(`DELETE FROM "USER_CAPABILITY" WHERE u_id = $1`, [id]);
+      await pool.query(`DELETE FROM "USER_DEFAULT_OVERRIDE" WHERE u_id = $1`, [id]);
+      invalidateUserCapabilities(id);
+      invalidateUserDefaultRevocations(id);
+    }
 
     // Say what actually changed — "updated user 15" tells nobody anything.
     const changed = [];

@@ -1,7 +1,7 @@
 import pool from "../config/database.js";
 import {
   ROLES, CAPABILITY_LIST, invalidateUserCapabilities,
-  DEFAULT_PERMISSION_LIST, invalidateUserDefaultRevocations,
+  DEFAULT_PERMISSION_LIST, invalidateUserDefaultRevocations, grantsApply,
 } from "../middleware/authMiddleware.js";
 import { logActivity } from "../utils/activityLog.js";
 import { invalid } from "../utils/validate.js";
@@ -22,7 +22,7 @@ async function findTargetUser(req, id) {
     branchFilter = `AND "B_id" = $2`;
   }
   const { rows } = await pool.query(
-    `SELECT u_id, u_fname, u_lname FROM "User" WHERE u_id = $1 ${branchFilter}`,
+    `SELECT u_id, u_fname, u_lname, role_id FROM "User" WHERE u_id = $1 ${branchFilter}`,
     params,
   );
   return rows[0] || null;
@@ -46,7 +46,10 @@ export async function getUserCapabilities(req, res, next) {
       `SELECT capability FROM "USER_CAPABILITY" WHERE u_id = $1`,
       [id],
     );
-    res.json({ u_id: Number(id), capabilities: rows.map((r) => r.capability) });
+    // Say only what the server will honour, so the screens never offer a page the
+    // server would then refuse (grants apply to Cashier accounts only).
+    const applies = grantsApply(user.role_id);
+    res.json({ u_id: Number(id), capabilities: applies ? rows.map((r) => r.capability) : [] });
   } catch (err) { next(err); }
 }
 
@@ -58,9 +61,17 @@ export async function setUserCapabilities(req, res, next) {
     if (!requested) invalid("capabilities must be an array of capability keys.");
     const bad = requested.filter((k) => !VALID_KEYS.has(k));
     if (bad.length) invalid(`Unknown capability key(s): ${bad.join(", ")}`);
+    // A hidden capability has no working page behind it — granting it would show
+    // an admin a switch that does nothing.
+    const hiddenKeys = requested.filter((k) => CAPABILITY_LIST.find((c) => c.key === k)?.hidden);
+    if (hiddenKeys.length) invalid(`${hiddenKeys.join(", ")} cannot be granted.`);
 
     const user = await findTargetUser(req, id);
     if (!user) { res.status(404); throw new Error("User not found"); }
+    // Removing everything is always allowed (it is how an old grant is cleaned up).
+    if (requested.length && !grantsApply(user.role_id)) {
+      invalid("Extra permissions can only be given to Cashier accounts. Change this person's role to Cashier first.");
+    }
 
     const before = await pool.query(`SELECT capability FROM "USER_CAPABILITY" WHERE u_id = $1`, [id]);
     const beforeSet = new Set(before.rows.map((r) => r.capability));

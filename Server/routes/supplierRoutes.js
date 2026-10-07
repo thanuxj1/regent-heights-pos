@@ -14,22 +14,28 @@ import {
 import {
   requireAuth,
   requireBranchAdminOr,
+  requireBranchAdminOrAny,
   CAPABILITIES,
 } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// Apply auth + role to ALL routes at once
-router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.SUPPLIER_MANAGEMENT));
+// Reading suppliers, and adding one while recording a purchase, are part of
+// buying stock — so Purchase Orders needs them as much as Supplier Management
+// does. Changing or removing a supplier stays Supplier Management's.
+const buying = requireBranchAdminOrAny([CAPABILITIES.SUPPLIER_MANAGEMENT, CAPABILITIES.PURCHASE_ORDERS]);
+const managing = requireBranchAdminOr(CAPABILITIES.SUPPLIER_MANAGEMENT);
 
-router.get("/ledger", getSupplierLedger);
-router.get("/spend-trend", getSpendTrend);
-router.get("/:id/history", getSupplierHistory);
+router.use(requireAuth);
 
-router.get("/",       getSuppliers);
-router.get("/:id",    getSupplierById);
-router.post("/",      createSupplier);
-router.put("/:id",    updateSupplier);
-router.delete("/:id", deleteSupplier);
+router.get("/ledger", buying, getSupplierLedger);
+router.get("/spend-trend", buying, getSpendTrend);
+router.get("/:id/history", buying, getSupplierHistory);
+
+router.get("/",       buying, getSuppliers);
+router.get("/:id",    buying, getSupplierById);
+router.post("/",      buying, createSupplier);
+router.put("/:id",    managing, updateSupplier);
+router.delete("/:id", managing, deleteSupplier);
 
 export default router;

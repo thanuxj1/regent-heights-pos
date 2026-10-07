@@ -59,7 +59,9 @@ export function AuthProvider({ children }) {
       const data = await getUserCapabilities(user.u_id);
       setCapabilities(new Set(data?.capabilities || []));
     } catch {
-      setCapabilities(new Set());
+      // Keep what they had. This now runs every minute, and a network blip must not
+      // strip a cashier's granted pages and bounce them off the one they are using.
+      // (Before the first successful read the set is simply empty.)
     } finally {
       setCapabilitiesLoaded(true);
     }
@@ -71,6 +73,23 @@ export function AuthProvider({ children }) {
     else setCapabilitiesLoaded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.u_id]);
+
+  // A grant or a revoke takes effect on the server at once, but the menu here was
+  // only read at sign-in: a cashier handed Reports saw no link until they signed out
+  // and back in, and one whose access was taken away kept seeing the link. Re-read
+  // it when they come back to the window and once a minute while it is open.
+  useEffect(() => {
+    if (!user?.u_id) return undefined;
+    const onFocus = () => { if (document.visibilityState !== "hidden") refreshCapabilities(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    const timer = window.setInterval(onFocus, 60_000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+      window.clearInterval(timer);
+    };
+  }, [user?.u_id, refreshCapabilities]);
 
   // Whatever is left of an expired or half-written sign-in is cleared once.
   useEffect(() => {

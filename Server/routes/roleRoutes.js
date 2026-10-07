@@ -20,8 +20,10 @@ router.use(requireAuth);
 // separate, more sensitive Roles Management) still needs to read it to
 // create/edit a user. Reading it isn't sensitive; only defining/removing
 // roles is.
-router.get("/", requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getRoles);
-router.get("/:id", requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getRoleById);
+// User Management needs the role list to add or edit anyone.
+const viewRoles = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY, { unless: CAPABILITIES.USER_MANAGEMENT });
+router.get("/", requireCashierOrAbove, viewRoles, getRoles);
+router.get("/:id", requireCashierOrAbove, viewRoles, getRoleById);
 router.post("/", requireBranchAdminOr(CAPABILITIES.ROLES_MANAGEMENT), createRole);
 router.put("/:id", requireBranchAdminOr(CAPABILITIES.ROLES_MANAGEMENT), updateRole);
 router.delete("/:id", requireBranchAdminOr(CAPABILITIES.ROLES_MANAGEMENT), deleteRole);

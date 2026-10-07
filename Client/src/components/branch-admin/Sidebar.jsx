@@ -139,13 +139,15 @@ function SideLink({ to, icon: Icon, label, active, collapsed, hovered, setHovere
 
 // Extra nav a cashier gains when a manager hands them supply-page access,
 // without touching the base CASHIER_NAV that every cashier gets by default.
+// Counting and adjusting stock. Recording what was bought ("Add Inventory Item")
+// is a purchase — it creates the supplier order — so it sits with Suppliers and
+// needs Purchase Orders, not this.
 const CASHIER_SUPPLIES_GROUP = {
   id: "supplies",
   label: "Supplies",
   icon: FaConciergeBell,
   items: [
     ["Inventory",          "/branch-admin/inventory"],
-    ["Add Inventory Item", "/branch-admin/raw-ingredient"],
   ],
 };
 
@@ -165,15 +167,16 @@ const CASHIER_REPORTS_GROUP = {
 
 // Supplier Management and Purchase Orders both land here (SupplierManagement
 // itself embeds the purchase-order flow), so either grant shows this group.
-const CASHIER_SUPPLIERS_GROUP = {
+const cashierSuppliersGroup = (canBuy) => ({
   id: "suppliers",
   label: "Suppliers",
   icon: FaBoxes,
   items: [
     ["Suppliers",       "/branch-admin/suppliers"],
     ["Supplier Ledger", "/branch-admin/supplier-ledger"],
+    ...(canBuy ? [["Add Inventory Item", "/branch-admin/raw-ingredient"]] : []),
   ],
-};
+});
 
 const CASHIER_MENU_GROUP = {
   id: "menu",
@@ -220,15 +223,18 @@ export default function Sidebar() {
   // Cash Drawer Administration has no page of its own either — its one
   // control (the drawer PIN card) lives inside Hotel Profile — so it also
   // earns the link there, same as Branch Settings does.
+  // The stay policy (check-in/out times, late check-out) is Hotel Management's,
+  // and it lives on that page too.
   const hasHotelProfileGrant = isCashier
-    && (capabilities?.has("branch_settings") || capabilities?.has("cash_drawer_admin"));
+    && (capabilities?.has("branch_settings") || capabilities?.has("cash_drawer_admin")
+        || capabilities?.has("hotel_management"));
   const hasDeliveryGrant = isCashier && capabilities?.has("delivery_management");
   const NAV = isCashier
     ? [
         ...CASHIER_NAV,
         ...(hasSuppliesGrant ? [CASHIER_SUPPLIES_GROUP] : []),
         ...(hasReportsGrant ? [CASHIER_REPORTS_GROUP] : []),
-        ...(hasSupplierGrant ? [CASHIER_SUPPLIERS_GROUP] : []),
+        ...(hasSupplierGrant ? [cashierSuppliersGroup(capabilities?.has("purchase_orders"))] : []),
         ...(hasProductMenuGrant ? [CASHIER_MENU_GROUP] : []),
         ...(hasHotelMgmtGrant ? [CASHIER_HOTEL_MGMT_GROUP] : []),
       ]

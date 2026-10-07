@@ -15,6 +15,7 @@ import {
     getDefaultPermissionCatalog, getUserDefaultRevocations, updateUserDefaultRevocations,
 } from "../../services/api";
 import { staffRoles, isAdminRole } from "../../constants/roles";
+import { useAuth } from "../../context/AuthContext";
 import ToggleSwitch from "../../components/super-admin/ToggleSwitch";
 
 const EditUser = () => {
@@ -58,7 +59,25 @@ const EditUser = () => {
     const [revokedDefaults, setRevokedDefaults] = useState(new Set());
     const [savingDefaultKey, setSavingDefaultKey] = useState(null);
     const currentRoleId = formData.role ? Number(formData.role) : null;
-    const showPermissions = !isLoadingUser && currentRoleId != null && !isAdminRole(currentRoleId);
+    // Granting can never be delegated: a cashier handed User Management may edit a
+    // colleague's details but not what they are allowed to do, and the server
+    // refuses them anyway. Don't show them switches that can only fail.
+    const { user: signedIn } = useAuth();
+    const editorIsManager = [1, 2, 6].includes(Number(signedIn?.role_id));
+    const showPermissions = editorIsManager && !isLoadingUser && currentRoleId != null && !isAdminRole(currentRoleId);
+    // Extra permissions open back-office pages, which only a Cashier account can use.
+    const canHoldGrants = currentRoleId === 3;
+    // One save at a time. Each save sends the whole set, so two quick clicks could
+    // otherwise arrive out of order and the older one would undo the newer.
+    const permissionBusy = savingCapKey !== null || savingDefaultKey !== null;
+    // The lock and the latest sets live in refs as well as state: two taps inside the
+    // same instant both run before the screen redraws, so a lock read from state
+    // would let both through, each building its set from the same stale copy.
+    const savingRef = useRef(false);
+    const grantedRef = useRef(grantedCapabilities);
+    const revokedRef = useRef(revokedDefaults);
+    grantedRef.current = grantedCapabilities;
+    revokedRef.current = revokedDefaults;
 
     const accessibleRoles = useMemo(() => {
         return staffRoles(roles);
@@ -134,7 +153,7 @@ const EditUser = () => {
     }, [resolvedUserId]);
 
     useEffect(() => {
-        if (!resolvedUserId || isLoadingUser || currentRoleId == null || isAdminRole(currentRoleId)) return;
+        if (!editorIsManager || !resolvedUserId || isLoadingUser || currentRoleId == null || isAdminRole(currentRoleId)) return;
         let cancelled = false;
         (async () => {
             try {
@@ -159,20 +178,26 @@ const EditUser = () => {
         })();
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [resolvedUserId, isLoadingUser, currentRoleId]);
+    }, [resolvedUserId, isLoadingUser, currentRoleId, editorIsManager]);
 
     const toggleCapability = async (key, nextValue) => {
-        const next = new Set(grantedCapabilities);
+        if (savingRef.current) return;
+        savingRef.current = true;
+        const before = grantedRef.current;
+        const next = new Set(before);
         if (nextValue) next.add(key); else next.delete(key);
+        grantedRef.current = next;
         setGrantedCapabilities(next); // optimistic
         setSavingCapKey(key);
         setCapError("");
         try {
             await updateUserCapabilities(resolvedUserId, [...next]);
         } catch (error) {
-            setGrantedCapabilities(grantedCapabilities); // revert on failure
+            grantedRef.current = before;
+            setGrantedCapabilities(before); // revert on failure
             setCapError(error?.response?.data?.message || "Failed to update permission");
         } finally {
+            savingRef.current = false;
             setSavingCapKey(null);
         }
     };
@@ -180,17 +205,23 @@ const EditUser = () => {
     // The toggle's checked state is "on" (not revoked); the server stores the
     // opposite (a row = revoked), so turning the switch OFF adds the key here.
     const toggleDefault = async (key, nextChecked) => {
-        const next = new Set(revokedDefaults);
+        if (savingRef.current) return;
+        savingRef.current = true;
+        const before = revokedRef.current;
+        const next = new Set(before);
         if (nextChecked) next.delete(key); else next.add(key);
+        revokedRef.current = next;
         setRevokedDefaults(next); // optimistic
         setSavingDefaultKey(key);
         setCapError("");
         try {
             await updateUserDefaultRevocations(resolvedUserId, [...next]);
         } catch (error) {
-            setRevokedDefaults(revokedDefaults); // revert on failure
+            revokedRef.current = before;
+            setRevokedDefaults(before); // revert on failure
             setCapError(error?.response?.data?.message || "Failed to update permission");
         } finally {
+            savingRef.current = false;
             setSavingDefaultKey(null);
         }
     };
@@ -567,7 +598,7 @@ const EditUser = () => {
                                                                 <span style={{ fontSize: "13px", color: on ? "#166534" : "#991B1B" }}>{d.label}</span>
                                                                 <ToggleSwitch
                                                                     checked={on}
-                                                                    disabled={savingDefaultKey === d.key}
+                                                                    disabled={permissionBusy}
                                                                     onChange={(next) => toggleDefault(d.key, next)}
                                                                 />
                                                             </div>
@@ -581,6 +612,14 @@ const EditUser = () => {
                                             Additional Permissions — extra access you can grant
                                         </div>
                                         {capError && <p style={{ margin: "0 0 14px", color: "#C62828", fontSize: "13px" }}>{capError}</p>}
+                                        {!canHoldGrants && (
+                                            <p style={{ margin: "0 0 4px", fontSize: "13px", color: "#64748B", lineHeight: 1.5 }}>
+                                                Extra permissions can only be given to <strong>Cashier</strong> accounts. To let this
+                                                person use back-office pages (reports, suppliers, stock, menu…), change their role to
+                                                Cashier and save, then grant what they need here.
+                                            </p>
+                                        )}
+                                        {canHoldGrants && (
                                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 24px" }}>
                                             {capabilityCatalog.map((cap) => (
                                                 <div key={cap.key} style={{
@@ -603,12 +642,13 @@ const EditUser = () => {
                                                     </span>
                                                     <ToggleSwitch
                                                         checked={grantedCapabilities.has(cap.key)}
-                                                        disabled={savingCapKey === cap.key}
+                                                        disabled={permissionBusy}
                                                         onChange={(next) => toggleCapability(cap.key, next)}
                                                     />
                                                 </div>
                                             ))}
                                         </div>
+                                        )}
                                     </>
                                 )}
                             </div>

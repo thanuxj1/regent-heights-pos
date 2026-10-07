@@ -16,8 +16,11 @@ router.use(requireAuth);
 // at Cashier-or-above. Managing agents, and the commission records/summary
 // themselves, is admin-tier data gated behind the same capability grant as
 // everything else this migration adds.
-router.get("/agents",              requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getAgents);
-router.get("/agents/:id",          requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getAgentById);
+// A cashier handed Commission Agents can list the agents they manage even if
+// their general "view the directory" default has been switched off.
+const viewAgents = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY, { unless: CAPABILITIES.COMMISSION_AGENTS });
+router.get("/agents",              requireCashierOrAbove, viewAgents, getAgents);
+router.get("/agents/:id",          requireCashierOrAbove, viewAgents, getAgentById);
 router.get("/agents/summary",      requireBranchAdminOr(CAPABILITIES.COMMISSION_AGENTS), getMonthlySummary);
 router.post("/agents",             requireBranchAdminOr(CAPABILITIES.COMMISSION_AGENTS), createAgent);
 router.put("/agents/:id",          requireBranchAdminOr(CAPABILITIES.COMMISSION_AGENTS), updateAgent);

@@ -13,8 +13,9 @@ const router = express.Router();
 // is the person the rider hands it to. It is the same trust as taking a payment,
 // so it follows the till's own permission and an owner can still take it away from
 // one person (Permissions → Point of Sale).
-router.get("/outstanding", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getOutstandingCod);
-router.get("/history", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY), getCodHistory);
+const viewCod = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY, { unless: CAPABILITIES.DELIVERY_MANAGEMENT });
+router.get("/outstanding", requireAuth, requireCashierOrAbove, viewCod, getOutstandingCod);
+router.get("/history", requireAuth, requireCashierOrAbove, viewCod, getCodHistory);
 router.post("/settle", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.POS_TERMINAL), createCodSettlement);
 
 export default router;

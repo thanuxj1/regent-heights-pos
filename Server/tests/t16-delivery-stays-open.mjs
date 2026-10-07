@@ -2,6 +2,9 @@
 // Orders list until the rider has handed over the money, however long that takes,
 // and drops off once it is settled. The kitchen's own board is unaffected.
 import { ctx, api, t, eq, ok, status, section, finish, pool } from "./lib.mjs";
+// The hotel's calendar day, as the server dates sales — not UTC's, which runs
+// 5½ hours behind Sri Lanka and named the wrong day every evening after 18:30 UTC.
+import { hotelToday } from "../utils/hotelTime.js";
 
 const { A, stamp } = await ctx();
 const owner = A.owner.token;
@@ -9,7 +12,7 @@ const cashier = A.cashier.token;
 const kitchen = A.kitchen.token;
 
 let bproId, partner, orderId, plainCashId, repBefore;
-const summary = async () => { const r = await api(owner, "GET", `/reports/summary?from=${new Date().toISOString().slice(0, 10)}&to=${new Date().toISOString().slice(0, 10)}`); status(r, 200); return r.data; };
+const summary = async () => { const r = await api(owner, "GET", `/reports/summary?from=${hotelToday()}&to=${hotelToday()}`); status(r, 200); return r.data; };
 
 const rows = (res) => {
   const d = res.data.data ?? res.data;

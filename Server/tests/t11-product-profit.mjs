@@ -2,11 +2,14 @@
 // onto the order line at the moment of sale, so editing a cost price later must
 // not rewrite what an earlier sale earned.
 import { ctx, api, t, eq, ok, status, section, finish } from "./lib.mjs";
+// The hotel's calendar day, as the server dates sales — not UTC's, which runs
+// 5½ hours behind Sri Lanka and named the wrong day every evening after 18:30 UTC.
+import { hotelToday } from "../utils/hotelTime.js";
 
 const { A, B, stamp } = await ctx();
 const owner = A.owner.token;
 const cashier = A.cashier.token;
-const today = new Date().toISOString().slice(0, 10);
+const today = hotelToday();
 
 let catId, costed, uncosted;
 const mkProduct = async (name, price, cost) => {
