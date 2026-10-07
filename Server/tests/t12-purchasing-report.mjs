@@ -64,4 +64,28 @@ await t("a cash sale shows 'cash' as its method in the ledger, not a dash", asyn
   eq(row.method, "cash", "payment method");
 });
 
+section("who we owe");
+await t("the received, part-paid order shows the supplier as owed 300", async () => {
+  const res = await api(owner, "GET", "/reports/payables");
+  status(res, 200);
+  const s = res.data.suppliers.find((x) => x.sup_id === supId);
+  ok(s, "supplier should be listed as owed");
+  eq(s.owed, 300, "owed");
+  eq(s.orders.length, 1, "one unpaid order");
+  eq(s.orders[0].balance, 300, "order balance");
+  ok(Array.isArray(res.data.commissions), "commissions list present");
+  ok(res.data.totals.total >= 300, "total includes it");
+});
+
+await t("once paid in full the supplier drops off the list", async () => {
+  status(await api(owner, "POST", "/supplier-payments", { sup_id: supId, po_id: poId, amount: 300, method: "cash", payment_date: today }), 201);
+  const res = await api(owner, "GET", "/reports/payables");
+  ok(!res.data.suppliers.some((x) => x.sup_id === supId), "fully paid supplier should not be listed");
+});
+
+await t("another company cannot read this branch's payables", async () => {
+  const res = await api((await ctx()).B.owner.token, "GET", `/reports/payables?b_id=${A.b_id}`);
+  ok(res.status === 403 || res.status === 404 || (res.status === 200 && res.data.suppliers.length === 0), `got ${res.status}`);
+});
+
 await finish("t12-purchasing-report.mjs");

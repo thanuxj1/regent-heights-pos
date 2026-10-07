@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
-import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases } from "../../services/api";
+import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
@@ -33,6 +33,7 @@ export default function Reports() {
   const [data, setData] = useState(null);
   const [ledger, setLedger] = useState(null);
   const [prodReport, setProdReport] = useState(null);
+  const [payables, setPayables] = useState(null);
   const [prodSort, setProdSort] = useState("sales");
   const [tab, setTab] = useState("overview");
   const [kind, setKind] = useState("all");
@@ -43,12 +44,13 @@ export default function Reports() {
     if (!branchId) return;
     setLoading(true); setError("");
     try {
-      const [s, t, p] = await Promise.all([
+      const [s, t, p, pay] = await Promise.all([
         getReportSummary({ b_id: branchId, from, to }),
         getReportTransactions({ b_id: branchId, from, to, kind }),
         getReportProducts({ b_id: branchId, from, to }),
+        getReportPayables({ b_id: branchId }),
       ]);
-      setData(s); setLedger(t); setProdReport(p);
+      setData(s); setLedger(t); setProdReport(p); setPayables(pay);
     } catch (e) {
       setError(e?.response?.data?.message || "Could not load reports");
     } finally { setLoading(false); }
@@ -132,6 +134,19 @@ export default function Reports() {
     downloadCsv(`purchasing_${from}_to_${to}`, head, rows);
   };
 
+  const exportPayablesCsv = () => {
+    if (!payables) return;
+    const head = ["Owed to", "Kind", "Reference", "Received / earned", "Amount owed", "Days outstanding", "Contact"];
+    const rows = [];
+    payables.suppliers.forEach(s => {
+      s.orders.forEach(o => rows.push([s.supplier, "Supplier", `PO#${o.po_id}`, dateCell(dayKey(o.received_date)), o.balance, o.days_outstanding ?? "", s.contact || ""]));
+      rows.push([`${s.supplier} — subtotal`, "", "", "", s.owed]);
+    });
+    payables.commissions.forEach(c => rows.push([c.agent, "Agent commission", `${c.records} record(s)`, dateCell(dayKey(c.oldest)), c.owed, "", ""]));
+    rows.push([], ["OWED TO SUPPLIERS", "", "", "", payables.totals.suppliers], ["OWED TO AGENTS (commission)", "", "", "", payables.totals.commissions], ["TOTAL WE OWE", "", "", "", payables.totals.total]);
+    downloadCsv(`who_we_owe_${payables.as_of}`, head, rows);
+  };
+
   const exportSummaryCsv = () => {
     if (!data) return;
     const pct = (v) => `${v}%`;
@@ -212,6 +227,7 @@ export default function Reports() {
         <button onClick={exportRevenueCsv} disabled={!data} style={btn("ghost")}>Revenue report</button>
         <button onClick={exportExpensesCsv} disabled={!data} style={btn("ghost")}>Expenses report</button>
         <button onClick={exportPurchasingCsv} disabled={!data} style={btn("ghost")}>Purchasing report</button>
+        <button onClick={exportPayablesCsv} disabled={!payables} style={btn("ghost")}>Who we owe</button>
         <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>Profit report</button>
         <button onClick={exportCsv} disabled={!ledger?.transactions?.length} style={btn("ghost")}>All transactions</button>
       </div>
@@ -246,6 +262,7 @@ export default function Reports() {
               <button onClick={() => setTab("overview")} style={tabStyle("overview")}>Overview</button>
               <button onClick={() => setTab("daily")}    style={tabStyle("daily")}>Daily Breakdown</button>
               <button onClick={() => setTab("products")} style={tabStyle("products")}>Product Profit</button>
+              <button onClick={() => setTab("owed")}     style={tabStyle("owed")}>Who We Owe</button>
               <button onClick={() => setTab("ledger")}   style={tabStyle("ledger")}>Transactions</button>
             </div>
 
@@ -451,6 +468,57 @@ export default function Reports() {
                 <div style={{ padding: "10px 20px 16px", fontSize: 11, color: "#94A3B8" }}>
                   Sales are the dish prices before any bill-level discount, service charge, tax or delivery charge.
                   Cost is what the dish cost when it was sold.
+                </div>
+              </div>
+            )}
+
+            {/* Who we owe */}
+            {tab === "owed" && (
+              <div style={{ padding: "16px 20px 20px" }}>
+                <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>
+                  As of today. Suppliers <strong style={{ color: "#B91C1C" }}>{money(payables?.totals?.suppliers ?? 0)}</strong> ·
+                  Agent commission <strong style={{ color: "#B91C1C" }}> {money(payables?.totals?.commissions ?? 0)}</strong> ·
+                  Total we owe <strong style={{ color: "#B91C1C" }}> {money(payables?.totals?.total ?? 0)}</strong>
+                </div>
+                {!payables?.suppliers?.length && !payables?.commissions?.length ? (
+                  <div style={{ padding: 40, textAlign: "center", color: "#94A3B8" }}>Nothing is owed right now.</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ background: "#F8FAFC" }}>
+                      {["Owed to", "Details", "Oldest unpaid", "Amount owed"].map(h => <th key={h} style={th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {payables.suppliers.map(s => (
+                        <tr key={`s${s.sup_id}`} style={{ borderTop: "1px solid #F1F5F9", verticalAlign: "top" }}>
+                          <td style={{ ...td, color: "#1E293B", fontWeight: 600 }}>
+                            {s.supplier}
+                            {s.contact && <div style={{ fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>{s.contact}</div>}
+                          </td>
+                          <td style={td}>
+                            {s.orders.map(o => (
+                              <div key={o.po_id} style={{ fontSize: 12 }}>
+                                PO#{o.po_id} · {money(o.balance)} still owed of {money(o.total)}
+                                {o.days_outstanding != null && <span style={{ color: o.days_outstanding > 30 ? "#B91C1C" : "#94A3B8" }}> · {o.days_outstanding} day(s)</span>}
+                              </div>
+                            ))}
+                          </td>
+                          <td style={td}>{s.oldest_unpaid ? dmy(s.oldest_unpaid) : "—"}</td>
+                          <td style={{ ...td, fontWeight: 700, color: "#B91C1C" }}>{money(s.owed)}</td>
+                        </tr>
+                      ))}
+                      {payables.commissions.map(c => (
+                        <tr key={`c${c.agent_id}`} style={{ borderTop: "1px solid #F1F5F9" }}>
+                          <td style={{ ...td, color: "#1E293B", fontWeight: 600 }}>{c.agent}<div style={{ fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>Agent commission</div></td>
+                          <td style={td}>{c.records} unpaid record(s)</td>
+                          <td style={td}>{c.oldest ? dmy(c.oldest) : "—"}</td>
+                          <td style={{ ...td, fontWeight: 700, color: "#B91C1C" }}>{money(c.owed)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <div style={{ marginTop: 12, fontSize: 11, color: "#94A3B8" }}>
+                  A supplier is owed only for goods that have been received and not fully paid for.
                 </div>
               </div>
             )}

@@ -346,6 +346,83 @@ export async function getProductProfit(req, res, next) {
 }
 
 /**
+ * GET /api/reports/payables?b_id=
+ * Who the business owes money to, as of now (not a date range — a debt does not
+ * stop being owed because the period ended).
+ *
+ *   suppliers   — goods received but not yet fully paid for, per supplier, with
+ *                 each unpaid order (a pending order is not a debt until it is
+ *                 received, the same rule the Supplier Ledger uses)
+ *   commissions — agent commission earned and not yet paid out
+ */
+export async function getPayables(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    if (!b_id) { res.status(400); return next(new Error("b_id is required")); }
+
+    const pos = await pool.query(
+      `SELECT po.po_id, po.received_date, s.sup_id, s.sup_name, s.sup_contact,
+              COALESCE((SELECT SUM(COALESCE(pi.price, pi.qty * pi.unit_price, 0)) FROM purchase_item pi WHERE pi.po_id = po.po_id), 0) AS total,
+              COALESCE((SELECT SUM(sp.amount) FROM supplier_payment sp WHERE sp.po_id = po.po_id), 0) AS paid
+       FROM purchase_order po
+       JOIN "SUPPLIER" s ON s.sup_id = po.sup_id
+       WHERE po.b_id = $1 AND po.status = 'received'
+       ORDER BY po.received_date`,
+      [b_id]
+    );
+
+    const bySupplier = new Map();
+    const now = Date.now();
+    for (const r of pos.rows) {
+      const total = num(r.total), paid = num(r.paid), balance = +(total - paid).toFixed(2);
+      if (!bySupplier.has(r.sup_id)) {
+        bySupplier.set(r.sup_id, { sup_id: r.sup_id, supplier: r.sup_name, contact: r.sup_contact || null, purchased: 0, paid: 0, owed: 0, oldest_unpaid: null, orders: [] });
+      }
+      const s = bySupplier.get(r.sup_id);
+      s.purchased += total; s.paid += paid;
+      if (balance > 0.005) {
+        s.owed += balance;
+        const days = r.received_date ? Math.max(0, Math.floor((now - new Date(r.received_date).getTime()) / 86400000)) : null;
+        if (!s.oldest_unpaid || (r.received_date && new Date(r.received_date) < new Date(s.oldest_unpaid))) s.oldest_unpaid = r.received_date;
+        s.orders.push({ po_id: r.po_id, received_date: r.received_date, total, paid, balance, days_outstanding: days });
+      }
+    }
+    const suppliers = [...bySupplier.values()]
+      .filter(s => s.owed > 0.005)
+      .map(s => ({ ...s, purchased: +s.purchased.toFixed(2), paid: +s.paid.toFixed(2), owed: +s.owed.toFixed(2) }))
+      .sort((a, b) => b.owed - a.owed);
+
+    const comm = await pool.query(
+      `SELECT a.agent_id, a.agent_name, COALESCE(SUM(r.commission_amount), 0) AS owed,
+              COUNT(*) AS records, MIN(r.record_date) AS oldest
+       FROM "COMMISSION_RECORD" r
+       JOIN "COMMISSION_AGENT" a ON a.agent_id = r.agent_id
+       WHERE a.b_id = $1 AND r.status = 'pending'
+       GROUP BY a.agent_id, a.agent_name
+       HAVING COALESCE(SUM(r.commission_amount), 0) > 0
+       ORDER BY owed DESC`,
+      [b_id]
+    );
+    const commissions = comm.rows.map(r => ({
+      agent_id: r.agent_id, agent: r.agent_name, owed: num(r.owed), records: num(r.records), oldest: r.oldest,
+    }));
+
+    const supplierTotal = suppliers.reduce((n, s) => n + s.owed, 0);
+    const commissionTotal = commissions.reduce((n, c) => n + c.owed, 0);
+    res.json({
+      as_of: todayStr(),
+      suppliers,
+      commissions,
+      totals: {
+        suppliers: +supplierTotal.toFixed(2),
+        commissions: +commissionTotal.toFixed(2),
+        total: +(supplierTotal + commissionTotal).toFixed(2),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+/**
  * GET /api/reports/purchases?b_id=&from=&to=
  * Every purchase order placed in the range: what was bought, from whom, what it
  * came to, what has been paid and what is still owed.
