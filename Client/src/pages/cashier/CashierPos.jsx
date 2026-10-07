@@ -49,9 +49,8 @@ import {
 } from "../../services/offline";
 import OrderReadyAlerts from "../../components/cashier/OrderReadyAlerts";
 import CashDrawerModal from "../../components/cashier/CashDrawerModal";
-import KotPrintingModal from "../../components/cashier/KotPrintingModal";
 import { DELIVERY_CHARGES } from "../../constants/deliveryCharges";
-import { printKotAtTill, tillPrintsKot, setTillPrintsKot } from "../../utils/printKot";
+import { printKotAtTill } from "../../utils/printKot";
 import { printReceipt } from "../../utils/printReceipt";
 import { withRetry, isTransient } from "../../utils/retryRequest";
 import { stockOf } from "../../utils/stockLabel";
@@ -205,13 +204,6 @@ const CashierPos = () => {
   }, [branchId]);
 
   useEffect(() => { refreshDrawer(); }, [refreshDrawer]);
-
-  // Whether this till prints its own KOT when it sends an order to the kitchen.
-  // The kitchen screen upstairs prints its own copy; this only switches the
-  // till's. Remembered on this device (see printKotAtTill).
-  const [kotSetupOpen, setKotSetupOpen] = useState(false);
-  const [tillKot, setTillKot] = useState(() => tillPrintsKot());
-  const toggleTillKot = (on) => { setTillPrintsKot(on); setTillKot(on); };
 
   const [waiterOrders, setWaiterOrders] = useState([]);
   const [loadingWaiterOrders, setLoadingWaiterOrders] = useState(false);
@@ -1283,10 +1275,6 @@ const CashierPos = () => {
                 style={headerBtn(drawer ? !drawer.open : false)}>
                 {drawer?.open ? "Drawer" : "Open Drawer"}
               </button>
-              <button type="button" onClick={() => setKotSetupOpen(true)} style={headerBtn(false)}
-                title="Where kitchen tickets print">
-                KOT Printing: {tillKot ? "Till + Kitchen" : "Kitchen only"}
-              </button>
             </>
           }
         />
@@ -1296,17 +1284,6 @@ const CashierPos = () => {
           branchId={branchId}
           onClose={() => setDrawerOpen(false)}
           onChanged={refreshDrawer}
-        />
-      )}
-
-      {kotSetupOpen && (
-        <KotPrintingModal
-          mode="till"
-          enabled={tillKot}
-          onToggle={toggleTillKot}
-          branchName={branchName}
-          staffName={`${user?.u_fname || ""} ${user?.u_lname || ""}`.trim()}
-          onClose={() => setKotSetupOpen(false)}
         />
       )}
 

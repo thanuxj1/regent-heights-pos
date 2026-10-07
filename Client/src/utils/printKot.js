@@ -115,38 +115,11 @@ export function printKot(order, items, meta = {}) {
  *
  * A web page cannot choose a physical printer — the browser decides, and it
  * prints on whatever the print window (or, with `--kiosk-printing`, this PC's
- * default printer) points at. What the app *can* choose is **which screen**
- * prints, and that is the choice that matters here: the printer upstairs is
- * plugged into the PC upstairs, so the kitchen screen running on that PC puts
- * every incoming order on that printer, while the till downstairs prints on
- * its own.
- *
- * Both default to printing, so nothing changes until someone switches a copy
- * off — and switching one off is a decision made at that device, per device,
- * the same way the kitchen screen's own Auto-print switch already is.
+ * default printer) points at. The till prints its own copy every time it sends an
+ * order to the kitchen. A kitchen screen on another PC can print its own too (its
+ * Printer setup switch), which is how a ticket reaches a printer upstairs.
  */
-const TILL_PRINT_KEY = "till.printKot";
-
-/** Does this till print its own copy when it sends an order to the kitchen? */
-export function tillPrintsKot() {
-  try {
-    return localStorage.getItem(TILL_PRINT_KEY) !== "off";
-  } catch {
-    return true; // can't remember a choice → keep printing; a spare ticket beats a lost one
-  }
-}
-
-export function setTillPrintsKot(on) {
-  try {
-    localStorage.setItem(TILL_PRINT_KEY, on ? "on" : "off");
-  } catch {
-    // The choice just lasts until the page reloads.
-  }
-}
-
-/** The till's own copy — skipped when this till has been set to leave it to the kitchen. */
 export function printKotAtTill(order, items, meta = {}) {
-  if (!tillPrintsKot()) return false;
   printKot(order, items, meta);
   return true;
 }

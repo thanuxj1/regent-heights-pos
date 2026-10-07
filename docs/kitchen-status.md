@@ -121,28 +121,20 @@ the kitchen ticket ends up upstairs: the kitchen printer is plugged into the PC
 upstairs, so the kitchen screen running on that PC prints every incoming order
 on it, while the till downstairs prints on its own printer.
 
-Both screens have a **KOT printing** dialog (the till's header button, and
-**Printer setup** on the kitchen screen) with:
+The till always prints its own copy when it sends an order to the kitchen; it has no
+printing switch (there used to be a header button for it — it was removed because a
+place with no kitchen screen only ever needs the till's copy).
 
-* a switch for that device — the till's own copy (**Till + Kitchen** /
-  **Kitchen only**), or the kitchen screen's auto-print;
+The kitchen screen has **Printer setup**, for a kitchen with its own PC and printer:
+
+* a switch for that device's auto-print;
 * **Print a test ticket** — a sample slip marked `* * T E S T   T I C K E T * *`
-  with the screen's name under the heading, so the upstairs printer can be
-  proven before anything is switched off downstairs;
-* the steps for setting up the PC upstairs: install the printer, make it the
-  default, start Chrome with `--kiosk-printing`, and leave Kitchen Orders open
-  with auto-print on.
+  with the screen's name under the heading, so the printer can be proven first;
+* the steps for setting up that PC: install the printer, make it the default, start
+  Chrome with `--kiosk-printing`, and leave Kitchen Orders open with auto-print on.
 
-Both copies print by default, so nothing changes until someone switches one off.
-The choice is remembered **per device** in that browser
-(`till.printKot`, `kitchen.autoPrintKot`) — like the kitchen's Auto-print switch
-already was — so switching off the till copy at one till does not touch another.
-The sensible order: print a test ticket on the PC upstairs, send a real order and
-see it come out there, and only then switch the till's copy off.
-
-A till set to **Kitchen only** depends on the kitchen screen being open upstairs.
-If it is not, nothing prints. The till does not know whether the screen is
-listening — but the kitchen screen shows it: a **Live** badge beside Auto-print
+That choice is remembered **per device** in that browser (`kitchen.autoPrintKot`).
+The kitchen screen shows whether it is listening: a **Live** badge beside Auto-print
 turns amber (**Reconnecting…**) when its link to the server is down.
 
 ### How the kitchen screen hears about orders
