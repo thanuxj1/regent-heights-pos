@@ -14,7 +14,7 @@ import {
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import { useAuth } from "../../context/AuthContext";
-import { getOrders, getOrderItems, getBranchProducts, getBranchById, getReportSummary } from "../../services/api";
+import { getOrders, getOrderItems, getBranchProducts, getBranchById, getReportSummary, getReportProducts } from "../../services/api";
 import { dayKey } from "../../utils/dates";
 import totalRevenueIcon from "../../assets/images/total revenue.png";
 import totalOrdersIcon from "../../assets/images/total orders.png";
@@ -202,6 +202,23 @@ const SalesRevenue = () => {
 		return () => { alive = false; };
 	}, [user?.b_id, user?.B_id, rangeDays]);
 	const netProfit = summary ? Number(summary.profit?.net ?? 0) : null;
+
+	// What each item sold and what it made, for the same range — so the best sellers can
+	// be judged on profit as well as on how many went out of the door.
+	const [productReport, setProductReport] = useState(null);
+	useEffect(() => {
+		const id = user?.b_id ?? user?.B_id;
+		if (!id || rangeDays.length === 0) return undefined;
+		let alive = true;
+		getReportProducts({ b_id: id, from: rangeDays[0].key, to: rangeDays[rangeDays.length - 1].key })
+			.then((r) => { if (alive) setProductReport(r); })
+			.catch(() => { if (alive) setProductReport(null); });
+		return () => { alive = false; };
+	}, [user?.b_id, user?.B_id, rangeDays]);
+	const topSellers = useMemo(
+		() => (productReport?.products ?? []).filter((p) => p.units > 0).sort((a, b) => b.units - a.units).slice(0, 5),
+		[productReport],
+	);
 
 	const orderTypeBreakdown = useMemo(() => {
 		const counts = { "dine-in": 0, takeaway: 0, delivery: 0 };
@@ -581,7 +598,30 @@ const SalesRevenue = () => {
 
 							<div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
 								<h3 className="text-sm font-bold text-slate-900">Top Selling Items</h3>
-								{topItems.length === 0 ? (
+								{productReport && topSellers.length > 0 ? (
+									<>
+										<ul className="mt-4 space-y-3">
+											{topSellers.map((p) => (
+												<li key={p.key} className="text-sm text-slate-700">
+													<div className="flex items-center justify-between">
+														<span className="truncate font-medium">{p.name}</span>
+														<span className="ml-3 text-xs font-semibold text-slate-500">{p.units} sold</span>
+													</div>
+													<div className="mt-0.5 text-xs">
+														{p.no_cost_set ? (
+															<span className="text-amber-600">No cost price set — profit unknown</span>
+														) : (
+															<span className={p.profit > 0 ? "text-emerald-600" : "text-rose-600"}>
+																Profit LKR {Number(p.profit).toLocaleString("en-LK", { maximumFractionDigits: 0 })} ({p.margin_pct}% margin)
+															</span>
+														)}
+													</div>
+												</li>
+											))}
+										</ul>
+										<p className="mt-3 text-[11px] text-slate-400">Best sellers by number sold. Full list in Reports → Product Profit.</p>
+									</>
+								) : topItems.length === 0 ? (
 									<p className="mt-4 text-xs text-slate-400">Nothing sold in this period.</p>
 								) : (
 									<ul className="mt-4 space-y-3">

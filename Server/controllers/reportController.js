@@ -492,6 +492,96 @@ export async function getPayables(req, res, next) {
 }
 
 /**
+ * GET /api/reports/orders-mix?b_id=&from=&to=
+ * How the restaurant's orders split by type (dine-in, takeaway, delivery) and,
+ * for deliveries, by partner and by how they were paid.
+ *
+ * Counted by the day the order was placed — it answers "how busy was each part of
+ * the business", so a cash-on-delivery order is in its day here even though its
+ * money counts as revenue only once the rider hands it over (the COD columns
+ * say where that money is). Cancelled orders and room-service charges are out.
+ */
+export async function getOrdersMix(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    if (!b_id) { res.status(400); return next(new Error("b_id is required")); }
+    const from = req.query.from || daysAgo(29);
+    const to   = req.query.to   || todayStr();
+
+    const types = await pool.query(
+      `SELECT COALESCE(o.or_type, 'unknown') AS type,
+              COUNT(*)::int AS orders,
+              COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)), 0) AS value
+       FROM "ORDER" o
+       WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
+         AND o.or_type <> 'room_service'
+         AND o.or_date BETWEEN $2::date AND $3::date
+       GROUP BY 1 ORDER BY 2 DESC`,
+      [b_id, from, to]
+    );
+
+    const partners = await pool.query(
+      `SELECT COALESCE(NULLIF(o.delivery_partner, ''), 'unassigned') AS partner_key,
+              COALESCE(dp.name, CASE WHEN COALESCE(o.delivery_partner, '') = '' THEN 'No partner (own delivery)' ELSE o.delivery_partner END) AS partner,
+              COUNT(*)::int AS orders,
+              COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)), 0) AS value,
+              COALESCE(SUM(o.delivery_charge), 0) AS delivery_charges,
+              COUNT(*) FILTER (WHERE o.payment_method = 'cod')::int AS cod_orders,
+              COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) FILTER (WHERE o.payment_method = 'cod' AND o.cod_settlement_id IS NULL), 0) AS cod_outstanding,
+              COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) FILTER (WHERE o.payment_method = 'cod' AND o.cod_settlement_id IS NOT NULL), 0) AS cod_settled
+       FROM "ORDER" o
+       JOIN "Branch" b ON b."B_id" = o.b_id
+       LEFT JOIN "DELIVERY_PARTNER" dp ON dp.com_id = b.com_id AND dp.key = o.delivery_partner
+       WHERE o.b_id = $1 AND o.or_type = 'delivery' AND o.or_status <> 'cancelled'
+         AND o.or_date BETWEEN $2::date AND $3::date
+       GROUP BY 1, 2 ORDER BY 3 DESC`,
+      [b_id, from, to]
+    );
+
+    const methods = await pool.query(
+      `SELECT COALESCE(NULLIF(o.payment_method, ''), 'unknown') AS method,
+              COUNT(*)::int AS orders,
+              COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)), 0) AS value
+       FROM "ORDER" o
+       WHERE o.b_id = $1 AND o.or_type = 'delivery' AND o.or_status <> 'cancelled'
+         AND o.or_date BETWEEN $2::date AND $3::date
+       GROUP BY 1 ORDER BY 2 DESC`,
+      [b_id, from, to]
+    );
+
+    const typeRows = types.rows.map(r => ({ type: r.type, orders: r.orders, value: num(r.value) }));
+    const totalOrders = typeRows.reduce((n, r) => n + r.orders, 0);
+    const totalValue = typeRows.reduce((n, r) => n + r.value, 0);
+    const partnerRows = partners.rows.map(r => ({
+      key: r.partner_key, partner: r.partner, orders: r.orders, value: num(r.value),
+      delivery_charges: num(r.delivery_charges), cod_orders: r.cod_orders,
+      cod_outstanding: num(r.cod_outstanding), cod_settled: num(r.cod_settled),
+    }));
+    const delivery = typeRows.find(r => r.type === 'delivery');
+
+    res.json({
+      range: { from, to },
+      types: typeRows.map(r => ({
+        ...r,
+        orders_pct: totalOrders ? +((r.orders / totalOrders) * 100).toFixed(1) : 0,
+        value_pct: totalValue ? +((r.value / totalValue) * 100).toFixed(1) : 0,
+        avg_order: r.orders ? +(r.value / r.orders).toFixed(2) : 0,
+      })),
+      totals: { orders: totalOrders, value: +totalValue.toFixed(2) },
+      delivery: {
+        orders: delivery?.orders ?? 0,
+        value: delivery?.value ?? 0,
+        delivery_charges: +partnerRows.reduce((n, r) => n + r.delivery_charges, 0).toFixed(2),
+        cod_outstanding: +partnerRows.reduce((n, r) => n + r.cod_outstanding, 0).toFixed(2),
+        cod_settled: +partnerRows.reduce((n, r) => n + r.cod_settled, 0).toFixed(2),
+        by_partner: partnerRows,
+        by_payment: methods.rows.map(r => ({ method: r.method, orders: r.orders, value: num(r.value) })),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+/**
  * GET /api/reports/purchases?b_id=&from=&to=
  * Every purchase order placed in the range: what was bought, from whom, what it
  * came to, what has been paid and what is still owed.

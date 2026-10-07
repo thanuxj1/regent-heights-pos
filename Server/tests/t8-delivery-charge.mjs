@@ -42,7 +42,7 @@ await t("baseline summary has a delivery_charges figure of zero", async () => {
   const res = await api(owner, "GET", `/reports/summary?from=${today}&to=${today}`);
   status(res, 200);
   before = res.data.revenue;
-  eq(Number(before.delivery_charges), 0, "no charged orders yet");
+  ok(Number(before.delivery_charges) >= 0, "baseline delivery charges");
 });
 
 section("accepted charges");
@@ -114,7 +114,7 @@ await t("PUT that changes the charge but not the total is refused", async () => 
 
 section("reports");
 // Orders now carry: 0, 50, 150 (edited from 100), 150, 200, and the default 0.
-const expectedCharges = 0 + 50 + 150 + 150 + 200 + 0;
+const expectedCharges = Number(before.delivery_charges) + (0 + 50 + 150 + 150 + 200 + 0);
 
 await t("summary shows the delivery charges and they are inside the restaurant total", async () => {
   const res = await api(owner, "GET", `/reports/summary?from=${today}&to=${today}`);

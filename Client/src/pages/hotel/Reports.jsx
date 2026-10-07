@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
-import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables, getBranchById } from "../../services/api";
+import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables, getReportOrdersMix, getBranchById } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
@@ -35,6 +35,7 @@ export default function Reports() {
   const [ledger, setLedger] = useState(null);
   const [prodReport, setProdReport] = useState(null);
   const [payables, setPayables] = useState(null);
+  const [mix, setMix] = useState(null);
   const [prodSort, setProdSort] = useState("sales");
   const [tab, setTab] = useState("overview");
   const [kind, setKind] = useState("all");
@@ -45,13 +46,14 @@ export default function Reports() {
     if (!branchId) return;
     setLoading(true); setError("");
     try {
-      const [s, t, p, pay] = await Promise.all([
+      const [s, t, p, pay, mx] = await Promise.all([
         getReportSummary({ b_id: branchId, from, to }),
         getReportTransactions({ b_id: branchId, from, to, kind }),
         getReportProducts({ b_id: branchId, from, to }),
         getReportPayables({ b_id: branchId }),
+        getReportOrdersMix({ b_id: branchId, from, to }),
       ]);
-      setData(s); setLedger(t); setProdReport(p); setPayables(pay);
+      setData(s); setLedger(t); setProdReport(p); setPayables(pay); setMix(mx);
     } catch (e) {
       setError(e?.response?.data?.message || "Could not load reports");
     } finally { setLoading(false); }
@@ -133,6 +135,22 @@ export default function Reports() {
     const t = p.totals ?? {};
     rows.push([], ["TOTAL PURCHASED", "", "", "", "", "", "", "", t.purchased], ["TOTAL PAID", "", "", "", "", "", "", "", t.paid], ["STILL OWED TO SUPPLIERS", "", "", "", "", "", "", "", t.owed]);
     downloadCsv(`purchasing_${from}_to_${to}`, head, rows);
+  };
+
+  const TYPE_LABEL = { "dine-in": "Dine-in", takeaway: "Takeaway", delivery: "Delivery", unknown: "Not recorded" };
+  const exportOrdersCsv = () => {
+    if (!mix) return;
+    const head = ["Section", "Item", "Orders", "Order value (LKR)", "Share of orders", "Delivery charges", "Cash on delivery still with rider", "Cash on delivery handed over"];
+    const rows = [
+      ...mix.types.map(t => ["Order types", TYPE_LABEL[t.type] || t.type, t.orders, t.value, `${t.orders_pct}%`, "", "", ""]),
+      ["Order types", "TOTAL", mix.totals.orders, mix.totals.value, "100%", "", "", ""],
+      [],
+      ...mix.delivery.by_partner.map(p => ["Deliveries by partner", p.partner, p.orders, p.value, "", p.delivery_charges, p.cod_outstanding, p.cod_settled]),
+      ["Deliveries by partner", "TOTAL", mix.delivery.orders, mix.delivery.value, "", mix.delivery.delivery_charges, mix.delivery.cod_outstanding, mix.delivery.cod_settled],
+      [],
+      ...mix.delivery.by_payment.map(m => ["Deliveries by how paid", String(m.method).replace(/_/g, " "), m.orders, m.value, "", "", "", ""]),
+    ];
+    downloadCsv(`orders_and_deliveries_${from}_to_${to}`, head, rows);
   };
 
   const exportPayablesCsv = () => {
@@ -246,6 +264,7 @@ export default function Reports() {
         <button onClick={exportRevenueCsv} disabled={!data} style={btn("ghost")}>Revenue report</button>
         <button onClick={exportExpensesCsv} disabled={!data} style={btn("ghost")}>Expenses report</button>
         <button onClick={exportPurchasingCsv} disabled={!data} style={btn("ghost")}>Purchasing report</button>
+        <button onClick={exportOrdersCsv} disabled={!mix} style={btn("ghost")}>Orders & deliveries</button>
         <button onClick={exportPayablesCsv} disabled={!payables} style={btn("ghost")}>Who we owe</button>
         <button onClick={exportProfitPdf} disabled={!data} style={btn("ghost")}>Profit report (PDF)</button>
         <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>Profit report (Excel)</button>
@@ -285,6 +304,7 @@ export default function Reports() {
             <div style={{ display: "flex", borderBottom: "1px solid #E2E8F0", paddingLeft: 8 }}>
               <button onClick={() => setTab("overview")} style={tabStyle("overview")}>Overview</button>
               <button onClick={() => setTab("daily")}    style={tabStyle("daily")}>Daily Breakdown</button>
+              <button onClick={() => setTab("orders")}   style={tabStyle("orders")}>Orders &amp; Deliveries</button>
               <button onClick={() => setTab("products")} style={tabStyle("products")}>Product Profit</button>
               <button onClick={() => setTab("owed")}     style={tabStyle("owed")}>Who We Owe</button>
               <button onClick={() => setTab("ledger")}   style={tabStyle("ledger")}>Transactions</button>
@@ -455,6 +475,84 @@ export default function Reports() {
             )}
 
             {/* Ledger */}
+            {/* Orders and deliveries */}
+            {tab === "orders" && mix && (
+              <div style={{ padding: "16px 20px 20px" }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#1E293B", marginBottom: 10 }}>Orders by type</div>
+                {!mix.types.length ? (
+                  <div style={{ padding: 30, textAlign: "center", color: "#94A3B8" }}>No orders in this range.</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 22 }}>
+                    <thead><tr style={{ background: "#F8FAFC" }}>
+                      {["Type", "Orders", "Share of orders", "Order value", "Average order"].map(h => <th key={h} style={th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {mix.types.map(t => (
+                        <tr key={t.type} style={{ borderTop: "1px solid #F1F5F9" }}>
+                          <td style={{ ...td, color: "#1E293B", fontWeight: 600 }}>{TYPE_LABEL[t.type] || t.type}</td>
+                          <td style={td}>{t.orders}</td>
+                          <td style={td}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ background: "#F1F5F9", borderRadius: 4, height: 8, width: 90 }}>
+                                <div style={{ width: `${t.orders_pct}%`, height: "100%", background: "#1565C0", borderRadius: 4 }} />
+                              </div>
+                              {t.orders_pct}%
+                            </div>
+                          </td>
+                          <td style={td}>{money(t.value)}</td>
+                          <td style={td}>{money(t.avg_order)}</td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderTop: "2px solid #E2E8F0", fontWeight: 700 }}>
+                        <td style={td}>Total</td><td style={td}>{mix.totals.orders}</td><td style={td}>100%</td>
+                        <td style={td}>{money(mix.totals.value)}</td><td style={td} />
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
+
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#1E293B", marginBottom: 10 }}>
+                  Deliveries — {mix.delivery.orders} order(s), {money(mix.delivery.value)}
+                </div>
+                {!mix.delivery.by_partner.length ? (
+                  <div style={{ padding: 20, color: "#94A3B8", fontSize: 13 }}>No deliveries in this range.</div>
+                ) : (
+                  <>
+                    <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }}>
+                      <thead><tr style={{ background: "#F8FAFC" }}>
+                        {["Delivered by", "Orders", "Order value", "Delivery charges", "Cash still with rider", "Cash handed over"].map(h => <th key={h} style={th}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {mix.delivery.by_partner.map(p => (
+                          <tr key={p.key} style={{ borderTop: "1px solid #F1F5F9" }}>
+                            <td style={{ ...td, color: "#1E293B", fontWeight: 600 }}>{p.partner}</td>
+                            <td style={td}>{p.orders}</td>
+                            <td style={td}>{money(p.value)}</td>
+                            <td style={td}>{money(p.delivery_charges)}</td>
+                            <td style={{ ...td, color: p.cod_outstanding > 0 ? "#B91C1C" : undefined, fontWeight: p.cod_outstanding > 0 ? 700 : 400 }}>{money(p.cod_outstanding)}</td>
+                            <td style={td}>{money(p.cod_settled)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ borderTop: "2px solid #E2E8F0", fontWeight: 700 }}>
+                          <td style={td}>Total</td><td style={td}>{mix.delivery.orders}</td><td style={td}>{money(mix.delivery.value)}</td>
+                          <td style={td}>{money(mix.delivery.delivery_charges)}</td>
+                          <td style={td}>{money(mix.delivery.cod_outstanding)}</td><td style={td}>{money(mix.delivery.cod_settled)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div style={{ fontSize: 12, color: "#64748B" }}>
+                      How deliveries were paid:{" "}
+                      {mix.delivery.by_payment.map(m => `${String(m.method).replace(/_/g, " ")} ${m.orders} (${money(m.value)})`).join(" · ")}
+                    </div>
+                  </>
+                )}
+                <div style={{ marginTop: 14, fontSize: 11, color: "#94A3B8" }}>
+                  Counted by the day the order was placed; cancelled orders and room-service charges are left out.
+                  Cash-on-delivery money counts as revenue only once the rider hands it over.
+                </div>
+              </div>
+            )}
+
             {/* Product profit */}
             {tab === "products" && (
               <div>
@@ -476,6 +574,29 @@ export default function Reports() {
                     <button onClick={exportProductsCsv} disabled={!prodReport?.products?.length} style={btn("ghost")}>Export</button>
                   </div>
                 </div>
+                {(() => {
+                  const list = (prodReport?.products ?? []).filter(p => p.units > 0);
+                  if (!list.length) return null;
+                  const costed = list.filter(p => !p.no_cost_set);
+                  const best = (arr, f) => arr.reduce((a, b) => (f(b) > f(a) ? b : a), arr[0]);
+                  const cards = [
+                    ["Best seller", best(list, p => p.units), p => `${p.units} sold`, "#065F46", "#D1FAE5"],
+                    costed.length ? ["Makes the most profit", best(costed, p => p.profit), p => `${money(p.profit)} profit`, "#1565C0", "#EFF6FF"] : null,
+                    costed.length ? ["Best margin", best(costed, p => p.margin_pct), p => `keeps ${p.margin_pct}% of its price`, "#6B21A8", "#F3E8FF"] : null,
+                    costed.some(p => p.profit <= 0) ? ["Losing money", costed.filter(p => p.profit <= 0).sort((a, b) => a.profit - b.profit)[0], p => `${money(p.profit)} on ${p.units} sold`, "#B91C1C", "#FEE2E2"] : null,
+                  ].filter(Boolean);
+                  return (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, margin: "0 20px 12px" }}>
+                      {cards.map(([k, p, sub, fg, bg]) => (
+                        <div key={k} style={{ background: bg, borderRadius: 10, padding: "10px 14px" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>{k}</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: fg, margin: "3px 0 1px" }}>{p.name}</div>
+                          <div style={{ fontSize: 11, color: "#64748B" }}>{sub(p)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {prodReport?.totals?.products_without_cost > 0 && (
                   <div style={{ margin: "0 20px 12px", padding: "10px 14px", background: "#FEF3C7", color: "#92400E", borderRadius: 8, fontSize: 12 }}>
                     {prodReport.totals.products_without_cost} product(s) have no cost price set, so their profit shows
