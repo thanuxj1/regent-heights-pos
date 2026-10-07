@@ -600,7 +600,9 @@ const CashierPos = () => {
       notes.trim() && `Note: ${notes.trim()}`,
     ].filter(Boolean).join(" · ");
 
-  const handleSendToKitchen = async () => {
+  // skipKitchen: a delivery of things the kitchen has no part in (drinks, shop items). The
+  // order and its bill are made exactly the same; the kitchen is simply never told.
+  const handleSendToKitchen = async ({ skipKitchen = false } = {}) => {
     if (!cart.length || !user?.u_id) return;
     if (!branchId) {
       setError("No branch is assigned to this user.");
@@ -615,8 +617,10 @@ const CashierPos = () => {
     // the food was on. Say so and let them use a paper docket.
     if (!online) {
       setError(
-        "The kitchen screen cannot be reached while offline — send this order on paper. " +
-        "You can still take the payment; the sale will go up when the connection returns.",
+        skipKitchen
+          ? "A delivery order cannot be recorded while offline. Try again when the connection returns."
+          : "The kitchen screen cannot be reached while offline — send this order on paper. " +
+            "You can still take the payment; the sale will go up when the connection returns.",
       );
       return;
     }
@@ -653,6 +657,7 @@ const CashierPos = () => {
           service_fee: Number(serviceFee || 0),
           delivery_charge: deliveryChargeAmount,
           kitchen_note: kitchenNoteText(),
+          ...(skipKitchen ? { skip_kitchen: true } : {}),
           ...(kotPaymentMethod ? { payment_method: kotPaymentMethod } : {}),
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         },
@@ -666,14 +671,16 @@ const CashierPos = () => {
       const orderId = orderResponse?.data?.or_id;
       if (!orderId) throw new Error("Order was created but no order id was returned");
 
-      printKotAtTill(
-        { or_id: orderId, or_type: orderType, allergies, addons, notes },
-        cart.map((i) => ({ name: i.pro_name, qty: i.qty })),
-        {
-          branchName,
-          staffName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(),
-        },
-      );
+      if (!skipKitchen) {
+        printKotAtTill(
+          { or_id: orderId, or_type: orderType, allergies, addons, notes },
+          cart.map((i) => ({ name: i.pro_name, qty: i.qty })),
+          {
+            branchName,
+            staffName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(),
+          },
+        );
+      }
 
       if (isDelivery) {
         // The kitchen ticket alone isn't enough — the rider needs a bill to
@@ -1950,7 +1957,7 @@ const CashierPos = () => {
                   for. In Room mode there is one action, below. */}
               <button
                 type="button"
-                onClick={handleSendToKitchen}
+                onClick={() => handleSendToKitchen()}
                 hidden={paymentMethod === "Room"}
                 disabled={submitting || cart.length === 0 || sentToKitchen || paymentMethod === "Room"}
                 className={`mt-0.5 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
@@ -1966,6 +1973,20 @@ const CashierPos = () => {
                     ? "Send to Kitchen + Print Bill"
                     : "Send to Kitchen (KOT)"}
               </button>
+
+              {/* Not everything goes through the kitchen. A rider taking a bottle of water
+                  needs a bill and a COD order, but no ticket on the kitchen screen. */}
+              {orderType === "delivery" && paymentMethod !== "Room" && !sentToKitchen && (
+                <button
+                  type="button"
+                  onClick={() => handleSendToKitchen({ skipKitchen: true })}
+                  disabled={submitting || cart.length === 0}
+                  title="Makes the delivery order and prints the bill without sending anything to the kitchen"
+                  className="mt-0.5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
+                >
+                  Print Bill only — not through the kitchen
+                </button>
+              )}
 
               <div className="flex gap-2 pt-0.5">
                 <button
