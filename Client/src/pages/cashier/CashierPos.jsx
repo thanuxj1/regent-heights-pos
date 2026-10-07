@@ -299,7 +299,7 @@ const CashierPos = () => {
         tax,
         deliveryCharge: charge,
         total,
-        paymentMethod: ord.payment_method === "cod" ? "CASH ON DELIVERY — pay the rider" : (ord.payment_method || ""),
+        paymentMethod: ord.payment_method === "cod" ? "Cash on delivery" : (ord.payment_method || ""),
       });
     } catch (err) {
       setError(err?.response?.data?.message || err.message || "Could not print the bill");

@@ -204,6 +204,8 @@ export default function Reports() {
       [],
       title("Restaurant"),
       line("Revenue", money(d.restaurant.revenue), `${d.restaurant.orders} orders`),
+      line("  of which paid at the till or by card", money(d.restaurant.paid_at_till ?? 0)),
+      line("  of which cash on delivery received", money(d.restaurant.cod_received ?? 0), `${d.restaurant.cod_orders ?? 0} delivery order(s) — counted on the day the rider handed the cash over`),
       line("  of which delivery charges", money(d.restaurant.delivery_charges ?? 0), "Already included in revenue"),
       line("  Food and drink bought", money(d.restaurant.costs.food_and_drink_bought), "Ingredients and resale products, as paid to suppliers"),
       line("  Food wasted", money(d.restaurant.costs.food_wasted)),
@@ -336,9 +338,20 @@ export default function Reports() {
                   })}
                   {/* Part of the Restaurant figure above, not on top of it — the bars
                       still add up to the total. Shown so delivery income is visible. */}
-                  <div style={{ fontSize: 12, color: "#64748B", marginTop: -4 }}>
-                    Restaurant includes delivery charges of{" "}
+                  <div style={{ fontSize: 12, color: "#64748B", marginTop: -4, lineHeight: 1.7 }}>
+                    Restaurant includes:<br />
+                    · paid at the till or by card{" "}
+                    <strong style={{ color: "#1E293B" }}>{money(data.by_department?.restaurant.paid_at_till ?? 0)}</strong><br />
+                    · cash on delivery handed over by riders{" "}
+                    <strong style={{ color: "#1E293B" }}>{money(data.by_department?.restaurant.cod_received ?? 0)}</strong>
+                    {" "}({data.by_department?.restaurant.cod_orders ?? 0} order(s))<br />
+                    · delivery charges of{" "}
                     <strong style={{ color: "#1E293B" }}>{money(data.revenue.delivery_charges ?? 0)}</strong>
+                    {payables && data.receivables?.cod_outstanding > 0 && (
+                      <><br /><span style={{ color: "#B45309" }}>
+                        Not counted yet: {money(data.receivables.cod_outstanding)} of cash on delivery still with riders.
+                      </span></>
+                    )}
                   </div>
 
                   {/* Who earned what: each side's own costs, then the costs nobody can

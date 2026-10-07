@@ -145,6 +145,20 @@ const SalesRevenue = () => {
 		return orders.filter((order) => keys.has(getDateKey(order?.or_date)));
 	}, [orders, rangeDays]);
 
+	// The real figure for the same range, from the business's own books — revenue less
+	// expenses, supplier payments and agent commission — not 72% of sales.
+	const [summary, setSummary] = useState(null);
+	useEffect(() => {
+		const id = user?.b_id ?? user?.B_id;
+		if (!id || rangeDays.length === 0) return undefined;
+		let alive = true;
+		getReportSummary({ b_id: id, from: rangeDays[0].key, to: rangeDays[rangeDays.length - 1].key })
+			.then((s) => { if (alive) setSummary(s); })
+			.catch(() => { if (alive) setSummary(null); });
+		return () => { alive = false; };
+	}, [user?.b_id, user?.B_id, rangeDays]);
+	const netProfit = summary ? Number(summary.profit?.net ?? 0) : null;
+
 	const ordersByDate = useMemo(() => {
 		const map = new Map();
 		orders.forEach((order) => {
@@ -155,7 +169,17 @@ const SalesRevenue = () => {
 		return map;
 	}, [orders]);
 
+	// Restaurant sales by day as the reports count them: a cash-on-delivery order on the day
+	// the rider handed the cash over, never before. Until the report has loaded, fall back
+	// to the orders themselves.
+	const reportRestaurantByDay = useMemo(() => {
+		if (!summary?.daily) return null;
+		const map = new Map(summary.daily.map((d) => [d.day, Number(d.restaurant || 0)]));
+		return map;
+	}, [summary]);
+
 	const revenueByDay = useMemo(() => {
+		if (reportRestaurantByDay) return rangeDays.map(({ key }) => reportRestaurantByDay.get(key) ?? 0);
 		return rangeDays.map(({ key }) => {
 			const list = ordersByDate.get(key) || [];
 			return list.reduce((sum, order) => {
@@ -164,7 +188,7 @@ const SalesRevenue = () => {
 				return sum + value;
 			}, 0);
 		});
-	}, [rangeDays, ordersByDate]);
+	}, [rangeDays, ordersByDate, reportRestaurantByDay]);
 
 	const totalRevenue = useMemo(() => {
 		return revenueByDay.reduce((sum, value) => sum + value, 0);
@@ -189,19 +213,6 @@ const SalesRevenue = () => {
 		return { value: maxValue, label: rangeDays[maxIndex]?.label || "-" };
 	}, [rangeDays, revenueByDay]);
 
-	// The real figure for the same range, from the business's own books — revenue less
-	// expenses, supplier payments and agent commission — not 72% of sales.
-	const [summary, setSummary] = useState(null);
-	useEffect(() => {
-		const id = user?.b_id ?? user?.B_id;
-		if (!id || rangeDays.length === 0) return undefined;
-		let alive = true;
-		getReportSummary({ b_id: id, from: rangeDays[0].key, to: rangeDays[rangeDays.length - 1].key })
-			.then((s) => { if (alive) setSummary(s); })
-			.catch(() => { if (alive) setSummary(null); });
-		return () => { alive = false; };
-	}, [user?.b_id, user?.B_id, rangeDays]);
-	const netProfit = summary ? Number(summary.profit?.net ?? 0) : null;
 
 	// What each item sold and what it made, for the same range — so the best sellers can
 	// be judged on profit as well as on how many went out of the door.

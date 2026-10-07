@@ -52,6 +52,11 @@ export async function getSummary(req, res, next) {
                 -- paid); reported again on its own so it is visible, not lost in
                 -- the food sales. Same rows, same dates, so the two always agree.
                 COALESCE(SUM(o.delivery_charge),0) AS delivery_charges,
+                -- The part of "total" that is cash-on-delivery money a rider has handed over in
+                -- the range (an order counts only from the day its cash arrives). The rest was
+                -- paid at the till or by card.
+                COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) FILTER (WHERE o.or_type = 'delivery' AND o.payment_method = 'cod'), 0) AS cod_received,
+                COUNT(*) FILTER (WHERE o.or_type = 'delivery' AND o.payment_method = 'cod') AS cod_orders,
                 COUNT(*) FILTER (WHERE NOT (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NULL)) AS orders
          FROM "ORDER" o
          LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
@@ -279,7 +284,10 @@ export async function getSummary(req, res, next) {
         profit: +(hotelRev - hotelCostTotal).toFixed(2),
       },
       restaurant: {
-        revenue: restRev, delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        revenue: restRev,
+        cod_received: num(restaurant.rows[0].cod_received),
+        cod_orders: num(restaurant.rows[0].cod_orders),
+        paid_at_till: +(restRev - num(restaurant.rows[0].cod_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
         costs: restCosts, cost_total: +restCostTotal.toFixed(2),
         profit: +(restRev - restCostTotal).toFixed(2),
       },

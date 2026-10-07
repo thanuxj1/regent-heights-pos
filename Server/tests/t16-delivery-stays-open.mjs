@@ -8,7 +8,8 @@ const owner = A.owner.token;
 const cashier = A.cashier.token;
 const kitchen = A.kitchen.token;
 
-let bproId, partner, orderId, plainCashId;
+let bproId, partner, orderId, plainCashId, repBefore;
+const summary = async () => { const r = await api(owner, "GET", `/reports/summary?from=${new Date().toISOString().slice(0, 10)}&to=${new Date().toISOString().slice(0, 10)}`); status(r, 200); return r.data; };
 
 const rows = (res) => {
   const d = res.data.data ?? res.data;
@@ -56,6 +57,7 @@ await t("a menu item and a rider", async () => {
 });
 
 section("staying open");
+await t("baseline report", async () => { repBefore = await summary(); });
 await t("a COD delivery the kitchen finished hours ago is still on the till's list, with what is needed to settle it", async () => {
   orderId = await sell("cod", { delivery_partner: partner, payment_method: "cod" });
   await ageIt(orderId);
@@ -83,6 +85,18 @@ await t("the cashier can take the rider's cash, and the order leaves the list", 
     delivery_partner: partner, amount: 600, method: "cash", order_ids: [orderId],
   }), 201);
   ok(!(await onTill(orderId)), "settled, so no longer outstanding");
+});
+
+section("in the reports");
+await t("the cash counts as revenue only now, shown as cash on delivery received, with its delivery charge", async () => {
+  const after = await summary();
+  const b = repBefore.by_department.restaurant, a = after.by_department.restaurant;
+  const d = (x, y) => +(x - y).toFixed(2);
+  eq(d(a.cod_received, b.cod_received), 600, "cash on delivery received");
+  eq(d(a.cod_orders, b.cod_orders), 1, "one delivery order");
+  eq(d(after.revenue.restaurant, repBefore.revenue.restaurant) >= 600, true, "restaurant revenue includes it");
+  eq(d(after.revenue.delivery_charges, repBefore.revenue.delivery_charges) >= 100, true, "its delivery charge is counted");
+  eq(+(a.paid_at_till + a.cod_received).toFixed(2), a.revenue, "paid at till + COD received = restaurant revenue");
 });
 
 await finish("t16-delivery-stays-open.mjs");
