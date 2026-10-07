@@ -13,10 +13,10 @@ import { printElement } from "./printElement";
  *
  * @param {object}   order              { or_id, or_type, or_time, table, allergies, addons, notes }
  * @param {Array}    items              [{ name, qty, note }]
- * @param {object}   meta               { branchName, staffName, reprint }
+ * @param {object}   meta               { branchName, staffName, reprint, test }
  */
 export function kotHtml(order, items, meta = {}) {
-  const { branchName = "", staffName = "", reprint = false } = meta;
+  const { branchName = "", staffName = "", reprint = false, test = false } = meta;
 
   const esc = (v) =>
     String(v ?? "").replace(/[&<>"]/g, (c) => (
@@ -54,7 +54,10 @@ export function kotHtml(order, items, meta = {}) {
 
   return `
     <style>
-      .kot { font-family: "Courier New", monospace; width: 300px; color: #000; }
+      /* Fills whatever the paper gives it. It was a fixed 300px — about 79mm —
+         which a roll of 80mm paper, with its margin, cannot hold: the right
+         edge of every ticket ran off the paper. */
+      .kot { font-family: "Courier New", monospace; width: 100%; color: #000; }
       .kot h1 { font-size: 20px; margin: 0; letter-spacing: 2px; }
       .kot .sub { font-size: 12px; margin-top: 2px; }
       .kot .head { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 8px; }
@@ -71,7 +74,7 @@ export function kotHtml(order, items, meta = {}) {
       .kot .flag { text-align: center; font-size: 13px; font-weight: 700; border: 2px solid #000; padding: 3px; margin-bottom: 8px; }
     </style>
     <div class="kot">
-      ${reprint ? '<div class="flag">* * R E P R I N T * *</div>' : ""}
+      ${test ? '<div class="flag">* * T E S T   T I C K E T * *</div>' : reprint ? '<div class="flag">* * R E P R I N T * *</div>' : ""}
       <div class="head">
         <h1>KITCHEN ORDER</h1>
         <div class="sub">${esc(branchName)}</div>
@@ -102,5 +105,68 @@ export function printKot(order, items, meta = {}) {
   const node = document.createElement("div");
   node.className = "kot-ticket";
   node.innerHTML = kotHtml(order, items, meta);
-  printElement(node, { title: `KOT-${order?.or_id ?? ""}`, widthMm: 80 });
+  // 80mm paper, of which a thermal head prints about 72: a 6mm margin each side
+  // leaves a 68mm ticket that sits inside that band.
+  printElement(node, { title: `KOT-${order?.or_id ?? ""}`, widthMm: 80, paddingMm: 6 });
+}
+
+/**
+ * Where tickets come out.
+ *
+ * A web page cannot choose a physical printer — the browser decides, and it
+ * prints on whatever the print window (or, with `--kiosk-printing`, this PC's
+ * default printer) points at. What the app *can* choose is **which screen**
+ * prints, and that is the choice that matters here: the printer upstairs is
+ * plugged into the PC upstairs, so the kitchen screen running on that PC puts
+ * every incoming order on that printer, while the till downstairs prints on
+ * its own.
+ *
+ * Both default to printing, so nothing changes until someone switches a copy
+ * off — and switching one off is a decision made at that device, per device,
+ * the same way the kitchen screen's own Auto-print switch already is.
+ */
+const TILL_PRINT_KEY = "till.printKot";
+
+/** Does this till print its own copy when it sends an order to the kitchen? */
+export function tillPrintsKot() {
+  try {
+    return localStorage.getItem(TILL_PRINT_KEY) !== "off";
+  } catch {
+    return true; // can't remember a choice → keep printing; a spare ticket beats a lost one
+  }
+}
+
+export function setTillPrintsKot(on) {
+  try {
+    localStorage.setItem(TILL_PRINT_KEY, on ? "on" : "off");
+  } catch {
+    // The choice just lasts until the page reloads.
+  }
+}
+
+/** The till's own copy — skipped when this till has been set to leave it to the kitchen. */
+export function printKotAtTill(order, items, meta = {}) {
+  if (!tillPrintsKot()) return false;
+  printKot(order, items, meta);
+  return true;
+}
+
+/**
+ * A ticket that says what it is, so someone can send one to a printer and see
+ * whether it comes out where they expect — before trusting real orders to it.
+ */
+export function printTestKot({ where = "", ...meta } = {}) {
+  printKot(
+    { or_id: "TEST", or_type: "test" },
+    [
+      { qty: 1, name: "Test item", note: "If you can read this, this printer works" },
+      { qty: 2, name: "Second line", note: "" },
+    ],
+    {
+      ...meta,
+      // Printed under the heading, so the paper itself says which screen sent it.
+      branchName: [meta.branchName, where].filter(Boolean).join(" · "),
+      test: true,
+    },
+  );
 }

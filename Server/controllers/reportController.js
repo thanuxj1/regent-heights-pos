@@ -48,6 +48,10 @@ export async function getSummary(req, res, next) {
       // settled, on the settlement's date (see the LEFT JOIN below).
       pool.query(
         `SELECT COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)),0) AS total,
+                -- Already inside "total" (the charge is part of what the customer
+                -- paid); reported again on its own so it is visible, not lost in
+                -- the food sales. Same rows, same dates, so the two always agree.
+                COALESCE(SUM(o.delivery_charge),0) AS delivery_charges,
                 COUNT(*) FILTER (WHERE NOT (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NULL)) AS orders
          FROM "ORDER" o
          LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
@@ -200,6 +204,7 @@ export async function getSummary(req, res, next) {
 
     const hotelRev = num(hotel.rows[0].total);
     const restRev  = num(restaurant.rows[0].total);
+    const deliveryCharges = num(restaurant.rows[0].delivery_charges);
     const expTotal = num(expenses.rows[0].total);
     const supTotal = num(suppliers.rows[0].total);
     const wasteTotal = num(waste.rows[0].total);
@@ -215,7 +220,9 @@ export async function getSummary(req, res, next) {
 
     res.json({
       range: { from, to, days: spanDays },
-      revenue: { hotel: hotelRev, restaurant: restRev, total: revenue },
+      // delivery_charges is a part of restaurant, not an addition to it — total
+      // is hotel + restaurant exactly as before.
+      revenue: { hotel: hotelRev, restaurant: restRev, delivery_charges: deliveryCharges, total: revenue },
       expenses: {
         total: +outTotal.toFixed(2),
         recorded: expTotal,
@@ -292,6 +299,7 @@ export async function getTransactions(req, res, next) {
       // order here too would count the same sale twice in this ledger.
       const r = await pool.query(
         `SELECT o.or_id, o.or_date AS at, COALESCE(o."or_totalCostWtax", o.or_totalcost, 0) AS amount,
+                o.delivery_charge,
                 o.or_type, o.u_id AS handled_by_id, c.cust_name AS party,
                 NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "ORDER" o
@@ -308,6 +316,8 @@ export async function getTransactions(req, res, next) {
         amount: num(x.amount), method: "—", reference: `#${x.or_id}`, party: x.party,
         handled_by: x.handled_by || null, handled_by_id: x.handled_by_id ?? null,
         or_id: x.or_id,
+        // Part of `amount`, shown on its own for a delivery order.
+        delivery_charge: num(x.delivery_charge),
       }));
     }
 

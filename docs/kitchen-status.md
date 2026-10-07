@@ -112,6 +112,65 @@ deliberate — the paper at the counter and the paper on the pass have to match 
 and pressing **Print** on the kitchen screen stamps the copy
 `* * R E P R I N T * *`.
 
+### Which printer prints
+
+A web page cannot choose a physical printer. The browser prints on whatever the
+print window points at — or, under `--kiosk-printing`, on the PC's default
+printer. What the app *can* choose is **which screen prints**, and that is how
+the kitchen ticket ends up upstairs: the kitchen printer is plugged into the PC
+upstairs, so the kitchen screen running on that PC prints every incoming order
+on it, while the till downstairs prints on its own printer.
+
+Both screens have a **KOT printing** dialog (the till's header button, and
+**Printer setup** on the kitchen screen) with:
+
+* a switch for that device — the till's own copy (**Till + Kitchen** /
+  **Kitchen only**), or the kitchen screen's auto-print;
+* **Print a test ticket** — a sample slip marked `* * T E S T   T I C K E T * *`
+  with the screen's name under the heading, so the upstairs printer can be
+  proven before anything is switched off downstairs;
+* the steps for setting up the PC upstairs: install the printer, make it the
+  default, start Chrome with `--kiosk-printing`, and leave Kitchen Orders open
+  with auto-print on.
+
+Both copies print by default, so nothing changes until someone switches one off.
+The choice is remembered **per device** in that browser
+(`till.printKot`, `kitchen.autoPrintKot`) — like the kitchen's Auto-print switch
+already was — so switching off the till copy at one till does not touch another.
+The sensible order: print a test ticket on the PC upstairs, send a real order and
+see it come out there, and only then switch the till's copy off.
+
+A till set to **Kitchen only** depends on the kitchen screen being open upstairs.
+If it is not, nothing prints. The till does not know whether the screen is
+listening — but the kitchen screen shows it: a **Live** badge beside Auto-print
+turns amber (**Reconnecting…**) when its link to the server is down.
+
+### How the kitchen screen hears about orders
+
+It listens for `order:new` (sent to the whole branch, so every login hears it) as
+well as `order:created` (sent only to the kitchen room, which only a **Kitchen
+Staff** login joins), and checks again by itself every 15 seconds and whenever the
+connection comes back. It used to listen for `order:created` alone: a property
+with no Kitchen Staff account, whose kitchen screen was open as an Administrator
+or Cashier, never heard a new order, never refreshed and so never printed one —
+with nothing on screen to say so.
+
+### If nothing comes out
+
+* **Look at the print window's Destination list.** Chrome lists only the printers
+  installed *on that PC*. Virtual ones — **Save as PDF**, **AnyDesk Printer**,
+  Microsoft Print to PDF — never produce paper (AnyDesk's sends the page to the
+  PC of whoever is connected). Open **See more…**; if the real printer is not in
+  the full list either, it is not installed on that PC, and no setting in this
+  app can reach it. Install it there — or, for a printer on another PC, share it
+  from that PC and add it on this one.
+* For tickets printed **upstairs**, the PC with the printer must have the kitchen
+  screen open and signed in, with **Live** showing and auto-print on.
+* An order already on the board when the screen opens is not printed (a reload
+  must not reprint the lunch rush); use **Print** on its card for a copy.
+* A ticket only prints for orders that have an item for the kitchen — an order of
+  drinks marked for the Bar alone never reaches this screen.
+
 ## From the kitchen back to the till
 
 Sending food to the kitchen is not billing it. Someone has to come back to the

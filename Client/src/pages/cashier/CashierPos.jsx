@@ -47,7 +47,9 @@ import {
 } from "../../services/offline";
 import OrderReadyAlerts from "../../components/cashier/OrderReadyAlerts";
 import CashDrawerModal from "../../components/cashier/CashDrawerModal";
-import { printKot } from "../../utils/printKot";
+import KotPrintingModal from "../../components/cashier/KotPrintingModal";
+import { DELIVERY_CHARGES } from "../../constants/deliveryCharges";
+import { printKotAtTill, tillPrintsKot, setTillPrintsKot } from "../../utils/printKot";
 import { withRetry, isTransient } from "../../utils/retryRequest";
 import { stockOf } from "../../utils/stockLabel";
 import Sidebar from "../../components/branch-admin/Sidebar";
@@ -108,6 +110,10 @@ const CashierPos = () => {
   // it's tracked separately from the Cash/Card/Room buttons above.
   const [deliveryPartner, setDeliveryPartner] = useState("");
   const [deliveryPaymentMethod, setDeliveryPaymentMethod] = useState("cod");
+  // The flat charge on a delivery (LKR). null = not chosen yet, which is not the
+  // same as "None" (0): a delivery cannot be sent until someone has said which,
+  // so a charge is never lost to a cashier simply forgetting the row.
+  const [deliveryCharge, setDeliveryCharge] = useState(null);
   // Fetched, not hardcoded — a manager can add a partner and it's usable
   // here immediately. See Client/src/pages/branch-admin/DeliveryCod.jsx.
   const [deliveryPartners, setDeliveryPartners] = useState([]);
@@ -194,6 +200,13 @@ const CashierPos = () => {
   }, [branchId]);
 
   useEffect(() => { refreshDrawer(); }, [refreshDrawer]);
+
+  // Whether this till prints its own KOT when it sends an order to the kitchen.
+  // The kitchen screen upstairs prints its own copy; this only switches the
+  // till's. Remembered on this device (see printKotAtTill).
+  const [kotSetupOpen, setKotSetupOpen] = useState(false);
+  const [tillKot, setTillKot] = useState(() => tillPrintsKot());
+  const toggleTillKot = (on) => { setTillPrintsKot(on); setTillKot(on); };
 
   const [waiterOrders, setWaiterOrders] = useState([]);
   const [loadingWaiterOrders, setLoadingWaiterOrders] = useState(false);
@@ -510,7 +523,17 @@ const CashierPos = () => {
   const discountAmount = subtotal * (Number(discountPct || 0) / 100);
   const taxableBase = subtotal - discountAmount + Number(serviceFee || 0);
   const tax = taxableBase * (effectiveTaxRate / 100);
-  const total = taxableBase + tax;
+  // The delivery charge is added after tax — the customer pays exactly LKR 50 or
+  // 100, not 55 or 110 — and it is inside `total`, so it is what gets sent as
+  // the order's total and what every report and the drawer then count.
+  const isDeliveryOrder = orderType === "delivery";
+  const deliveryChargeAmount = isDeliveryOrder ? Number(deliveryCharge || 0) : 0;
+  const total = taxableBase + tax + deliveryChargeAmount;
+  // A delivery with no charge chosen can't be sent — see the guards in
+  // handleSendToKitchen and handleCheckout.
+  const deliveryChargeMissing = isDeliveryOrder && deliveryCharge === null;
+  const DELIVERY_CHARGE_PROMPT =
+    "Choose the delivery charge first — pick an amount, or None if there isn't one.";
 
 
   const addToCart = (product) => {
@@ -580,6 +603,10 @@ const CashierPos = () => {
       setError("No branch is assigned to this user.");
       return;
     }
+    if (deliveryChargeMissing) {
+      setError(DELIVERY_CHARGE_PROMPT);
+      return;
+    }
     // The kitchen screen is fed over the network. A docket printed here while
     // the connection is down would never reach it, and the cashier would think
     // the food was on. Say so and let them use a paper docket.
@@ -621,6 +648,7 @@ const CashierPos = () => {
           client_ref: newClientRef(),
           discount_pct: Number(discountPct || 0),
           service_fee: Number(serviceFee || 0),
+          delivery_charge: deliveryChargeAmount,
           kitchen_note: kitchenNoteText(),
           ...(kotPaymentMethod ? { payment_method: kotPaymentMethod } : {}),
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
@@ -635,7 +663,7 @@ const CashierPos = () => {
       const orderId = orderResponse?.data?.or_id;
       if (!orderId) throw new Error("Order was created but no order id was returned");
 
-      printKot(
+      printKotAtTill(
         { or_id: orderId, or_type: orderType, allergies, addons, notes },
         cart.map((i) => ({ name: i.pro_name, qty: i.qty })),
         {
@@ -661,6 +689,8 @@ const CashierPos = () => {
         setEditingOrderId(null);
         setEditingOrderCurrentStatus(null);
         setEditingOrderTableId(null);
+        // The next delivery asks again; a charge is never carried over silently.
+        setDeliveryCharge(null);
         navigate("/cashier/invoice-preview", {
           state: {
             orderId,
@@ -672,6 +702,7 @@ const CashierPos = () => {
             subtotal: Number(subtotal.toFixed(2)),
             discount: Number(discountPct || 0),
             serviceFee: Number(serviceFee || 0),
+            deliveryCharge: deliveryChargeAmount,
             allergies,
             addons,
             notes,
@@ -780,6 +811,10 @@ const CashierPos = () => {
       setError("No branch is assigned to this user.");
       return;
     }
+    if (deliveryChargeMissing) {
+      setError(DELIVERY_CHARGE_PROMPT);
+      return;
+    }
     // Ask for the manager's PIN before anything is sent, rather than letting the
     // cashier reach the end of a sale and be refused in front of the customer.
     if (Number(discountPct || 0) > DISCOUNT_LIMIT_PCT && !approvalPinRef.current && !isManager) {
@@ -847,9 +882,9 @@ const CashierPos = () => {
             })),
           });
         }
-        // printKot(order, items, meta) — three arguments. Passing one object
-        // left `items` undefined and printed a ticket with nothing on it.
-        if (!attaching) printKot(
+        // printKotAtTill(order, items, meta) — three arguments. Passing one
+        // object left `items` undefined and printed a ticket with nothing on it.
+        if (!attaching) printKotAtTill(
           {
             or_id: res?.order?.or_id,
             or_type: "room_service",
@@ -945,6 +980,7 @@ const CashierPos = () => {
           // a fresh cart's createOrderWithItems call below.
           discount_pct: Number(discountPct || 0),
           service_fee: Number(serviceFee || 0),
+          delivery_charge: deliveryChargeAmount,
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         });
       } else {
@@ -970,6 +1006,9 @@ const CashierPos = () => {
             // baked into a smaller number.
             discount_pct: Number(discountPct || 0),
             service_fee: Number(serviceFee || 0),
+            // Part of or_totalCostWtax above; sent on its own too so the server
+            // can check the two agree and the reports can show it separately.
+            delivery_charge: deliveryChargeAmount,
             kitchen_note: kitchenNoteText(),
             // How it was paid, sent with the sale itself. Without this the
             // drawer cannot be counted at the end of the day: there is no way
@@ -1028,6 +1067,8 @@ const CashierPos = () => {
       setEditingOrderTableId(null);
       // One approval, one sale — the next big discount asks again.
       approvalPinRef.current = "";
+      // And the next delivery has to choose its charge again.
+      setDeliveryCharge(null);
       navigate("/cashier/invoice-preview", {
         state: {
           orderId,
@@ -1039,6 +1080,7 @@ const CashierPos = () => {
           subtotal: Number(subtotal.toFixed(2)),
           discount: Number(discountPct || 0),
           serviceFee: Number(serviceFee || 0),
+          deliveryCharge: deliveryChargeAmount,
           allergies,
           addons,
           notes,
@@ -1075,6 +1117,11 @@ const CashierPos = () => {
 
       setCart(newCart);
       setOrderType(ao.or_type || "takeaway");
+      // A delivery already on the system keeps the charge it was rung up with. If
+      // this list does not say what it was, ask again rather than assume none —
+      // settling with "none" would quietly wipe a charge the customer owes.
+      setDeliveryCharge(ao.or_type === "delivery" && ao.delivery_charge != null
+        ? Number(ao.delivery_charge) : null);
       setNotes(ao.or_notes || "");
       setEditingOrderId(ao.or_id);
       setEditingOrderCurrentStatus(ao.or_status ?? "pending");
@@ -1095,6 +1142,7 @@ const CashierPos = () => {
       orderType,
       deliveryPartner,
       deliveryPaymentMethod,
+      deliveryCharge,
       allergies,
       addons,
       notes,
@@ -1122,6 +1170,7 @@ const CashierPos = () => {
     setOrderType("takeaway");
     setDeliveryPartner("pickme_food");
     setDeliveryPaymentMethod("cod");
+    setDeliveryCharge(null);
     setAllergies("");
     setAddons("");
     setNotes("");
@@ -1157,6 +1206,7 @@ const CashierPos = () => {
     setOrderType(orderToResume.orderType);
     setDeliveryPartner(orderToResume.deliveryPartner || "pickme_food");
     setDeliveryPaymentMethod(orderToResume.deliveryPaymentMethod || "cod");
+    setDeliveryCharge(orderToResume.deliveryCharge ?? null);
     setAllergies(orderToResume.allergies || "");
     setAddons(orderToResume.addons || "");
     setNotes(orderToResume.notes || "");
@@ -1197,6 +1247,10 @@ const CashierPos = () => {
                 style={headerBtn(drawer ? !drawer.open : false)}>
                 {drawer?.open ? "Drawer" : "Open Drawer"}
               </button>
+              <button type="button" onClick={() => setKotSetupOpen(true)} style={headerBtn(false)}
+                title="Where kitchen tickets print">
+                KOT Printing: {tillKot ? "Till + Kitchen" : "Kitchen only"}
+              </button>
             </>
           }
         />
@@ -1206,6 +1260,17 @@ const CashierPos = () => {
           branchId={branchId}
           onClose={() => setDrawerOpen(false)}
           onChanged={refreshDrawer}
+        />
+      )}
+
+      {kotSetupOpen && (
+        <KotPrintingModal
+          mode="till"
+          enabled={tillKot}
+          onToggle={toggleTillKot}
+          branchName={branchName}
+          staffName={`${user?.u_fname || ""} ${user?.u_lname || ""}`.trim()}
+          onClose={() => setKotSetupOpen(false)}
         />
       )}
 
@@ -1649,6 +1714,14 @@ const CashierPos = () => {
                   <span>Tax {effectiveTaxRate > 0 ? `(${effectiveTaxRate.toFixed(1)}%)` : ""}</span>
                   <span className="font-semibold text-slate-900">LKR {tax.toFixed(2)}</span>
                 </div>
+                {isDeliveryOrder && (
+                  <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
+                    <span>Delivery charge</span>
+                    <span className={`font-semibold ${deliveryChargeMissing ? "text-amber-600" : "text-slate-900"}`}>
+                      {deliveryChargeMissing ? "choose below" : `LKR ${deliveryChargeAmount.toFixed(2)}`}
+                    </span>
+                  </div>
+                )}
                 <div className="my-1.5 h-px bg-slate-200" />
                 <div className="flex items-baseline justify-between font-semibold text-slate-900">
                   <span className="text-sm">Total</span>
@@ -1671,7 +1744,11 @@ const CashierPos = () => {
                       <button
                         key={value}
                         type="button"
-                        onClick={() => setOrderType(value)}
+                        onClick={() => {
+                          setOrderType(value);
+                          // Only a delivery has a charge; leaving delivery forgets it.
+                          if (value !== "delivery") setDeliveryCharge(null);
+                        }}
                         className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2 text-xs font-medium transition ${
                           orderType === value
                             ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
@@ -1724,6 +1801,29 @@ const CashierPos = () => {
                           </div>
                         </>
                       )}
+                    </div>
+
+                    <h3 className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Delivery Charge
+                      {deliveryChargeMissing && <span className="ml-1.5 normal-case tracking-normal text-amber-600">— choose one</span>}
+                    </h3>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {DELIVERY_CHARGES.map((amount) => (
+                        <button
+                          key={amount}
+                          type="button"
+                          onClick={() => { setDeliveryCharge(amount); setError(""); }}
+                          className={`rounded-lg border px-1 py-2 text-xs font-medium transition ${
+                            deliveryCharge === amount
+                              ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
+                              : deliveryChargeMissing
+                                ? "border-amber-300 bg-white text-slate-600 hover:border-emerald-300"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
+                          }`}
+                        >
+                          {amount === 0 ? "None" : amount}
+                        </button>
+                      ))}
                     </div>
 
                     <h3 className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Collected By Rider As</h3>

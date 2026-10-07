@@ -12,7 +12,7 @@
  * never printed at all. A frame needs no gesture, leaves no stray about:blank
  * window behind, and prints exactly what is inside it.
  */
-export function printElement(node, { title = document.title, widthMm = 210, onDone } = {}) {
+export function printElement(node, { title = document.title, widthMm = 210, paddingMm = 14, onDone } = {}) {
   if (!node) return;
 
   // Carry the app's stylesheets across so Tailwind classes still resolve.
@@ -48,8 +48,9 @@ export function printElement(node, { title = document.title, widthMm = 210, onDo
            Chrome print its own header/footer (page title, URL, date) in the
            space it opens up; a page with none of its own leaves no room for
            that, and it goes unprinted instead of announcing this address to
-           a guest reading their bill. */
-        padding: 14mm;
+           a guest reading their bill. 14mm suits an A4 sheet; a till roll is
+           80mm wide in all, so its caller passes a margin to match. */
+        padding: ${paddingMm}mm;
         box-sizing: border-box;
         overflow: visible !important;
         border: none !important;

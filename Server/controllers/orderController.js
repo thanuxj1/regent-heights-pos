@@ -15,6 +15,7 @@ import { takeStock, returnStock, isStockProblem } from "../utils/inventory.js";
 import { logActivity } from "../utils/activityLog.js";
 import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hotelToday } from "../utils/hotelTime.js";
+import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -60,9 +61,14 @@ const STATUS_TRANSITIONS = {
 
 /**
  * Validates cost fields and business logic relationships.
+ *
+ * `deliveryCharge` is the flat charge on a delivery order. It is added to the
+ * total *after* tax — the customer pays exactly LKR 50 or 100, not 55 or 110 —
+ * so the total with tax is the taxed food plus the charge.
+ *
  * Returns an error string or null if valid.
  */
-function validateCosts(or_tax, or_totalcost, or_totalCostWtax) {
+function validateCosts(or_tax, or_totalcost, or_totalCostWtax, deliveryCharge = 0) {
   const tax = parseFloat(or_tax);
   const cost = parseFloat(or_totalcost);
   const costWtx = parseFloat(or_totalCostWtax);
@@ -83,10 +89,13 @@ function validateCosts(or_tax, or_totalcost, or_totalCostWtax) {
   }
   // Sanity check: cost with tax should roughly match (within 1% tolerance for rounding)
   if (or_tax !== undefined && or_tax !== null && !isNaN(tax)) {
-    const expected = parseFloat((cost * (1 + tax / 100)).toFixed(2));
+    const charge = Number(deliveryCharge) || 0;
+    const expected = parseFloat((cost * (1 + tax / 100) + charge).toFixed(2));
     const diff = Math.abs(expected - costWtx);
     if (diff > 0.05) {
-      return `or_totalCostWtax (${costWtx}) does not match or_totalcost * (1 + tax/100) = ${expected}`;
+      return charge
+        ? `or_totalCostWtax (${costWtx}) does not match or_totalcost * (1 + tax/100) + delivery charge ${charge} = ${expected}`
+        : `or_totalCostWtax (${costWtx}) does not match or_totalcost * (1 + tax/100) = ${expected}`;
     }
   }
   return null;
@@ -443,6 +452,7 @@ export const updateOrder = async (req, res) => {
       delivery_partner,
       discount_pct,
       service_fee,
+      delivery_charge,
       approval_pin,
     } = req.body;
 
@@ -466,7 +476,7 @@ export const updateOrder = async (req, res) => {
     const existing = await pool.query(
       // discount_pct and service_fee come along so the settle-time total check
       // below allows for a discount that was properly declared and approved.
-      `SELECT or_status, discount_pct, service_fee, discount_approved_by, payment_method FROM "ORDER" WHERE or_id = $1`,
+      `SELECT or_status, discount_pct, service_fee, discount_approved_by, payment_method, delivery_charge FROM "ORDER" WHERE or_id = $1`,
       [id],
     );
     if (!existing.rows.length) {
@@ -533,8 +543,22 @@ export const updateOrder = async (req, res) => {
       }
     }
 
+    // ── Delivery charge ──
+    // Sent, it is the new charge. Not sent, a delivery order keeps the one it
+    // has and anything else has none — an order moved off "delivery" sheds it.
+    const charge = resolveDeliveryCharge(
+      or_type,
+      delivery_charge !== undefined
+        ? delivery_charge
+        : (or_type === "delivery" ? existing.rows[0].delivery_charge : 0),
+    );
+    if (charge.error) {
+      return res.status(400).json({ success: false, error: charge.error });
+    }
+    const resolvedDeliveryCharge = charge.value;
+
     // ── Cost validation ──
-    const costError = validateCosts(or_tax, or_totalcost, or_totalCostWtax);
+    const costError = validateCosts(or_tax, or_totalcost, or_totalCostWtax, resolvedDeliveryCharge);
     if (costError) {
       return res.status(400).json({ success: false, error: costError });
     }
@@ -640,7 +664,8 @@ export const updateOrder = async (req, res) => {
          delivery_partner   = $13,
          discount_pct       = $14,
          service_fee        = $15,
-         discount_approved_by = $16
+         discount_approved_by = $16,
+         delivery_charge    = $17
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -660,6 +685,7 @@ export const updateOrder = async (req, res) => {
         resolvedDiscountPct,
         resolvedServiceFee,
         discountApprovedBy,
+        resolvedDeliveryCharge,
       ],
     );
 
@@ -753,6 +779,14 @@ export const patchOrder = async (req, res) => {
           error: `Invalid or_type. Use: ${VALID_TYPES.join(" | ")}`,
         });
     }
+    // A delivery charge belongs to a delivery order. Moving the order to another
+    // type here would leave a charge on something that is not a delivery.
+    if (incoming.or_type && incoming.or_type !== "delivery" && Number(current.delivery_charge) > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "This order carries a delivery charge, so it cannot be changed to another order type.",
+      });
+    }
 
     // ── Validate status transition if status is being changed ──
     if (incoming.or_status && incoming.or_status !== current.or_status) {
@@ -779,6 +813,9 @@ export const patchOrder = async (req, res) => {
         merged.or_tax,
         merged.or_totalcost,
         merged.or_totalCostWtax,
+        // A delivery order's total includes its charge; patching the other
+        // figures must not make them disagree with it.
+        Number(current.delivery_charge) || 0,
       );
       if (costError) {
         return res.status(400).json({ success: false, error: costError });
@@ -1107,7 +1144,13 @@ export const createOrderWithItems = async (req, res) => {
     });
   }
 
-  const costError = validateCosts(order.or_tax ?? 0, order.or_totalcost, order.or_totalCostWtax);
+  // The flat delivery charge, if this is a delivery. It is part of the total the
+  // customer pays, so it goes into the check below.
+  const charge = resolveDeliveryCharge(order.or_type, order.delivery_charge);
+  if (charge.error) return res.status(400).json({ success: false, error: charge.error });
+  const deliveryCharge = charge.value;
+
+  const costError = validateCosts(order.or_tax ?? 0, order.or_totalcost, order.or_totalCostWtax, deliveryCharge);
   if (costError) return res.status(400).json({ success: false, error: costError });
 
   for (const [i, it] of items.entries()) {
@@ -1236,8 +1279,9 @@ export const createOrderWithItems = async (req, res) => {
          (or_tax, or_totalcost, "or_totalCostWtax", or_status, or_type,
           cust_id, u_id, b_id, table_id, client_ref,
           discount_pct, service_fee, discount_approved_by,
-          payment_method, session_id, kitchen_note, delivery_partner)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          payment_method, session_id, kitchen_note, delivery_partner,
+          delivery_charge)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1248,6 +1292,7 @@ export const createOrderWithItems = async (req, res) => {
         tender, drawerId,
         String(order.kitchen_note ?? "").trim().slice(0, 500) || null,
         resolvedDeliveryPartner,
+        deliveryCharge,
       ],
     );
     const created = rows[0];

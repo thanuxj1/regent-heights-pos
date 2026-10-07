@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaSearch, FaClock } from "react-icons/fa";
 import CashierHeader from "../../components/cashier/Header";
+import KotPrintingModal from "../../components/cashier/KotPrintingModal";
 import { useAuth } from "../../context/AuthContext";
 import { connectSocket } from "../../services/socket";
 import { printKot } from "../../utils/printKot";
@@ -68,6 +69,8 @@ const statusPalette = {
 // themselves, and which orders have already been put on paper.
 const AUTO_PRINT_KEY = "kitchen.autoPrintKot";
 const printedKey = (branchId) => `kitchen.printedKot:${branchId ?? "all"}`;
+// Safety-net refresh, for when a live event never arrives.
+const REFRESH_EVERY_MS = 15000;
 
 const KitchenManagement = () => {
 	const { user } = useAuth();
@@ -94,6 +97,18 @@ const KitchenManagement = () => {
 			return true;
 		}
 	});
+	const [printSetupOpen, setPrintSetupOpen] = useState(false);
+	// Is the live link to the server up? When it is not, the screen still checks
+	// every few seconds, but staff should be able to see that at a glance.
+	const [live, setLive] = useState(false);
+	const toggleAutoPrint = (next) => {
+		setAutoPrint(next);
+		try {
+			localStorage.setItem(AUTO_PRINT_KEY, next ? "on" : "off");
+		} catch {
+			// The screen still works; it just forgets by tomorrow.
+		}
+	};
 	// Orders already on paper, remembered across reloads so refreshing the
 	// screen does not reprint the whole board.
 	const printedRef = useRef(new Set());
@@ -191,16 +206,32 @@ const KitchenManagement = () => {
 
 		loadData(false);
 
-		socket.on("order:created", () => scheduleRefresh(true));
-		socket.on("order:updated", () => scheduleRefresh(true));
-		socket.on("order:deleted", () => scheduleRefresh(true));
+		// "order:created" is sent only to the kitchen room, and only a Kitchen
+		// Staff login joins it. This screen is also opened by Administrators and
+		// Cashiers — and a property with no Kitchen Staff account has nobody else —
+		// so on its own it never heard a new order, never refreshed, and never
+		// printed one. "order:new" goes to the whole branch, so every login hears
+		// it. Both are listened for; a refresh that two events ask for happens once.
+		const onOrderChange = () => scheduleRefresh(true);
+		const EVENTS = ["order:new", "order:created", "order:updated", "order:deleted"];
+		EVENTS.forEach((event) => socket.on(event, onOrderChange));
+
+		// A dropped connection must not silently stop the printing. Check again
+		// whenever the link comes back, and every so often regardless.
+		const onConnect = () => { setLive(true); loadData(true); };
+		const onDisconnect = () => setLive(false);
+		socket.on("connect", onConnect);
+		socket.on("disconnect", onDisconnect);
+		setLive(socket.connected);
+		const poll = window.setInterval(() => loadData(true), REFRESH_EVERY_MS);
 
 		return () => {
 			isMounted = false;
 			if (refreshTimer) window.clearTimeout(refreshTimer);
-			socket.off("order:created");
-			socket.off("order:updated");
-			socket.off("order:deleted");
+			window.clearInterval(poll);
+			EVENTS.forEach((event) => socket.off(event, onOrderChange));
+			socket.off("connect", onConnect);
+			socket.off("disconnect", onDisconnect);
 		};
 	}, [user]);
 
@@ -617,17 +648,22 @@ const KitchenManagement = () => {
 						</div>
 
 						<div className="flex items-center gap-2">
+							<span
+								title={
+									live
+										? "Connected — new orders appear here and print as they arrive"
+										: "Not connected — checking for new orders every 15 seconds"
+								}
+								className={`flex items-center gap-1.5 px-1 text-xs font-semibold ${
+									live ? "text-emerald-600" : "text-amber-600"
+								}`}
+							>
+								<span className={`h-2 w-2 rounded-full ${live ? "bg-emerald-500" : "bg-amber-400"}`} />
+								{live ? "Live" : "Reconnecting…"}
+							</span>
 							<button
 								type="button"
-								onClick={() => {
-									const next = !autoPrint;
-									setAutoPrint(next);
-									try {
-										localStorage.setItem(AUTO_PRINT_KEY, next ? "on" : "off");
-									} catch {
-										// The screen still works; it just forgets by tomorrow.
-									}
-								}}
+								onClick={() => toggleAutoPrint(!autoPrint)}
 								title={
 									autoPrint
 										? "Every new order prints a ticket as it arrives"
@@ -644,7 +680,26 @@ const KitchenManagement = () => {
 								/>
 								Auto-print tickets: {autoPrint ? "on" : "off"}
 							</button>
+							<button
+								type="button"
+								onClick={() => setPrintSetupOpen(true)}
+								title="Check this PC's printer and see how to set it up"
+								className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+							>
+								Printer setup
+							</button>
 						</div>
+
+						{printSetupOpen && (
+							<KotPrintingModal
+								mode="kitchen"
+								enabled={autoPrint}
+								onToggle={toggleAutoPrint}
+								branchName={branchName || ""}
+								staffName={`${user?.u_fname || ""} ${user?.u_lname || ""}`.trim()}
+								onClose={() => setPrintSetupOpen(false)}
+							/>
+						)}
 					</div>
 
 					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">

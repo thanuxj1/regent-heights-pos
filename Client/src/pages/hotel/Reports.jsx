@@ -56,11 +56,11 @@ export default function Reports() {
 
   const exportCsv = () => {
     if (!ledger?.transactions?.length) return;
-    const head = ["Date", "Time", "Type", "Direction", "Amount", "Method", "Reference", "Party", "Handled by"];
+    const head = ["Date", "Time", "Type", "Direction", "Amount", "Of which delivery charge", "Method", "Reference", "Party", "Handled by"];
     const clock = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? "" : d.toTimeString().slice(0, 5); };
     const rows = ledger.transactions.map(t => [
       dateCell(dayKey(t.at)), clock(t.at), t.type, t.direction,
-      t.amount, t.method || "", t.reference || "", t.party || "", t.handled_by || "",
+      t.amount, t.delivery_charge > 0 ? t.delivery_charge : "", t.method || "", t.reference || "", t.party || "", t.handled_by || "",
     ]);
     downloadCsv(`report_${from}_to_${to}`, head, rows);
   };
@@ -76,6 +76,7 @@ export default function Reports() {
       section("REVENUE"),
       ["Hotel (rooms, meals, room service)", money(data.revenue.hotel)],
       ["Restaurant (walk-in)", money(data.revenue.restaurant)],
+      ["   of which delivery charges (already included above)", money(data.revenue.delivery_charges ?? 0)],
       ["Total revenue", money(data.revenue.total)],
       [],
       section("EXPENSES"),
@@ -196,6 +197,12 @@ export default function Reports() {
                       </div>
                     );
                   })}
+                  {/* Part of the Restaurant figure above, not on top of it — the bars
+                      still add up to the total. Shown so delivery income is visible. */}
+                  <div style={{ fontSize: 12, color: "#64748B", marginTop: -4 }}>
+                    Restaurant includes delivery charges of{" "}
+                    <strong style={{ color: "#1E293B" }}>{money(data.revenue.delivery_charges ?? 0)}</strong>
+                  </div>
 
                   <div style={{ marginTop: 24, background: "#F8FAFC", borderRadius: 10, padding: 16 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#1E293B", marginBottom: 10 }}>Hotel Performance</div>
@@ -236,7 +243,12 @@ export default function Reports() {
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#1E293B", marginBottom: 10 }}>Profit & Loss</div>
                     {[
                       ["Hotel revenue", money(data.revenue.hotel), "#065F46"],
-                      ["Restaurant revenue", money(data.revenue.restaurant), "#065F46"],
+                      [
+                        data.revenue.delivery_charges > 0
+                          ? `Restaurant revenue (incl. ${money(data.revenue.delivery_charges)} delivery charges)`
+                          : "Restaurant revenue",
+                        money(data.revenue.restaurant), "#065F46",
+                      ],
                       ["Operating expenses", `(${money(data.expenses.total)})`, "#B91C1C"],
                       ["Agent commissions", `(${money(data.expenses.commissions)})`, "#B91C1C"],
                     ].map(([k, v, c]) => (
@@ -347,6 +359,11 @@ export default function Reports() {
                             <td style={{ ...td, textTransform: "capitalize" }}>{(t.method || "—").replace(/_/g, " ")}</td>
                             <td style={{ ...td, fontWeight: 700, color: t.direction === "in" ? "#059669" : "#B91C1C" }}>
                               {t.direction === "in" ? "+" : "−"}{money(t.amount)}
+                              {t.delivery_charge > 0 && (
+                                <div style={{ fontWeight: 400, fontSize: 11, color: "#64748B" }}>
+                                  incl. {money(t.delivery_charge)} delivery
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))}

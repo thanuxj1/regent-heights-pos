@@ -56,6 +56,7 @@ const InvoicePreview = () => {
   const discountAmount = (subtotalNum * discountPct / 100).toFixed(2);
   const serviceFee = Number(invoice.serviceFee ?? 0).toFixed(2);
   const tax = Number(invoice.tax ?? 0).toFixed(2);
+  const deliveryCharge = Number(invoice.deliveryCharge ?? 0).toFixed(2);
 
   const handlePrint = () => {
     printReceipt(invoice);
@@ -220,6 +221,12 @@ const InvoicePreview = () => {
                 <div className="flex items-center justify-between">
                   <span>Tax</span>
                   <span className="font-semibold text-slate-900">LKR {tax}</span>
+                </div>
+              )}
+              {Number(deliveryCharge) > 0 && (
+                <div className="flex items-center justify-between">
+                  <span>Delivery Charge</span>
+                  <span className="font-semibold text-slate-900">LKR {deliveryCharge}</span>
                 </div>
               )}
               <div className="flex items-center justify-between border-t border-slate-200 pt-2.5 text-sm font-semibold text-slate-900">
