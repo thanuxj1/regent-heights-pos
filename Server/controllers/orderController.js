@@ -1270,12 +1270,6 @@ export const createOrderWithItems = async (req, res) => {
       ? order.delivery_partner
       : null;
 
-  // Goods that never pass through the kitchen (a bottle of water sent out with a
-  // rider, say) are rung up already handed over: no ticket on the kitchen screen,
-  // nothing for it to print. Only a delivery can ask for this — a dine-in or
-  // takeaway sale that skips the kitchen simply goes through Checkout.
-  const skipKitchen = order.skip_kitchen === true && order.or_type === "delivery";
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1291,7 +1285,7 @@ export const createOrderWithItems = async (req, res) => {
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
-        parseFloat(order.or_totalCostWtax), skipKitchen ? "completed" : (order.or_status ?? "pending"),
+        parseFloat(order.or_totalCostWtax), order.or_status ?? "pending",
         order.or_type, order.cust_id ?? null, order.u_id, b_id,
         order.table_id ?? null, clientRef,
         discountPct, serviceFee, discountApprover,
@@ -1330,14 +1324,12 @@ export const createOrderWithItems = async (req, res) => {
     await client.query("COMMIT");
 
     emitOrderEvent("order:new", created);
-    if (!skipKitchen) {
-      emitSocketEvent("order:created", created, { room: getKitchenSocketRoom(created.b_id) });
-    }
+    emitSocketEvent("order:created", created, { room: getKitchenSocketRoom(created.b_id) });
 
     logActivity(req, {
       action: "create", entity: "order", entity_id: created.or_id, b_id: created.b_id,
       summary: `Rang up order #${created.or_id} — ${Number(created["or_totalCostWtax"] ?? 0).toFixed(2)}`
-             + ` (${created.or_type ?? "order"}${skipKitchen ? ", not through the kitchen" : ""}${discountPct ? `, ${discountPct}% off` : ""}`
+             + ` (${created.or_type ?? "order"}${discountPct ? `, ${discountPct}% off` : ""}`
              + `${order.queued_at ? ", sent from offline queue" : ""})`
              + (stock.short.length
                ? ` — beyond the stock count for ${stock.short.map((s) => s.name).join(", ")}; worth a recount`
