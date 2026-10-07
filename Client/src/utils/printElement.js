@@ -12,8 +12,15 @@
  * never printed at all. A frame needs no gesture, leaves no stray about:blank
  * window behind, and prints exactly what is inside it.
  */
-export function printElement(node, { title = document.title, widthMm = 210, paddingMm = 14, onDone } = {}) {
+export function printElement(node, { title = document.title, widthMm = 210, paddingMm, onDone } = {}) {
   if (!node) return;
+
+  // A till roll (80mm or narrower) vs a sheet. A roll's head prints from the
+  // paper's LEFT edge, so the slip is laid against the left, never centred: a
+  // driver that reports a page wider than the roll pushed a centred slip to the
+  // right and clipped it. A sheet keeps its centred column.
+  const roll = widthMm <= 90;
+  if (paddingMm == null) paddingMm = roll ? 4 : 14;
 
   // Carry the app's stylesheets across so Tailwind classes still resolve.
   // Inline styles ride along inside outerHTML on their own.
@@ -43,7 +50,7 @@ export function printElement(node, { title = document.title, widthMm = 210, padd
         width: 100%;
         max-width: ${widthMm}mm;
         max-height: none !important;
-        margin: 0 auto;
+        margin: ${roll ? "0" : "0 auto"};
         /* @page below has no margin — this replaces it. A page margin makes
            Chrome print its own header/footer (page title, URL, date) in the
            space it opens up; a page with none of its own leaves no room for
@@ -74,6 +81,17 @@ export function printElement(node, { title = document.title, widthMm = 210, padd
         overflow: visible !important;
         box-shadow: none !important;
       }
+      ${roll ? `
+      /* Screens lay receipts out in columns far too wide for a roll: labels ran
+         into each other. One column, tighter spacing. */
+      .printed .grid { grid-template-columns: 1fr !important; gap: 6px !important; }
+      .printed .p-6, .printed .p-4 { padding: 6px !important; }
+      .printed .px-6, .printed .px-4 { padding-left: 4px !important; padding-right: 4px !important; }
+      .printed .space-y-5 > * + * { margin-top: 8px !important; }
+      .printed table { width: 100% !important; font-size: 11px; }
+      .printed th, .printed td { padding: 3px 2px !important; }
+      .printed { font-size: 12px; }
+      .printed * { word-break: break-word; }` : ""}
       .no-print, .no-print * { display: none !important; }
       .print-only { display: block !important; }
 

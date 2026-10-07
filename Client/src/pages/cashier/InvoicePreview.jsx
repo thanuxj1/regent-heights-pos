@@ -213,7 +213,7 @@ const InvoicePreview = () => {
               )}
               {Number(serviceFee) > 0 && (
                 <div className="flex items-center justify-between">
-                  <span>Service Fee</span>
+                  <span>Service Charge</span>
                   <span className="font-semibold text-slate-900">LKR {serviceFee}</span>
                 </div>
               )}

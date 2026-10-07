@@ -129,7 +129,9 @@ const CashierPos = () => {
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [pinEntry, setPinEntry] = useState("");
   const [pinError, setPinError] = useState("");
-  const [serviceFee, setServiceFee] = useState(0);
+  // Service charge as a percentage of the bill after discount, like the discount
+  // box. What goes to the server is the amount (serviceFee, below).
+  const [servicePct, setServicePct] = useState(0);
   const [heldOrders, setHeldOrders] = useState(() => {
     try {
       const stored = localStorage.getItem(`held_orders_${user?.u_id ?? "guest"}`);
@@ -521,6 +523,7 @@ const CashierPos = () => {
   const effectiveTaxRate = subtotal > 0 ? (itemTaxTotal / subtotal) * 100 : 0;
 
   const discountAmount = subtotal * (Number(discountPct || 0) / 100);
+  const serviceFee = Number(((subtotal - discountAmount) * (Number(servicePct || 0) / 100)).toFixed(2));
   const taxableBase = subtotal - discountAmount + Number(serviceFee || 0);
   const tax = taxableBase * (effectiveTaxRate / 100);
   // The delivery charge is added after tax — the customer pays exactly LKR 50 or
@@ -1147,7 +1150,7 @@ const CashierPos = () => {
       addons,
       notes,
       discountPct,
-      serviceFee,
+      servicePct,
     });
     setHoldTableInput("");
     setShowHoldTableModal(true);
@@ -1175,7 +1178,7 @@ const CashierPos = () => {
     setAddons("");
     setNotes("");
     setDiscountPct(0);
-    setServiceFee(0);
+    setServicePct(0);
   };
 
   const handleResumeOrder = (holdId) => {
@@ -1196,7 +1199,7 @@ const CashierPos = () => {
         addons,
         notes,
         discountPct,
-        serviceFee,
+        servicePct,
       };
       setHeldOrders((prev) => [...prev, autoHeld]);
     }
@@ -1211,7 +1214,7 @@ const CashierPos = () => {
     setAddons(orderToResume.addons || "");
     setNotes(orderToResume.notes || "");
     setDiscountPct(orderToResume.discountPct || 0);
-    setServiceFee(orderToResume.serviceFee || 0);
+    setServicePct(orderToResume.servicePct || 0);
 
     setHeldOrders((prev) => prev.filter((ho) => ho.id !== holdId));
     setShowHeldOrdersModal(false);
@@ -1710,6 +1713,22 @@ const CashierPos = () => {
                 {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && (
                   <p className="mt-0.5 text-[11px] text-amber-600">A manager's PIN will be needed at checkout.</p>
                 )}
+                <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    Service charge
+                    <input
+                      type="number" min={0} max={100} step="0.5"
+                      value={servicePct || ""}
+                      onChange={(e) => setServicePct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                      placeholder="0"
+                      className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-right text-xs outline-none focus:border-[#0A5BAE]"
+                    />
+                    <span>%</span>
+                  </span>
+                  <span className="font-semibold text-slate-900">
+                    {serviceFee > 0 ? `LKR ${serviceFee.toFixed(2)}` : "LKR 0.00"}
+                  </span>
+                </div>
                 <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
                   <span>Tax {effectiveTaxRate > 0 ? `(${effectiveTaxRate.toFixed(1)}%)` : ""}</span>
                   <span className="font-semibold text-slate-900">LKR {tax.toFixed(2)}</span>
