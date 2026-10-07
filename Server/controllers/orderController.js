@@ -1302,8 +1302,8 @@ export const createOrderWithItems = async (req, res) => {
       const qty = Number(it.pro_quantity);
       const unit = Number(it.unit_price);
       const line = await client.query(
-        `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id)
-         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost)
+         VALUES ($1,$2,$3,$4,$5, (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1)) RETURNING *`,
         [it.Bpro_id, qty, unit, Number((qty * unit).toFixed(2)), created.or_id],
       );
       lines.push(line.rows[0]);

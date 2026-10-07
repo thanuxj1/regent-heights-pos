@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS "ORDER_ITEM" (
     pro_quantity   INTEGER,
     unit_price     NUMERIC(10,2),
     total_price    NUMERIC(10,2),
-    order_id       INTEGER       REFERENCES "ORDER"(or_id)
+    order_id       INTEGER       REFERENCES "ORDER"(or_id),
+    unit_cost      NUMERIC(10,2)
 );
 
 -- ─── Payment ─────────────────────────────────────────────────

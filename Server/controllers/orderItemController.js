@@ -248,8 +248,8 @@ export const createOrderItem = async (req, res) => {
     await client.query("BEGIN");
 
     const result = await client.query(
-      `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost)
+       VALUES ($1, $2, $3, $4, $5, (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1))
        RETURNING *`,
       [Bpro_id, qty, price, total_price, parsedOrderId],
     );
@@ -402,7 +402,8 @@ export const updateOrderItem = async (req, res) => {
 
     const result = await client.query(
       `UPDATE public."ORDER_ITEM"
-       SET "Bpro_id" = $1, pro_quantity = $2, unit_price = $3, total_price = $4, order_id = $5
+       SET "Bpro_id" = $1, pro_quantity = $2, unit_price = $3, total_price = $4, order_id = $5,
+           unit_cost = (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1)
        WHERE "orderItem_id" = $6
        RETURNING *`,
       [Bpro_id, qty, price, total_price, parsedOrderId, id],

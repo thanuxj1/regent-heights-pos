@@ -218,8 +218,20 @@ export async function getSummary(req, res, next) {
     const roomsAvailable = num(occupancy.rows[0].n) * spanDays;
     const roomsSold = num(roomNights.rows[0].sold);
 
+    const prod = await productProfitRows(b_id, from, to);
+    const prodSales = prod.reduce((n, p) => n + p.sales, 0);
+    const prodCost = prod.reduce((n, p) => n + p.cost, 0);
+
     res.json({
       range: { from, to, days: spanDays },
+      // Dish-level profit: what the food sold for against what it cost. A different
+      // view from "profit" below (cash in less cash out) — see productProfitRows.
+      product_profit: {
+        sales: +prodSales.toFixed(2), cost: +prodCost.toFixed(2),
+        profit: +(prodSales - prodCost).toFixed(2),
+        margin_pct: prodSales ? +(((prodSales - prodCost) / prodSales) * 100).toFixed(1) : 0,
+        products_without_cost: prod.filter((p) => p.no_cost_set).length,
+      },
       // delivery_charges is a part of restaurant, not an addition to it — total
       // is hotel + restaurant exactly as before.
       revenue: { hotel: hotelRev, restaurant: restRev, delivery_charges: deliveryCharges, total: revenue },
@@ -252,6 +264,83 @@ export async function getSummary(req, res, next) {
         cod_outstanding: num(codOutstanding.rows[0].total),
       },
       daily,
+    });
+  } catch (err) { next(err); }
+}
+
+
+/**
+ * What each dish sold and what it cost to make or buy.
+ *
+ * Counts the same sales as the restaurant revenue figure (walk-in orders, not
+ * cancelled, a COD delivery only once settled), so the two always agree on
+ * which sales are in. Sales here are the line totals — before any order-level
+ * discount, service charge, tax or delivery charge, which belong to the whole
+ * bill and not to one dish.
+ *
+ * Cost is what the product cost when it was sold (ORDER_ITEM.unit_cost). A
+ * line sold before costs were recorded falls back to the product's cost price
+ * today; a product with no cost price at all is flagged, not counted as free.
+ */
+async function productProfitRows(b_id, from, to) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(p.pro_id::text, 'b' || bp."Bpro_id"::text) AS key,
+            COALESCE(p.pro_name, bp.pro_name, 'Unknown item') AS name,
+            c.cat_name AS category,
+            SUM(oi.pro_quantity)::numeric AS units,
+            SUM(COALESCE(oi.total_price, oi.pro_quantity * oi.unit_price, 0)) AS sales,
+            SUM(oi.pro_quantity * COALESCE(oi.unit_cost, NULLIF(p.cost_price, 0), 0)) AS cost,
+            COALESCE(SUM(oi.pro_quantity) FILTER (WHERE COALESCE(oi.unit_cost, NULLIF(p.cost_price, 0)) IS NULL), 0)::numeric AS units_no_cost
+     FROM "ORDER_ITEM" oi
+     JOIN "ORDER" o ON o.or_id = oi.order_id
+      LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
+     LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"
+     LEFT JOIN "Product" p ON p.pro_id = bp.pro_id
+     LEFT JOIN "category" c ON c.cat_id = p.cat_id
+     WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
+       AND (
+         (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND o.or_date BETWEEN $2::date AND $3::date)
+         OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date BETWEEN $2::date AND $3::date)
+       )
+     GROUP BY 1, 2, 3
+     ORDER BY 5 DESC`,
+    [b_id, from, to]
+  );
+  return rows.map((r) => {
+    const sales = num(r.sales), cost = num(r.cost);
+    return {
+      key: r.key, name: r.name, category: r.category || null,
+      units: num(r.units), sales, cost,
+      profit: +(sales - cost).toFixed(2),
+      margin_pct: sales ? +(((sales - cost) / sales) * 100).toFixed(1) : 0,
+      units_no_cost: num(r.units_no_cost),
+      no_cost_set: num(r.units_no_cost) > 0,
+    };
+  });
+}
+
+/**
+ * GET /api/reports/products?b_id=&from=&to=
+ * Per-product sales, cost, profit and margin.
+ */
+export async function getProductProfit(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    if (!b_id) { res.status(400); return next(new Error("b_id is required")); }
+    const from = req.query.from || daysAgo(29);
+    const to   = req.query.to   || todayStr();
+    const products = await productProfitRows(b_id, from, to);
+    const sales = products.reduce((s, p) => s + p.sales, 0);
+    const cost = products.reduce((s, p) => s + p.cost, 0);
+    res.json({
+      range: { from, to },
+      products,
+      totals: {
+        units: products.reduce((s, p) => s + p.units, 0),
+        sales: +sales.toFixed(2), cost: +cost.toFixed(2), profit: +(sales - cost).toFixed(2),
+        margin_pct: sales ? +(((sales - cost) / sales) * 100).toFixed(1) : 0,
+        products_without_cost: products.filter((p) => p.no_cost_set).length,
+      },
     });
   } catch (err) { next(err); }
 }

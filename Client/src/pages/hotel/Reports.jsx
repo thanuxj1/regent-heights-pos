@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
-import { getReportSummary, getReportTransactions } from "../../services/api";
+import { getReportSummary, getReportTransactions, getReportProducts } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
@@ -32,6 +32,8 @@ export default function Reports() {
   const [preset, setPreset] = useState("Last 30 days");
   const [data, setData] = useState(null);
   const [ledger, setLedger] = useState(null);
+  const [prodReport, setProdReport] = useState(null);
+  const [prodSort, setProdSort] = useState("sales");
   const [tab, setTab] = useState("overview");
   const [kind, setKind] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -41,11 +43,12 @@ export default function Reports() {
     if (!branchId) return;
     setLoading(true); setError("");
     try {
-      const [s, t] = await Promise.all([
+      const [s, t, p] = await Promise.all([
         getReportSummary({ b_id: branchId, from, to }),
         getReportTransactions({ b_id: branchId, from, to, kind }),
+        getReportProducts({ b_id: branchId, from, to }),
       ]);
-      setData(s); setLedger(t);
+      setData(s); setLedger(t); setProdReport(p);
     } catch (e) {
       setError(e?.response?.data?.message || "Could not load reports");
     } finally { setLoading(false); }
@@ -63,6 +66,21 @@ export default function Reports() {
       t.amount, t.delivery_charge > 0 ? t.delivery_charge : "", t.method || "", t.reference || "", t.party || "", t.handled_by || "",
     ]);
     downloadCsv(`report_${from}_to_${to}`, head, rows);
+  };
+
+  const sortedProducts = useMemo(() => {
+    const list = [...(prodReport?.products ?? [])];
+    // Lowest margin first for "margin" (the dishes to look at); everything else biggest first.
+    return prodSort === "name" ? list.sort((a, b) => a.name.localeCompare(b.name))
+      : prodSort === "margin" ? list.sort((a, b) => a.margin_pct - b.margin_pct)
+      : list.sort((a, b) => b[prodSort] - a[prodSort]);
+  }, [prodReport, prodSort]);
+
+  const exportProductsCsv = () => {
+    if (!prodReport?.products?.length) return;
+    const head = ["Product", "Category", "Units sold", "Sales", "Cost", "Profit", "Margin %", "Cost price set?"];
+    const rows = sortedProducts.map(p => [p.name, p.category || "", p.units, p.sales, p.cost, p.profit, p.margin_pct, p.no_cost_set ? "NO" : "yes"]);
+    downloadCsv(`product_profit_${from}_to_${to}`, head, rows);
   };
 
   const exportSummaryCsv = () => {
@@ -95,6 +113,13 @@ export default function Reports() {
       ["ADR — average daily rate per room sold", money(data.occupancy.adr)],
       ["RevPAR — revenue per available room", money(data.occupancy.revpar)],
       ["Restaurant orders", data.restaurant_orders],
+      [],
+      section("DISH PROFIT (food sold vs what it cost)"),
+      ["Dish sales (before bill-level discount, service, tax)", money(data.product_profit?.sales ?? 0)],
+      ["Cost of those dishes", money(data.product_profit?.cost ?? 0)],
+      ["Dish profit", money(data.product_profit?.profit ?? 0)],
+      ["Dish margin", pct(data.product_profit?.margin_pct ?? 0)],
+      ["Products with no cost price set", data.product_profit?.products_without_cost ?? 0],
     ];
     downloadCsv(`profit_summary_${from}_to_${to}`, head, rows);
   };
@@ -155,6 +180,8 @@ export default function Reports() {
                 `incl. ${money(data.expenses.commissions)} commission`],
               ["Net Profit", money(data.profit.net),
                 data.profit.net >= 0 ? "#1565C0" : "#B91C1C", "#EFF6FF", `${data.profit.margin_pct}% margin`],
+              ["Dish Profit", money(data.product_profit?.profit ?? 0), "#92400E", "#FEF3C7",
+                `${data.product_profit?.margin_pct ?? 0}% margin on food sold`],
               ["Occupancy", `${data.occupancy.occupancy_pct}%`, "#6B21A8", "#F3E8FF",
                 `${data.occupancy.rooms_sold} of ${data.occupancy.rooms_available} room-nights`],
             ].map(([k, v, fg, bg, sub]) => (
@@ -170,6 +197,7 @@ export default function Reports() {
             <div style={{ display: "flex", borderBottom: "1px solid #E2E8F0", paddingLeft: 8 }}>
               <button onClick={() => setTab("overview")} style={tabStyle("overview")}>Overview</button>
               <button onClick={() => setTab("daily")}    style={tabStyle("daily")}>Daily Breakdown</button>
+              <button onClick={() => setTab("products")} style={tabStyle("products")}>Product Profit</button>
               <button onClick={() => setTab("ledger")}   style={tabStyle("ledger")}>Transactions</button>
             </div>
 
@@ -318,6 +346,67 @@ export default function Reports() {
             )}
 
             {/* Ledger */}
+            {/* Product profit */}
+            {tab === "products" && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, padding: "14px 20px" }}>
+                  <div style={{ fontSize: 12, color: "#64748B" }}>
+                    Sales <strong>{money(prodReport?.totals?.sales ?? 0)}</strong> ·
+                    Cost <strong style={{ color: "#B91C1C" }}> {money(prodReport?.totals?.cost ?? 0)}</strong> ·
+                    Profit <strong style={{ color: "#059669" }}> {money(prodReport?.totals?.profit ?? 0)}</strong> ·
+                    Margin <strong> {prodReport?.totals?.margin_pct ?? 0}%</strong>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <select value={prodSort} onChange={e => setProdSort(e.target.value)} style={{ ...input, width: 170 }}>
+                      <option value="sales">Biggest sales</option>
+                      <option value="profit">Biggest profit</option>
+                      <option value="margin">Lowest margin first</option>
+                      <option value="units">Most units sold</option>
+                      <option value="name">Name A–Z</option>
+                    </select>
+                    <button onClick={exportProductsCsv} disabled={!prodReport?.products?.length} style={btn("ghost")}>Export</button>
+                  </div>
+                </div>
+                {prodReport?.totals?.products_without_cost > 0 && (
+                  <div style={{ margin: "0 20px 12px", padding: "10px 14px", background: "#FEF3C7", color: "#92400E", borderRadius: 8, fontSize: 12 }}>
+                    {prodReport.totals.products_without_cost} product(s) have no cost price set, so their profit shows
+                    as if they cost nothing. Add a cost price on the product to correct it.
+                  </div>
+                )}
+                {!prodReport?.products?.length ? (
+                  <div style={{ padding: 40, textAlign: "center", color: "#94A3B8" }}>No product sales in this range.</div>
+                ) : (
+                  <div style={{ maxHeight: 460, overflowY: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead><tr style={{ background: "#F8FAFC", position: "sticky", top: 0 }}>
+                        {["Product", "Units", "Sales", "Cost", "Profit", "Margin"].map(h => <th key={h} style={th}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {sortedProducts.map(p => (
+                          <tr key={p.key} style={{ borderTop: "1px solid #F1F5F9" }}>
+                            <td style={{ ...td, color: "#1E293B" }}>
+                              {p.name}
+                              {p.category && <span style={{ color: "#94A3B8", fontSize: 11 }}> · {p.category}</span>}
+                              {p.no_cost_set && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", padding: "1px 6px", borderRadius: 8 }}>no cost</span>}
+                            </td>
+                            <td style={td}>{p.units}</td>
+                            <td style={td}>{money(p.sales)}</td>
+                            <td style={{ ...td, color: "#B91C1C" }}>{money(p.cost)}</td>
+                            <td style={{ ...td, fontWeight: 700, color: p.profit >= 0 ? "#059669" : "#B91C1C" }}>{money(p.profit)}</td>
+                            <td style={td}>{p.margin_pct}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div style={{ padding: "10px 20px 16px", fontSize: 11, color: "#94A3B8" }}>
+                  Sales are the dish prices before any bill-level discount, service charge, tax or delivery charge.
+                  Cost is what the dish cost when it was sold.
+                </div>
+              </div>
+            )}
+
             {tab === "ledger" && (
               <div>
                 <div style={{ padding: "14px 20px", borderBottom: "1px solid #F1F5F9", display: "flex",

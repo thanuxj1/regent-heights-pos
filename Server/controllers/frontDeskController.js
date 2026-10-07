@@ -367,8 +367,8 @@ export async function createRoomServiceOrder(req, res, next) {
     for (const i of priced) {
       const unit = num(i.unit_price);
       const line = await client.query(
-        `INSERT INTO "ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id)
-         VALUES ($1,$2,$3,$4,$5) RETURNING "orderItem_id"`,
+        `INSERT INTO "ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost)
+         VALUES ($1,$2,$3,$4,$5, (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1)) RETURNING "orderItem_id"`,
         [Number(i.Bpro_id), i.qty, unit, +(i.qty * unit).toFixed(2), order.or_id]
       );
       lines.push({ bpro_id: Number(i.Bpro_id), qty: i.qty, order_item_id: line.rows[0].orderItem_id });
