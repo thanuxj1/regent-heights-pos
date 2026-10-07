@@ -3,10 +3,9 @@
 // so launching the server by absolute path from another folder silently left
 // JWT_SECRET and DATABASE_URL unset — every authenticated request then failed
 // with a 500 and the cause was invisible.
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import dotenv from "dotenv";
-dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), ".env") });
+// Must stay the first import: it loads .env before any other module reads the environment
+// (see config/loadEnv.js for why a call in this file's body is too late).
+import "./config/loadEnv.js";
 import express from "express";
 import cors from "cors";
 import { checkConfig, corsOrigin, describeCorsOrigin } from "./config/env.js";

@@ -1,3 +1,6 @@
+// Read the environment only after .env is in it, whoever imports this first.
+import "./loadEnv.js";
+
 /**
  * Configuration, checked once at boot.
  *
