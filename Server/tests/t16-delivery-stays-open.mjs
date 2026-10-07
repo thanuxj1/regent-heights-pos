@@ -80,6 +80,21 @@ await t("a delivery paid by card at the door is not kept open", async () => {
   ok(!(await onTill(plainCashId)), "already paid, so it drops off once the kitchen is done");
 });
 
+await t("a paid order nobody in the kitchen touched does not linger on the till's list", async () => {
+  const id = await sell("paidwait", { delivery_partner: partner, payment_method: "card" });
+  ok(!(await onTill(id)), "paid and still Waiting: nothing for the till to do with it");
+});
+
+await t("an unpaid order stays until it is paid", async () => {
+  const res = await api(cashier, "POST", "/orders/with-items", {
+    order: { or_tax: 0, or_totalcost: 500, or_totalCostWtax: 500, or_status: "pending", or_type: "dine-in",
+      u_id: A.cashier.u_id, b_id: A.b_id, client_ref: `${stamp.toLowerCase()}-so-unpaid` },
+    items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 500 }],
+  });
+  status(res, 201);
+  ok(await onTill(res.data.data.or_id), "unpaid, so it is money still to collect");
+});
+
 await t("the cashier can take the rider's cash, and the order leaves the list", async () => {
   status(await api(cashier, "POST", "/delivery-cod/settle", {
     delivery_partner: partner, amount: 600, method: "cash", order_ids: [orderId],

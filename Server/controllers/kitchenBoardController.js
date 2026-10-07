@@ -42,11 +42,19 @@ export async function getKitchenBoard(req, res) {
     // A cash-on-delivery order has a payment method from the moment it is sent out, but
     // the money is not in until the rider is back — so it stays on the till's list
     // until it is settled, however long that takes.
+    // For the till, an order that is already paid and that the kitchen has not started on
+    // is nothing to act on: it is not money to collect, and a place with no kitchen screen
+    // never moves anything out of "Waiting", so these would pile up. Unpaid orders and
+    // cash-on-delivery still to come in (below) stay however long that takes.
+    const tillAtThePass = `((o.or_status = 'preparing'
+            AND (o.or_date + o.or_time) > NOW() - make_interval(hours => $2::int))
+        OR (o.or_status = 'completed'
+            AND o.status_changed_at > NOW() - make_interval(mins => $1::int)))`;
     const unpaid = `((o.payment_method IS NULL AND o.or_status <> 'cancelled'
         AND o.or_type <> 'room_service' AND o.or_date >= CURRENT_DATE - 7)
         OR (o.payment_method = 'cod' AND o.cod_settlement_id IS NULL AND o.or_status <> 'cancelled'))`;
     const conditions = [
-      forTheTill ? `(${atThePass} OR ${unpaid})` : atThePass,
+      forTheTill ? `(${tillAtThePass} OR ${unpaid})` : atThePass,
       // Nothing on it, nothing to cook. A waiter's order is written a moment
       // before its dishes, and would otherwise flash up empty.
       `EXISTS (SELECT 1 FROM "ORDER_ITEM" i WHERE i.order_id = o.or_id)`,
