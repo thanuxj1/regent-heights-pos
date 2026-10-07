@@ -169,7 +169,7 @@ export async function createSupplier(req, res, next) {
     }
 
     // ── Address validation ──
-    if (sup_address !== undefined) {
+    if (sup_address !== undefined && sup_address !== null && sup_address !== "") {
       if (typeof sup_address !== "string") {
         res.status(400);
         throw new Error("sup_address must be a string");
@@ -298,7 +298,7 @@ export async function updateSupplier(req, res, next) {
     }
 
     // ── Email validation ──
-    if (sup_email !== undefined) {
+    if (sup_email !== undefined && sup_email !== null && sup_email !== "") {
       if (typeof sup_email !== "string") {
         res.status(400);
         throw new Error("sup_email must be a string");
@@ -326,7 +326,7 @@ export async function updateSupplier(req, res, next) {
     }
 
     // ── Contact validation ──
-    if (sup_contact !== undefined) {
+    if (sup_contact !== undefined && sup_contact !== null && sup_contact !== "") {
       if (typeof sup_contact !== "string") {
         res.status(400);
         throw new Error("sup_contact must be a string");
@@ -352,7 +352,7 @@ export async function updateSupplier(req, res, next) {
     }
 
     // ── Address validation ──
-    if (sup_address !== undefined) {
+    if (sup_address !== undefined && sup_address !== null && sup_address !== "") {
       if (typeof sup_address !== "string") {
         res.status(400);
         throw new Error("sup_address must be a string");

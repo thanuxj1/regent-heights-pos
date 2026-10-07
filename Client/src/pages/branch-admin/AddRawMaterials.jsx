@@ -638,7 +638,7 @@ const AddRawMaterials = () => {
       if (address.length > 100) supplierErrors.sup_address = "Keep it under 100 characters";
 
       if (!Object.keys(supplierErrors).length) {
-        cleanSupplier = { sup_name: name, sup_email: email ? email.toLowerCase() : undefined, sup_contact: contact || undefined, sup_address: address || null };
+        cleanSupplier = { sup_name: name, sup_email: email ? email.toLowerCase() : undefined, sup_contact: contact || undefined, sup_address: address || undefined };
       }
     } else if (!supplier.sup_id) {
       supplierErrors.sup_id = "Choose the supplier you bought from";

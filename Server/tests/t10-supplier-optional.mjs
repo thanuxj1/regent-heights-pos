@@ -18,6 +18,13 @@ await t("a second supplier with no contact is fine (no duplicate-contact clash o
   status(res, 201);
 });
 
+await t("empty or null contact, email and address are all accepted (what the form sends)", async () => {
+  const a = await api(owner, "POST", "/suppliers", { sup_name: `${stamp} Nulls`, sup_contact: null, sup_email: null, sup_address: null });
+  status(a, 201);
+  const b = await api(owner, "POST", "/suppliers", { sup_name: `${stamp} Blanks`, sup_contact: "", sup_email: "", sup_address: "" });
+  status(b, 201);
+});
+
 await t("a name is still required", async () => {
   const res = await api(owner, "POST", "/suppliers", { sup_contact: "0771234567" });
   status(res, 400);
