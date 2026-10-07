@@ -34,6 +34,8 @@ import {
   getOrders,
   getKitchenBoard,
   getOrderItemsByOrderId,
+  getOrderById,
+  createCodSettlement,
   updateOrderStatus,
   updateOrder,
   deleteOrderItem,
@@ -50,6 +52,7 @@ import CashDrawerModal from "../../components/cashier/CashDrawerModal";
 import KotPrintingModal from "../../components/cashier/KotPrintingModal";
 import { DELIVERY_CHARGES } from "../../constants/deliveryCharges";
 import { printKotAtTill, tillPrintsKot, setTillPrintsKot } from "../../utils/printKot";
+import { printReceipt } from "../../utils/printReceipt";
 import { withRetry, isTransient } from "../../utils/retryRequest";
 import { stockOf } from "../../utils/stockLabel";
 import Sidebar from "../../components/branch-admin/Sidebar";
@@ -218,6 +221,10 @@ const CashierPos = () => {
   const [showKitchenModal, setShowKitchenModal] = useState(false);
   const [loadingKitchen, setLoadingKitchen] = useState(false);
   const [kitchenFilter, setKitchenFilter] = useState("all");
+  // A delivery whose rider has come back with the cash: { order, amount }.
+  const [payingOrder, setPayingOrder] = useState(null);
+  const [payingBusy, setPayingBusy] = useState(false);
+  const [payingError, setPayingError] = useState("");
   const [orderReadyAlerts, setOrderReadyAlerts] = useState([]);
   const [newWaiterToasts, setNewWaiterToasts] = useState([]);
 
@@ -262,6 +269,67 @@ const CashierPos = () => {
       console.error("Failed to read the kitchen board", err);
     } finally {
       setLoadingKitchen(false);
+    }
+  };
+
+  /** The customer's bill for a delivery that is already out or about to go. It does not
+   * touch the order: it stays open until the rider has paid. */
+  const handlePrintDeliveryBill = async (o) => {
+    try {
+      const [ord, lines] = await Promise.all([getOrderById(o.or_id), getOrderItemsByOrderId(o.or_id)]);
+      if (!ord) throw new Error("Order not found");
+      const items = (lines || []).map((l) => ({
+        pro_name: l.pro_name,
+        qty: Number(l.pro_quantity || 1),
+        total: Number(l.total_price ?? Number(l.unit_price || 0) * Number(l.pro_quantity || 1)),
+      }));
+      const subtotal = items.reduce((s, i) => s + i.total, 0);
+      const charge = Number(ord.delivery_charge || 0);
+      const total = Number(ord["or_totalCostWtax"] ?? ord.or_totalcost ?? 0);
+      const tax = Math.max(0, total - Number(ord.or_totalcost || 0) - charge);
+      printReceipt({
+        orderId: o.or_id,
+        invoiceNo: o.or_id,
+        cashierName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(),
+        branchName,
+        items,
+        subtotal,
+        discount: Number(ord.discount_pct || 0),
+        serviceFee: Number(ord.service_fee || 0),
+        tax,
+        deliveryCharge: charge,
+        total,
+        paymentMethod: ord.payment_method === "cod" ? "CASH ON DELIVERY — pay the rider" : (ord.payment_method || ""),
+      });
+    } catch (err) {
+      setError(err?.response?.data?.message || err.message || "Could not print the bill");
+    }
+  };
+
+  /** The rider is back and has handed over the money: record it, and the order is done. */
+  const handleConfirmPaid = async () => {
+    if (!payingOrder) return;
+    const { order, amount } = payingOrder;
+    if (!order.delivery_partner) {
+      setPayingError("This order has no delivery partner on it, so it cannot be settled from here. Use the Delivery COD page.");
+      return;
+    }
+    if (!(Number(amount) > 0)) { setPayingError("Enter the amount the rider handed over."); return; }
+    try {
+      setPayingBusy(true); setPayingError("");
+      await createCodSettlement({
+        delivery_partner: order.delivery_partner,
+        amount: Number(amount),
+        method: "cash",
+        order_ids: [order.or_id],
+        b_id: branchId,
+      });
+      setPayingOrder(null);
+      await fetchKitchenBoard();
+    } catch (err) {
+      setPayingError(err?.response?.data?.message || err?.response?.data?.error || err.message || "Could not record the payment");
+    } finally {
+      setPayingBusy(false);
     }
   };
 
@@ -610,6 +678,10 @@ const CashierPos = () => {
       setError(DELIVERY_CHARGE_PROMPT);
       return;
     }
+    if (orderType === "delivery" && deliveryPaymentMethod === "cod" && !deliveryPartner) {
+      setError("Choose who is delivering — the cash is owed back by them. Add your own riders under Delivery COD if they are not listed.");
+      return;
+    }
     // The kitchen screen is fed over the network. A docket printed here while
     // the connection is down would never reach it, and the cashier would think
     // the food was on. Say so and let them use a paper docket.
@@ -675,47 +747,6 @@ const CashierPos = () => {
         },
       );
 
-      if (isDelivery) {
-        // The kitchen ticket alone isn't enough — the rider needs a bill to
-        // carry with the food, the same one a normal Checkout would print.
-        const invoiceItems = cart.map((item) => ({
-          Bpro_id: item.Bpro_id,
-          pro_name: item.pro_name,
-          unitPrice: item.unitPrice,
-          originalPrice: item.originalPrice || null,
-          discountPct: item.discountPct || 0,
-          qty: item.qty,
-          total: Number((item.unitPrice * item.qty).toFixed(2)),
-        }));
-        setCart([]);
-        setSentToKitchen(false);
-        setEditingOrderId(null);
-        setEditingOrderCurrentStatus(null);
-        setEditingOrderTableId(null);
-        // The next delivery asks again; a charge is never carried over silently.
-        setDeliveryCharge(null);
-        navigate("/cashier/invoice-preview", {
-          state: {
-            orderId,
-            cashierName: `${user?.u_fname || "Cashier"} ${user?.u_lname || ""}`.trim(),
-            branchName,
-            branchLabel: `${branchName.split(" ")[0] || branchName}\nBranch`,
-            paymentMethod: kotPaymentMethod,
-            items: invoiceItems,
-            subtotal: Number(subtotal.toFixed(2)),
-            discount: Number(discountPct || 0),
-            serviceFee: Number(serviceFee || 0),
-            deliveryCharge: deliveryChargeAmount,
-            allergies,
-            addons,
-            notes,
-            tax: Number(tax.toFixed(2)),
-            total: Number(total.toFixed(2)),
-          },
-        });
-        return;
-      }
-
       // The order is now the kitchen's. Clear the cart immediately so the
       // cashier can serve the next customer. The order can still be opened
       // from the Waiter Orders list to take payment later.
@@ -724,6 +755,8 @@ const CashierPos = () => {
       setEditingOrderId(null);
       setEditingOrderCurrentStatus(null);
       setEditingOrderTableId(null);
+      // The next delivery asks again; a charge is never carried over silently.
+      setDeliveryCharge(null);
     } catch (kotError) {
       setError(
         kotError?.response?.data?.error ||
@@ -1960,11 +1993,7 @@ const CashierPos = () => {
                 }`}
               >
                 <FaUtensils className="h-3.5 w-3.5" />
-                {sentToKitchen
-                  ? "Sent to Kitchen"
-                  : orderType === "delivery"
-                    ? "Send to Kitchen + Print Bill"
-                    : "Send to Kitchen (KOT)"}
+                {sentToKitchen ? "Sent to Kitchen" : "Send to Kitchen (KOT)"}
               </button>
 
               <div className="flex gap-2 pt-0.5">
@@ -2205,6 +2234,41 @@ const CashierPos = () => {
         </div>
       )}
 
+      {/* Rider is back: confirm what they handed over */}
+      {payingOrder && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-800">Mark order #{payingOrder.order.or_id} as paid</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              The rider is back with the cash. The bill was LKR {Number(payingOrder.order.total || 0).toFixed(2)}.
+            </p>
+            <label className="mt-4 block text-xs font-semibold text-slate-600">Cash handed over (LKR)
+              <input
+                type="number" min="0.01" step="0.01" autoFocus
+                value={payingOrder.amount}
+                onChange={(e) => setPayingOrder((p) => ({ ...p, amount: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-[#0A5BAE]"
+              />
+            </label>
+            {Number(payingOrder.amount) > 0 && Math.abs(Number(payingOrder.amount) - Number(payingOrder.order.total || 0)) > 0.005 && (
+              <p className="mt-2 text-xs font-semibold text-amber-700">
+                This is {Number(payingOrder.amount) < Number(payingOrder.order.total || 0) ? "less" : "more"} than the bill by LKR{" "}
+                {Math.abs(Number(payingOrder.amount) - Number(payingOrder.order.total || 0)).toFixed(2)}.
+              </p>
+            )}
+            {payingError && <p className="mt-2 text-xs font-semibold text-red-600">{payingError}</p>}
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setPayingOrder(null)} disabled={payingBusy}
+                className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={handleConfirmPaid} disabled={payingBusy}
+                className="flex-1 rounded-lg bg-[#55C24A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#49b03f] disabled:opacity-60">
+                {payingBusy ? "Saving…" : "Confirm paid"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Kitchen Orders — every ticket the kitchen has, whoever sent it */}
       {showKitchenModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
@@ -2289,6 +2353,34 @@ const CashierPos = () => {
                       {o.or_type === "room_service" ? (
                         <div className="rounded-lg bg-sky-50 border border-sky-200 text-sky-700 px-3 py-2 text-xs font-semibold text-center">
                           Charged to the room
+                        </div>
+                      ) : o.or_type === "delivery" ? (
+                        <div className="space-y-2">
+                          {o.payment_method === "cod" && !o.cod_settlement_id ? (
+                            <div className="rounded-lg bg-amber-100 border border-amber-300 text-amber-800 px-3 py-1.5 text-xs font-semibold text-center">
+                              Cash on delivery — not received yet · LKR {Number(o.total || 0).toFixed(2)}
+                            </div>
+                          ) : o.payment_method ? (
+                            <div className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 text-xs font-semibold text-center">
+                              {o.payment_method === "cod" ? "Paid — rider handed over the cash" : "Paid by " + o.payment_method}
+                            </div>
+                          ) : null}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handlePrintDeliveryBill(o)}
+                              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              Print bill
+                            </button>
+                            {o.payment_method === "cod" && !o.cod_settlement_id && (
+                              <button
+                                onClick={() => { setPayingError(""); setPayingOrder({ order: o, amount: Number(o.total || 0).toFixed(2) }); }}
+                                className="flex-1 rounded-lg bg-[#55C24A] px-3 py-2 text-sm font-semibold text-white hover:bg-[#49b03f]"
+                              >
+                                Mark as paid
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ) : o.payment_method ? (
                         <div className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 text-xs font-semibold text-center">

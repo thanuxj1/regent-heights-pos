@@ -39,8 +39,12 @@ export async function getKitchenBoard(req, res) {
             AND (o.or_date + o.or_time) > NOW() - make_interval(hours => $2::int))
         OR (o.or_status = 'completed'
             AND o.status_changed_at > NOW() - make_interval(mins => $1::int)))`;
-    const unpaid = `(o.payment_method IS NULL AND o.or_status <> 'cancelled'
-        AND o.or_type <> 'room_service' AND o.or_date >= CURRENT_DATE - 7)`;
+    // A cash-on-delivery order has a payment method from the moment it is sent out, but
+    // the money is not in until the rider is back — so it stays on the till's list
+    // until it is settled, however long that takes.
+    const unpaid = `((o.payment_method IS NULL AND o.or_status <> 'cancelled'
+        AND o.or_type <> 'room_service' AND o.or_date >= CURRENT_DATE - 7)
+        OR (o.payment_method = 'cod' AND o.cod_settlement_id IS NULL AND o.or_status <> 'cancelled'))`;
     const conditions = [
       forTheTill ? `(${atThePass} OR ${unpaid})` : atThePass,
       // Nothing on it, nothing to cook. A waiter's order is written a moment
@@ -64,7 +68,8 @@ export async function getKitchenBoard(req, res) {
       `SELECT o.or_id, o.or_type, o.or_status, o.or_date::text AS or_date, o.or_time, o.b_id,
               o.table_id, t.table_number, o.room_id, r.room_number,
               o.status_changed_at, o."or_totalCostWtax" AS total,
-              o.payment_method, o.kitchen_note, u.role_id AS placed_by_role,
+              o.payment_method, o.delivery_partner, o.cod_settlement_id, o.delivery_charge,
+              o.kitchen_note, u.role_id AS placed_by_role,
               (o.u_id IS NOT DISTINCT FROM ${me}::int) AS mine,
               TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')) AS placed_by,
               FLOOR(EXTRACT(EPOCH FROM (NOW() - o.status_changed_at)) / 60)::int AS minutes_in_status,

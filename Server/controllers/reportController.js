@@ -802,6 +802,9 @@ export async function getTransactions(req, res, next) {
     if (kind === "all" || kind === "delivery_cod") {
       const r = await pool.query(
         `SELECT s.settlement_id, s.created_at AS at, s.amount, s.delivery_partner, s.method, s.note,
+                -- The delivery charges inside the orders this settlement closed: the order itself is
+                -- not listed (its money is this row), so its charge is shown here.
+                (SELECT COALESCE(SUM(o.delivery_charge), 0) FROM "ORDER" o WHERE o.cod_settlement_id = s.settlement_id) AS delivery_charge,
                 NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "DELIVERY_COD_SETTLEMENT" s
          LEFT JOIN "User" u ON u.u_id = s.created_by
@@ -814,6 +817,7 @@ export async function getTransactions(req, res, next) {
         amount: num(x.amount), method: x.method, reference: x.note || "", party: x.delivery_partner,
         handled_by: x.handled_by || null,
         settlement_id: x.settlement_id,
+        delivery_charge: num(x.delivery_charge),
       }));
     }
 

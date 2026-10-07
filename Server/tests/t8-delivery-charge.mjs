@@ -126,9 +126,9 @@ await t("summary shows the delivery charges and they are inside the restaurant t
 });
 
 await t("the ledger lists each order with its own delivery_charge, summing to the summary", async () => {
-  const res = await api(owner, "GET", `/reports/transactions?from=${today}&to=${today}&kind=restaurant`);
+  const res = await api(owner, "GET", `/reports/transactions?from=${today}&to=${today}&kind=all`);
   status(res, 200);
-  const rows = res.data.transactions.filter((x) => x.or_id != null);
+  const rows = res.data.transactions;
   const sum = rows.reduce((s, x) => s + Number(x.delivery_charge || 0), 0);
   eq(sum, expectedCharges, "ledger charges should match the summary");
   const row = rows.find((x) => x.or_id === ids[200]);
