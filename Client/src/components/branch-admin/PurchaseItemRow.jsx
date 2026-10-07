@@ -89,12 +89,12 @@ export default function PurchaseItemRow({
   if (name.trim()) {
     if (isProduct) {
       if (match) {
-        const have = num(match.pro_qty);
         hint = (
           <>
             <span className="ai-tag is-existing">Existing product</span>
-            In the storeroom: <b>{show(have)}</b>
-            {qty > 0 && <> → <b>{show(have + qty)}</b> after saving</>}
+            {qty > 0
+              ? <>+<b>{show(qty)}</b> will be added to its stock when this order is received</>
+              : "Received quantity is added to its stock"}
           </>
         );
       } else {

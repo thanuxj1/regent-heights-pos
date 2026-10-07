@@ -109,6 +109,8 @@ const mapApiProductToTableItem = (product) => {
 		// The only figure a made-to-order dish has: how many the kitchen has
 		// turned out since service began.
 		madeToday: Number(product.made_today ?? 0),
+		// Left in the old storeroom, if anything: the only case Restock is still for.
+		spare: Number(product.storeroom_qty ?? 0),
 		stockMode: product.stock_mode || "count",
 		limitedBy: product.limited_by || null,
 		status: getStockStatus(stock),

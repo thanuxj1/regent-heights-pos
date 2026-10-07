@@ -574,6 +574,32 @@ export async function updatePurchaseOrderStatus(req, res, next) {
               res.status(404);
               throw new Error(`Product with id ${it.pro_id} not found`);
             }
+            // One branch, one stock number: what arrives for a counted product that is
+            // already on this branch's menu goes straight onto the shelf, where the
+            // till sells from, instead of waiting in the storeroom for a Restock.
+            // A product not on the menu yet stays in the storeroom until it is added.
+            const shelf = await client.query(
+              `SELECT bp."Bpro_id" FROM "Branch_Product" bp
+               JOIN "Product" p ON p.pro_id = bp.pro_id
+               WHERE bp.pro_id = $1 AND bp."B_id" = $2 AND COALESCE(p.track_inventory, TRUE)
+               ORDER BY bp."Bpro_id" LIMIT 1 FOR UPDATE OF bp`,
+              [it.pro_id, existing.rows[0].b_id],
+            );
+            if (shelf.rows.length) {
+              await client.query(
+                `UPDATE "Product" SET pro_qty = pro_qty - $1::numeric WHERE pro_id = $2`,
+                [it.qty, it.pro_id],
+              );
+              await client.query(
+                `UPDATE "Branch_Product" SET pro_quantity = COALESCE(pro_quantity, 0) + $1::numeric WHERE "Bpro_id" = $2`,
+                [it.qty, shelf.rows[0].Bpro_id],
+              );
+              await client.query(
+                `INSERT INTO "STOCK_MOVEMENT" (b_id, bpro_id, qty, reason, po_id, created_by)
+                 VALUES ($1, $2, $3, 'purchase', $4, $5)`,
+                [existing.rows[0].b_id, shelf.rows[0].Bpro_id, it.qty, id, req.user?.u_id ?? null],
+              );
+            }
           } else {
             // Kitchen ingredient — add to Raw Material stock (existing behaviour),
             // and keep its unit cost current so anything pricing a quantity of

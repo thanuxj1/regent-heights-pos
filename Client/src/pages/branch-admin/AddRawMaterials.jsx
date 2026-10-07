@@ -359,7 +359,7 @@ const AddRawMaterials = () => {
     if (itemType === "product") {
       return buyableProducts.map((p) => ({
         key: p.pro_id, code: code(p.pro_id), name: p.pro_name || "", raw: p,
-        meta: `storeroom ${showNum(Number(p.pro_qty) || 0)}`,
+        meta: "",
       }));
     }
     return availableMaterials

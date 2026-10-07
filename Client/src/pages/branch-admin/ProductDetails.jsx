@@ -3,7 +3,7 @@ import { FaArrowLeft, FaUpload } from "react-icons/fa";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
-import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct, updateBranchProduct, countBranchProduct } from "../../services/api";
+import { deleteProduct, getBranchProducts, getCategories, getProductById, updateProduct, updateBranchProduct, countBranchProduct, restockBranchProduct } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { readImageFile } from "../../utils/readImageFile";
 
@@ -168,6 +168,22 @@ const ProductDetails = () => {
 		} catch (err) {
 			setError(err.message);
 		}
+	};
+
+	// Stock left in the old storeroom (from before there was one number) joins the shelf.
+	const handleAbsorbSpare = async () => {
+		const spare = Math.floor(Number(form.pro_qty) || 0);
+		if (!branchProductId || spare < 1) return;
+		try {
+			setSaving(true); setError("");
+			await restockBranchProduct(branchProductId, spare);
+			setBranchQty((q) => Number(q || 0) + spare);
+			setForm((prev) => ({ ...prev, pro_qty: String(Number(prev.pro_qty) - spare), ready_qty: String(Number(prev.ready_qty || 0) + spare) }));
+			setSuccess("Added to stock");
+			setTimeout(() => setSuccess(""), 2200);
+		} catch (err) {
+			setError(err?.response?.data?.message || "Could not add it to stock");
+		} finally { setSaving(false); }
 	};
 
 	const handleSave = async () => {
@@ -359,22 +375,27 @@ const ProductDetails = () => {
 									{form.track_inventory ? (
 										<>
 										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-											<label style={fieldLabel}>Ready to sell (what the till sells from)
+											<label style={fieldLabel}>In stock
 												<input type="number" min="0" style={fieldInput} value={form.ready_qty} disabled={branchQty === null} placeholder={branchQty === null ? "Not on the menu yet" : ""} onChange={handleFieldChange("ready_qty")} />
-												<span style={{ display: "block", marginTop: 4, fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>
-													{branchQty === null ? "Add this product to the menu first." : "Goes down by itself as it sells. Change it to correct a miscount."}
+												<span style={{ display: "block", marginTop: 4, fontWeight: 400, fontSize: 11, color: Number(branchQty) < 0 ? "#B91C1C" : "#94A3B8" }}>
+													{branchQty === null ? "Add this product to the menu first."
+														: Number(branchQty) < 0 ? `Short by ${Math.abs(Number(branchQty))} — more were sold than were in stock. Count what you really have.`
+														: "This is what the till sells from. It goes down by itself as it sells; change it to correct a miscount."}
 												</span>
 												{branchQty !== null && form.ready_qty !== "" && Number(form.ready_qty) !== Number(branchQty) && (
 													<input type="text" maxLength={200} style={{ ...fieldInput, marginTop: 6 }} value={form.count_note}
 														placeholder="Why? e.g. recount, stock arrived" onChange={handleFieldChange("count_note")} />
 												)}
 											</label>
-											<label style={fieldLabel}>Spare in the storeroom
-												<input type="number" min="0" style={fieldInput} value={form.pro_qty} onChange={handleFieldChange("pro_qty")} />
-												<span style={{ display: "block", marginTop: 4, fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>
-													Not sold from here. Use Restock on the Products list to move some onto the menu.
-												</span>
-											</label>
+											{branchQty !== null && Number(form.pro_qty) > 0 ? (
+												<div style={{ alignSelf: "end", background: "#FEF3C7", color: "#92400E", borderRadius: 8, padding: "9px 12px", fontSize: 12 }}>
+													{Number(form.pro_qty)} more are held in the old storeroom and not being sold.
+													<button type="button" onClick={handleAbsorbSpare} disabled={saving}
+														style={{ marginLeft: 8, border: "none", background: "#92400E", color: "#fff", borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+														Add to stock
+													</button>
+												</div>
+											) : <span />}
 										</div>
 										<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
 											<label style={fieldLabel}>Warn me when it drops to

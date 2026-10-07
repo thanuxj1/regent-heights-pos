@@ -203,11 +203,11 @@ const ProductItemsTable = ({
                       )}
                     </button>
                     )}
-                    {onRestock && (
+                    {onRestock && Number(item.spare) > 0 && (
                       <button
                         type="button"
                         onClick={() => onRestock(item.id)}
-                        title="Move more from the storeroom onto the menu"
+                        title="Add the stock still held in the old storeroom"
                         style={{
                           marginLeft: showStepper ? "4px" : 0, padding: "2px 8px", borderRadius: "6px",
                           border: "1px solid #BBF7D0", background: "#F0FDF4", color: "#15803D",
