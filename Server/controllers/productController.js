@@ -300,6 +300,7 @@ export async function updateProduct(req, res, next) {
 
 // DELETE /api/products/:id
 export async function deleteProduct(req, res, next) {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
     if (!isPositiveInt(id)) {
@@ -308,22 +309,39 @@ export async function deleteProduct(req, res, next) {
     }
 
     const { role_id, com_id } = req.user;
-    let deleteQuery = 'DELETE FROM "public"."Product" WHERE "pro_id" = $1';
-    let deleteParams = [id];
-    if (role_id !== ROLES.SUPER_ADMIN) {
-      deleteQuery += ' AND "Com_id" = $2';
-      deleteParams.push(com_id);
-    }
-    deleteQuery += ' RETURNING "pro_id"';
-    const result = await pool.query(deleteQuery, deleteParams);
+    await client.query("BEGIN");
 
-    if (result.rows.length === 0) {
+    let checkQuery = 'SELECT "pro_id" FROM "public"."Product" WHERE "pro_id" = $1';
+    const checkParams = [id];
+    if (role_id !== ROLES.SUPER_ADMIN) {
+      checkQuery += ' AND "Com_id" = $2';
+      checkParams.push(com_id);
+    }
+    const existing = await client.query(checkQuery + " FOR UPDATE", checkParams);
+    if (existing.rows.length === 0) {
       res.status(404);
       throw new Error("Product not found");
     }
 
+    // The delete page promises the product comes off every menu, so the menu rows
+    // go first, in the same transaction. Left in place they stopped the delete with
+    // a foreign-key error, and the owner was told nothing useful.
+    await client.query('DELETE FROM "public"."Branch_Product" WHERE "pro_id" = $1', [id]);
+    await client.query('DELETE FROM "public"."Product" WHERE "pro_id" = $1', [id]);
+
+    await client.query("COMMIT");
     res.status(204).send();
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    // Something that has to be kept still points at it — nothing was deleted.
+    if (err?.code === "23503") {
+      res.status(409);
+      return next(new Error(
+        "This product can't be deleted because it has already been sold, or is used in a recipe or a stock record, "
+        + "and those records have to stay. Nothing was changed."));
+    }
     next(err);
+  } finally {
+    client.release();
   }
 }

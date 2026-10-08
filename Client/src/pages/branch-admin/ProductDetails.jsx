@@ -235,14 +235,20 @@ const ProductDetails = () => {
 				track_inventory: form.track_inventory,
 			});
 			setProduct(updated);
-			// The till never reads this master Product row for price — it reads
-			// this branch's own Branch_Product row. Without this, "Selling Price"
-			// here would show a success message and change nothing anyone pays.
+			// The list and the till never read this master Product row — they read
+			// this branch's own Branch_Product row, which keeps its own copy of the
+			// name, price, picture and category. Without this, an edit here would
+			// show a success message and change nothing anyone sees. (The menu row
+			// refuses an empty picture or description, so those go only when set.)
 			if (branchProductId) {
 				await updateBranchProduct(branchProductId, {
+					pro_name: form.pro_name.trim(),
 					pro_price: Number(form.pro_price),
 					discount_pct: Number(form.discount_pct) || 0,
 					tax_group: Number(form.tax_group) || 0,
+					...(cat_id ? { cat_id } : {}),
+					...(form.pro_image.trim() ? { pro_image: form.pro_image.trim() } : {}),
+					...(form.description.trim() ? { pro_des: form.description.trim() } : {}),
 				});
 				// A change to the shelf count goes through Count, which keeps the reason on the
 				// record (the server refuses a bare edit). Only when it was actually changed.
