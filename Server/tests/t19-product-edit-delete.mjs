@@ -32,21 +32,24 @@ await t("owner creates two categories, a product, and puts it on the menu", asyn
 });
 
 section("the menu row the list reads");
-await t("the master edit alone leaves the menu row as it was (why the page must update both)", async () => {
-  const put = await api(owner, "PUT", `/products/${proId}`, { pro_name: "ZZQA Edited Name" });
-  status(put, 200);
-  eq((await menuRow()).pro_name, "ZZQA Edit Me");
-});
-
-await t("updating the menu row changes the name, category, picture and description the list shows", async () => {
-  const put = await api(owner, "PUT", `/branch_products/${bproId}`, {
-    pro_name: "ZZQA Edited Name", cat_id: otherCatId, pro_image: "edited.png", pro_des: "after", pro_price: 450,
+await t("editing the product updates the menu row's name, category, picture and description, not its price", async () => {
+  const put = await api(owner, "PUT", `/products/${proId}`, {
+    pro_name: "ZZQA Edited Name", cat_id: otherCatId, pro_image: "edited.png", description: "after", pro_price: 999,
   });
   status(put, 200);
   const row = await menuRow();
   eq(row.pro_name, "ZZQA Edited Name");
   eq(Number(row.cat_id ?? row.Cat_id), Number(otherCatId));
-  eq(Number(row.pro_price), 450);
+  eq(row.pro_image, "edited.png");
+  eq(row.pro_des, "after");
+  eq(Number(row.pro_price), 300, "price is per branch and changes only through the branch's own row");
+});
+
+await t("an empty picture or description on the product does not wipe the menu's", async () => {
+  status(await api(owner, "PUT", `/products/${proId}`, { pro_image: "", description: "" }), 200);
+  const row = await menuRow();
+  eq(row.pro_image, "edited.png");
+  eq(row.pro_des, "after");
 });
 
 section("deleting a product");

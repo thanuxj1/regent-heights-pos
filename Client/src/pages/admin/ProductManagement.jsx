@@ -65,9 +65,13 @@ const statValueStyle = {
   textAlign: "center",
 };
 
-const getStockStatus = (quantity) => {
+// "Low" is the product's own warning level (its "Warn me when it drops to"),
+// not one number for every product; a made-to-order dish has no count at all.
+const getStockStatus = (product, quantity) => {
+  if (product.track_inventory === false) return "Made to order";
   if (quantity <= 0) return "Out of stock";
-  if (quantity <= 10) return "Low stock";
+  const lowAt = product.low_stock == null ? 10 : Number(product.low_stock);
+  if (quantity <= lowAt) return "Low stock";
   return "In stock";
 };
 
@@ -95,13 +99,17 @@ const mapApiProductToTableItem = (product) => {
     price: `LKR ${price.toFixed(2)}`,
     discount: `${Number(product.discount_pct ?? 0)}%`,
     stock: quantity,
-    status: getStockStatus(quantity),
+    madeToOrder: product.track_inventory === false,
+    status: getStockStatus(product, quantity),
   };
 };
 
 const ProductManagement = () => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [stockModeFilter, setStockModeFilter] = useState("");
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -139,26 +147,35 @@ const ProductManagement = () => {
     };
   }, []);
 
+  const allItems = useMemo(() => products.map(mapApiProductToTableItem), [products]);
+  // The filter choices come from the products themselves, not a fixed list.
+  const categoryOptions = useMemo(
+    () => [...new Set(allItems.map((item) => item.category))].sort((a, b) => a.localeCompare(b)),
+    [allItems],
+  );
+  const statusOptions = useMemo(() => [...new Set(allItems.map((item) => item.status))].sort(), [allItems]);
+
   const tableProducts = useMemo(() => {
-    const mapped = products.map(mapApiProductToTableItem);
     const query = searchTerm.trim().toLowerCase();
-
-    if (!query) return mapped;
-
-    return mapped.filter((item) => {
+    return allItems.filter((item) => {
+      if (categoryFilter && item.category !== categoryFilter) return false;
+      if (statusFilter && item.status !== statusFilter) return false;
+      if (stockModeFilter === "made" && !item.madeToOrder) return false;
+      if (stockModeFilter === "counted" && item.madeToOrder) return false;
+      if (!query) return true;
       return (
         item.name.toLowerCase().includes(query) ||
         item.sku.toLowerCase().includes(query) ||
         item.category.toLowerCase().includes(query)
       );
     });
-  }, [products, searchTerm]);
+  }, [allItems, searchTerm, categoryFilter, statusFilter, stockModeFilter]);
 
   const totalPages = Math.max(1, Math.ceil(tableProducts.length / itemsPerPage));
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, categoryFilter, statusFilter, stockModeFilter]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -176,11 +193,9 @@ const ProductManagement = () => {
   const pageEnd = Math.min(currentPage * itemsPerPage, tableProducts.length);
 
   const totalItems = products.length;
-  const lowStockCount = products.filter((item) => {
-    const quantity = Number(item.pro_qty ?? 0);
-    return quantity > 0 && quantity <= 10;
-  }).length;
-  const outOfStockCount = products.filter((item) => Number(item.pro_qty ?? 0) <= 0).length;
+  // The same rule as each row's status, so the cards and the table agree.
+  const lowStockCount = allItems.filter((item) => item.status === "Low stock").length;
+  const outOfStockCount = allItems.filter((item) => item.status === "Out of stock").length;
 
   const handleAdjustStock = async (productId, delta) => {
     if (updatingStockId !== null) return;
@@ -370,13 +385,25 @@ const ProductManagement = () => {
               <input
                 type="text"
                 placeholder="Search by Name or Code"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
                 style={{ border: "none", outline: "none", width: "100%", fontSize: "14px" }}
               />
             </div>
 
-            {["Category : All", "Status : All", "Stock Level : All"].map((option) => (
-              <div key={option} style={{ position: "relative", width: "182px" }}>
+            {[
+              { key: "category", value: categoryFilter, onChange: setCategoryFilter, all: "Category : All",
+                options: categoryOptions.map((c) => ({ value: c, label: c })) },
+              { key: "status", value: statusFilter, onChange: setStatusFilter, all: "Status : All",
+                options: statusOptions.map((st) => ({ value: st, label: st })) },
+              { key: "mode", value: stockModeFilter, onChange: setStockModeFilter, all: "Stocked : All",
+                options: [{ value: "counted", label: "Counted stock" }, { value: "made", label: "Made to order" }] },
+            ].map((filter) => (
+              <div key={filter.key} style={{ position: "relative", width: "182px" }}>
                 <select
+                  aria-label={filter.all.replace(" : All", "")}
+                  value={filter.value}
+                  onChange={(e) => filter.onChange(e.target.value)}
                   style={{
                     width: "100%",
                     height: "36px",
@@ -394,7 +421,10 @@ const ProductManagement = () => {
                     MozAppearance: "none",
                   }}
                 >
-                  <option>{option}</option>
+                  <option value="">{filter.all}</option>
+                  {filter.options.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
                 </select>
                 <FaChevronDown
                   size={11}

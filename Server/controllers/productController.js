@@ -249,44 +249,71 @@ export async function updateProduct(req, res, next) {
     const finalLowStock = low_stock !== undefined ? Number(low_stock) : undefined;
     const finalTrackInventory = track_inventory !== undefined ? asBool(track_inventory) : undefined;
 
-    const result = await pool.query(
-      `UPDATE "public"."Product" SET
-        "pro_name"        = COALESCE($1, "pro_name"),
-        "pro_qty"         = COALESCE($2, "pro_qty"),
-        "pro_price"       = COALESCE($3, "pro_price"),
-        " pro_image"      = COALESCE($4, " pro_image"),
-        "Com_id"          = COALESCE($5, "Com_id"),
-        "cat_id"          = COALESCE($6, "cat_id"),
-        "add_ons"         = COALESCE($7, "add_ons"),
-        "stations"        = COALESCE($8, "stations"),
-        "description"     = COALESCE($9, "description"),
-        "discount_pct"    = COALESCE($10, "discount_pct"),
-        "cost_price"      = COALESCE($11, "cost_price"),
-        "tax_group"       = COALESCE($12, "tax_group"),
-        "low_stock"       = COALESCE($13, "low_stock"),
-        "track_inventory" = COALESCE($14, "track_inventory")
-      WHERE "pro_id" = $15
-      RETURNING
-        "pro_id","pro_name","pro_qty","pro_price"," pro_image" AS "pro_image","Com_id" AS "com_id","cat_id","add_ons","stations",
-        "description","discount_pct","cost_price","tax_group","low_stock","track_inventory"`,
-      [
-        fieldOrNull(pro_name),
-        fieldOrNull(pro_qty !== undefined ? Number(pro_qty) : undefined),
-        fieldOrNull(pro_price !== undefined ? Number(pro_price) : undefined),
-        fieldOrNull(finalImage),
-        fieldOrNull(com_id),
-        fieldOrNull(resolvedCatId),
-        fieldOrNull(finalAddOns),
-        fieldOrNull(finalStations),
-        fieldOrNull(description !== undefined ? (description || null) : undefined),
-        fieldOrNull(finalDiscountPct),
-        fieldOrNull(finalCostPrice),
-        fieldOrNull(finalTaxGroup),
-        fieldOrNull(finalLowStock),
-        fieldOrNull(finalTrackInventory),
-        id,
-      ]
-    );
+    const client = await pool.connect();
+    let result;
+    try {
+      await client.query("BEGIN");
+      result = await client.query(
+        `UPDATE "public"."Product" SET
+          "pro_name"        = COALESCE($1, "pro_name"),
+          "pro_qty"         = COALESCE($2, "pro_qty"),
+          "pro_price"       = COALESCE($3, "pro_price"),
+          " pro_image"      = COALESCE($4, " pro_image"),
+          "Com_id"          = COALESCE($5, "Com_id"),
+          "cat_id"          = COALESCE($6, "cat_id"),
+          "add_ons"         = COALESCE($7, "add_ons"),
+          "stations"        = COALESCE($8, "stations"),
+          "description"     = COALESCE($9, "description"),
+          "discount_pct"    = COALESCE($10, "discount_pct"),
+          "cost_price"      = COALESCE($11, "cost_price"),
+          "tax_group"       = COALESCE($12, "tax_group"),
+          "low_stock"       = COALESCE($13, "low_stock"),
+          "track_inventory" = COALESCE($14, "track_inventory")
+        WHERE "pro_id" = $15
+        RETURNING
+          "pro_id","pro_name","pro_qty","pro_price"," pro_image" AS "pro_image","Com_id" AS "com_id","cat_id","add_ons","stations",
+          "description","discount_pct","cost_price","tax_group","low_stock","track_inventory"`,
+        [
+          fieldOrNull(pro_name),
+          fieldOrNull(pro_qty !== undefined ? Number(pro_qty) : undefined),
+          fieldOrNull(pro_price !== undefined ? Number(pro_price) : undefined),
+          fieldOrNull(finalImage),
+          fieldOrNull(com_id),
+          fieldOrNull(resolvedCatId),
+          fieldOrNull(finalAddOns),
+          fieldOrNull(finalStations),
+          fieldOrNull(description !== undefined ? (description || null) : undefined),
+          fieldOrNull(finalDiscountPct),
+          fieldOrNull(finalCostPrice),
+          fieldOrNull(finalTaxGroup),
+          fieldOrNull(finalLowStock),
+          fieldOrNull(finalTrackInventory),
+          id,
+        ]
+      );
+
+      // Name, category, picture and description are the product's own, but every
+      // branch menu keeps a copy of them, and the product lists and the till read
+      // that copy. Without this an edit said "updated" and changed nothing anyone
+      // saw. Price stays per branch. An empty picture or description never wipes
+      // the menu's.
+      const saved = result.rows[0];
+      await client.query(
+        `UPDATE "public"."Branch_Product" SET
+           "pro_name"   = $1,
+           "Cat_id"     = COALESCE($2, "Cat_id"),
+           " pro_image" = CASE WHEN $3::text <> '' THEN $3 ELSE " pro_image" END,
+           " pro_des"   = CASE WHEN $4::text <> '' THEN $4 ELSE " pro_des" END
+         WHERE "pro_id" = $5`,
+        [saved.pro_name, saved.cat_id, saved.pro_image || "", saved.description || "", id]
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
 
     res.json(result.rows[0]);
   } catch (err) {

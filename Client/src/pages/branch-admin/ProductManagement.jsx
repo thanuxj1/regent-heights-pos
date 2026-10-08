@@ -141,6 +141,9 @@ The product itself is kept, so you can add it back later.`)) return;
 	};
 	const { user } = useAuth();
 	const [searchTerm, setSearchTerm] = useState("");
+	const [categoryFilter, setCategoryFilter] = useState("");
+	const [statusFilter, setStatusFilter] = useState("");
+	const [stockModeFilter, setStockModeFilter] = useState("");
 	const [products, setProducts] = useState([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
@@ -183,26 +186,35 @@ The product itself is kept, so you can add it back later.`)) return;
 		};
 	}, [user?.u_id]);
 
+	const allItems = useMemo(() => products.map(mapApiProductToTableItem), [products]);
+	// The filter choices come from what is actually on this menu, not a fixed list.
+	const categoryOptions = useMemo(
+		() => [...new Set(allItems.map((item) => item.category))].sort((a, b) => a.localeCompare(b)),
+		[allItems],
+	);
+	const statusOptions = useMemo(() => [...new Set(allItems.map((item) => item.status))].sort(), [allItems]);
+
 	const tableProducts = useMemo(() => {
-		const mapped = products.map(mapApiProductToTableItem);
 		const query = searchTerm.trim().toLowerCase();
-
-		if (!query) return mapped;
-
-		return mapped.filter((item) => {
+		return allItems.filter((item) => {
+			if (categoryFilter && item.category !== categoryFilter) return false;
+			if (statusFilter && item.status !== statusFilter) return false;
+			if (stockModeFilter === "made" && item.stock !== null) return false;
+			if (stockModeFilter === "counted" && item.stock === null) return false;
+			if (!query) return true;
 			return (
 				item.name.toLowerCase().includes(query) ||
 				item.sku.toLowerCase().includes(query) ||
 				item.category.toLowerCase().includes(query)
 			);
 		});
-	}, [products, searchTerm]);
+	}, [allItems, searchTerm, categoryFilter, statusFilter, stockModeFilter]);
 
 	const totalPages = Math.max(1, Math.ceil(tableProducts.length / itemsPerPage));
 
 	useEffect(() => {
 		setCurrentPage(1);
-	}, [searchTerm]);
+	}, [searchTerm, categoryFilter, statusFilter, stockModeFilter]);
 
 	useEffect(() => {
 		if (currentPage > totalPages) {
@@ -355,9 +367,19 @@ The product itself is kept, so you can add it back later.`)) return;
 							/>
 						</div>
 
-						{["Category : All", "Status : All", "Stock Level : All"].map((option) => (
-							<div key={option} style={{ position: "relative", width: "182px" }}>
+						{[
+							{ key: "category", value: categoryFilter, onChange: setCategoryFilter, all: "Category : All",
+								options: categoryOptions.map((c) => ({ value: c, label: c })) },
+							{ key: "status", value: statusFilter, onChange: setStatusFilter, all: "Status : All",
+								options: statusOptions.map((st) => ({ value: st, label: st })) },
+							{ key: "mode", value: stockModeFilter, onChange: setStockModeFilter, all: "Stocked : All",
+								options: [{ value: "counted", label: "Counted stock" }, { value: "made", label: "Made to order" }] },
+						].map((filter) => (
+							<div key={filter.key} style={{ position: "relative", width: "182px" }}>
 								<select
+									aria-label={filter.all.replace(" : All", "")}
+									value={filter.value}
+									onChange={(e) => filter.onChange(e.target.value)}
 									style={{
 										width: "100%",
 										height: "36px",
@@ -375,7 +397,10 @@ The product itself is kept, so you can add it back later.`)) return;
 										MozAppearance: "none",
 									}}
 								>
-									<option>{option}</option>
+									<option value="">{filter.all}</option>
+									{filter.options.map((o) => (
+										<option key={o.value} value={o.value}>{o.label}</option>
+									))}
 								</select>
 								<FaChevronDown
 									size={11}
