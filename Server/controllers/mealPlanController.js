@@ -87,8 +87,12 @@ export async function getMealPlanStats(req, res, next) {
     const id = Number(req.params.id);
     await assertInScope(req, res, { table: "MEAL_PLAN", idColumn: "plan_id", id });
 
+    // A plan can now be chosen when the booking is taken, so a booking holding it
+    // may still be cancelled or never arrive. Revenue is what was actually billed:
+    // stays that checked in. Cancelled and no-show bookings are not "using" it.
     const { rows } = await pool.query(
-      `SELECT COUNT(*)::int AS bookings_count, COALESCE(SUM(meal_charges), 0) AS total_revenue
+      `SELECT COUNT(*) FILTER (WHERE status NOT IN ('cancelled','no_show'))::int AS bookings_count,
+              COALESCE(SUM(meal_charges) FILTER (WHERE status IN ('checked_in','checked_out')), 0) AS total_revenue
        FROM "BOOKING" WHERE meal_plan_id = $1`,
       [id],
     );

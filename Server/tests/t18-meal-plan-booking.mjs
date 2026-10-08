@@ -140,6 +140,15 @@ await t("editing to an unavailable plan is refused", async () => {
 
 section("billing at check-in");
 let bookedWithPlan, bookedWithPlan2, noPlanA, noPlanB;
+const hotelRevenue = async () => {
+  const r = await api(owner, "GET", `/reports/summary?from=${today}&to=${today}`);
+  status(r, 200);
+  return Number(r.data.revenue.hotel);
+};
+let revenueBefore;
+await t("baseline: today's hotel revenue before these check-ins", async () => {
+  revenueBefore = await hotelRevenue();
+});
 await t("a plan taken with the booking is posted to the folio at check-in, once, at the quoted price", async () => {
   const res = await book({ meal_plan_id: hb.plan_id });
   status(res, 201);
@@ -192,6 +201,33 @@ await t("changing the plan on an in-house booking is refused; re-sending the sam
   });
   status(same, 200);
   eq(Number(same.data.meal_charges), Number(bookedWithPlan.meal_charges), "the billed charge is untouched");
+});
+
+section("reports");
+await t("the summary report's hotel revenue rises by exactly what the four bills charged, meal plans included", async () => {
+  let billed = 0;
+  for (const b of [bookedWithPlan, bookedWithPlan2, noPlanA, noPlanB]) {
+    const f = await api(cashier, "GET", `/hotel/bookings/${b.booking_id}/folio`);
+    billed += Number(f.data.total_charges);
+  }
+  const meals = (1500 * 2 + 800) * NIGHTS + (3000 * 2 + 1500) * NIGHTS * 2;
+  ok(billed > meals, "the bills carry the meal lines on top of the rooms");
+  eq(+(await hotelRevenue() - revenueBefore).toFixed(2), +billed.toFixed(2));
+});
+
+await t("meal plan stats count real bookings and only billed revenue", async () => {
+  // one more Half Board booking still to arrive, and one that is cancelled
+  const waiting = await book({ meal_plan_id: hb.plan_id, check_in_date: hotelDay(5), check_out_date: hotelDay(7) });
+  status(waiting, 201);
+  const gone = await book({ meal_plan_id: hb.plan_id, check_in_date: hotelDay(5), check_out_date: hotelDay(7) });
+  status(gone, 201);
+  status(await api(cashier, "POST", `/hotel/bookings/${gone.data.booking_id}/cancel`, { reason: "ZZQA" }), 200);
+
+  const s = await api(owner, "GET", `/hotel/meal-plans/${hb.plan_id}/stats`);
+  status(s, 200);
+  // Half Board is now on: the checked-in stay and the one still to arrive.
+  eq(s.data.bookings_count, 2, "cancelled bookings are not using the plan");
+  eq(Number(s.data.total_revenue), Number(bookedWithPlan.meal_charges), "only the stay that was billed counts as revenue");
 });
 
 await finish("t18-meal-plan-booking.mjs");
