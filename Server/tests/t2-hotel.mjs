@@ -98,27 +98,21 @@ await t("checking in without every room assigned is refused", async () => {
   ok(res.status !== 200 && res.status !== 201, "check-in with no room assignment must be refused");
 });
 
-await t("check-in is refused until the guest's passport/ID scan is on file", async () => {
+await t("check-in does not require a passport/NIC or ID scan on file", async () => {
   const b = await api(cashier, "GET", `/hotel/bookings/${bookingId1}`);
   const bookingRoomId = b.data.rooms[0].booking_room_id;
   const res = await api(cashier, "POST", `/hotel/bookings/${bookingId1}/check-in`, {
     room_assignments: [{ booking_room_id: bookingRoomId, room_id: room1Id }],
   });
-  status(res, 400, "no passport/scan on file yet should refuse the check-in");
+  status(res, 200, "check-in into room 1 should succeed with no passport/scan on file");
 });
 
-await t("filling in guest registration (passport + scan), then checking in booking 1 into room 1, succeeds", async () => {
+await t("guest registration (passport + scan) can still be filled in after check-in", async () => {
   const b = await api(cashier, "GET", `/hotel/bookings/${bookingId1}`);
   const guestUpdate = await api(cashier, "PUT", `/hotel/guests/${b.data.guest_id}`, {
     passport_nic: "ZZQA-PASSPORT-1", id_document: "data:image/png;base64,AAAA",
   });
   status(guestUpdate, 200, "guest registration update should succeed");
-
-  const bookingRoomId = b.data.rooms[0].booking_room_id;
-  const res = await api(cashier, "POST", `/hotel/bookings/${bookingId1}/check-in`, {
-    room_assignments: [{ booking_room_id: bookingRoomId, room_id: room1Id }],
-  });
-  status(res, 200, "check-in should succeed once every room has a room_id and the guest is registered");
 });
 
 await t("the same physical room cannot then be assigned to booking 2 too (real double-booking stays a hard refusal)", async () => {

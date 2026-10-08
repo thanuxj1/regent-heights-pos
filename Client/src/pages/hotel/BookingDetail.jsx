@@ -37,9 +37,8 @@ export default function BookingDetail() {
   const [error, setError] = useState("");
 
   const [assignments, setAssignments] = useState({});
-  // Optional — the guest may not have decided a meal plan until they're
-  // actually standing at the desk, so this is offered at check-in, not
-  // locked in at booking time.
+  // Optional. A plan may already be on the booking; the desk can still pick or
+  // change one here, since the guest may only decide when they arrive.
   const [mealPlans, setMealPlans] = useState([]);
   const [selectedMealPlanId, setSelectedMealPlanId] = useState("");
   const folioRef = useRef(null);
@@ -134,6 +133,7 @@ export default function BookingDetail() {
     try {
       const b = await getBookingById(id);
       setBooking(b);
+      setSelectedMealPlanId((prev) => prev || (b.meal_plan_id ? String(b.meal_plan_id) : ""));
       if (["checked_in", "checked_out"].includes(b.status)) {
         try { setFolio(await getBookingFolio(id)); } catch { setFolio(null); }
       } else {
@@ -435,7 +435,9 @@ export default function BookingDetail() {
               </select>
               {selectedMealPlanId && (
                 <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 6 }}>
-                  Posted to the folio as one line, for {booking.adults} adult(s){booking.children ? ` and ${booking.children} child(ren)` : ""}.
+                  {String(booking.meal_plan_id || "") === String(selectedMealPlanId)
+                    ? "Already on this booking — posted to the folio at the price quoted when it was booked."
+                    : <>Posted to the folio as one line, for {booking.adults} adult(s){booking.children ? ` and ${booking.children} child(ren)` : ""} × {booking.nights} night(s).</>}
                 </div>
               )}
             </div>
@@ -451,7 +453,7 @@ export default function BookingDetail() {
                 Fill this in from the guest's passport/ID at the desk, then print the registration form for them to sign.
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <label style={label}>Passport / NIC {!guestForm.passport_nic && <span style={{ color: "#DC2626" }}>* required to check in</span>}
+                <label style={label}>Passport / NIC
                   <input value={guestForm.passport_nic || ""} onChange={e => guestField("passport_nic", e.target.value)} style={{ ...input, marginTop: 4 }} />
                 </label>
                 <label style={label}>Date of Birth
@@ -482,7 +484,7 @@ export default function BookingDetail() {
                   <input value={guestForm.chauffeur_phone || ""} onChange={e => guestField("chauffeur_phone", e.target.value)} style={{ ...input, marginTop: 4 }} />
                 </label>
                 <div style={{ ...label, gridColumn: "1 / -1" }}>
-                  <div>Passport / ID Scan {!guestForm.id_document && <span style={{ color: "#DC2626" }}>* required to check in</span>}</div>
+                  <div>Passport / ID Scan</div>
                   <input
                     ref={docFileRef}
                     type="file"

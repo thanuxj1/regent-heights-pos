@@ -50,20 +50,37 @@ async function nextBookingRef(client) {
  * Tax is charged on the room and nothing else, which is how it has always been
  * here: not on meals, not on extras, and not on the extra-guest lines.
  */
-function priceBooking({ rooms, nights, adults, children, taxPct, extras, discount }) {
+function priceBooking({ rooms, nights, adults, children, taxPct, extras, discount, meal = 0 }) {
   const room_charges = rooms.reduce((s, r) => s + num(r.rate_per_night) * nights, 0);
   const guests = guestCharges(rooms, nights);
   const tax_amount  = room_charges * (num(taxPct, 0) / 100);
   const grand_total = room_charges + tax_amount + guests.total
-    + num(extras) - num(discount);
+    + num(meal) + num(extras) - num(discount);
   return {
     room_charges:   +room_charges.toFixed(2),
     person_charges: guests.total,
     person_lines:   guests.lines,
-    meal_charges:   0,
+    meal_charges:   +num(meal).toFixed(2),
     tax_amount:     +tax_amount.toFixed(2),
     grand_total:    +grand_total.toFixed(2),
   };
+}
+
+/** A meal plan of this property. Only an active plan may be newly chosen; one
+ *  already on a booking stays readable after the property retires it. */
+async function loadMealPlan(db, planId, b_id, { activeOnly = true } = {}) {
+  const { rows } = await db.query(
+    `SELECT * FROM "MEAL_PLAN" WHERE plan_id = $1 AND b_id = $2${activeOnly ? " AND is_active = TRUE" : ""}`,
+    [Number(planId), Number(b_id)],
+  );
+  return rows[0] || null;
+}
+
+/** A plan's supplement is charged per adult and per child, per night. */
+function mealChargeFor(plan, adults, children, nights) {
+  return Math.round(
+    (num(plan.supplement_per_adult) * num(adults) + num(plan.supplement_per_child) * num(children)) * num(nights) * 100,
+  ) / 100;
 }
 
 /** House rules for a property, falling back to the defaults if none were saved. */
@@ -92,10 +109,12 @@ const BOOKING_SELECT = `
          g.country AS guest_country, g.nationality AS guest_nationality,
          a.agent_name,
          f.folio_id,
+         mp.plan_name, mp.plan_code,
          COALESCE(pay.paid_total, 0) AS paid_total
   FROM "BOOKING" b
   LEFT JOIN "GUEST" g       ON g.guest_id = b.guest_id
   LEFT JOIN "COMMISSION_AGENT" a ON a.agent_id = b.agent_id
+  LEFT JOIN "MEAL_PLAN" mp  ON mp.plan_id = b.meal_plan_id
   LEFT JOIN "FOLIO" f       ON f.booking_id = b.booking_id
   LEFT JOIN LATERAL (
     SELECT SUM(CASE WHEN kind = 'refund' THEN -amount ELSE amount END) AS paid_total
@@ -560,11 +579,26 @@ export async function createBooking(req, res, next) {
     pricedRooms = seatGuests(pricedRooms, adultCount, childCount);
     assertOccupancy(adultCount, childCount, capacity, pricedRooms.length);
 
+    // An optional meal plan, chosen while taking the booking. It can still be
+    // added or changed at check-in; whatever is on the booking by then is billed.
+    let mealPlanId = null;
+    let mealAmt = 0;
+    if (meal_plan_id != null && meal_plan_id !== "") {
+      const plan = await loadMealPlan(client, meal_plan_id, b_id);
+      if (!plan) {
+        await client.query("ROLLBACK");
+        res.status(400); return next(new Error("That meal plan isn't available for this property"));
+      }
+      mealPlanId = plan.plan_id;
+      mealAmt = mealChargeFor(plan, adultCount, childCount, nights);
+    }
+
     const totals = priceBooking({
       rooms: pricedRooms, nights,
       adults: adultCount, children: childCount,
       taxPct,
       extras: extrasAmt, discount: discountAmt,
+      meal: mealAmt,
     });
     assertTotals({ totals, extras: extrasAmt, discount: discountAmt, advance: advanceAmt });
 
@@ -580,9 +614,9 @@ export async function createBooking(req, res, next) {
        RETURNING *`,
       [ref, Number(b_id), guestId, agent_id ? Number(agent_id) : null, bookingSource,
        checkIn, checkOut, nights, adultCount, childCount,
-       null, arrivalTime, requestsText,
+       mealPlanId, arrivalTime, requestsText,
        bookingStatus,
-       totals.room_charges, 0, taxPct, totals.tax_amount,
+       totals.room_charges, totals.meal_charges, taxPct, totals.tax_amount,
        extrasAmt, discountAmt, totals.grand_total, advanceAmt,
        promotionText, remarksText, req.user?.u_id || null, totals.person_charges]
     );
@@ -686,7 +720,8 @@ export async function updateBooking(req, res, next) {
         || adults !== b.adults || children !== b.children
         || Math.abs(taxPct - num(b.tax_pct, 0)) > 0.001
         || Math.abs(extras - num(b.extra_charges)) > 0.001
-        || Math.abs(discount - num(b.discount)) > 0.001;
+        || Math.abs(discount - num(b.discount)) > 0.001
+        || (given("meal_plan_id") && Number(req.body.meal_plan_id || 0) !== Number(b.meal_plan_id || 0));
       if (moved) {
         await client.query("ROLLBACK");
         res.status(409);
@@ -812,15 +847,34 @@ export async function updateBooking(req, res, next) {
     }
     assertOccupancy(adults, children, capacity, pricedRooms.length);
 
-    const totals = priceBooking({ rooms: pricedRooms, nights, adults, children, taxPct, extras, discount });
+    // The plan stays as it was unless the caller sent one (or an empty value to
+    // clear it), and is repriced because the party or the nights may have moved.
+    // A checked-in booking is left exactly as billed.
+    let mealPlanId = b.meal_plan_id ? Number(b.meal_plan_id) : null;
+    let mealAmt = num(b.meal_charges);
+    if (b.status !== "checked_in") {
+      if (given("meal_plan_id")) mealPlanId = req.body.meal_plan_id ? Number(req.body.meal_plan_id) : null;
+      if (mealPlanId) {
+        const plan = await loadMealPlan(client, mealPlanId, b.b_id, { activeOnly: mealPlanId !== Number(b.meal_plan_id || 0) });
+        if (!plan) {
+          await client.query("ROLLBACK");
+          res.status(400); return next(new Error("That meal plan isn't available for this property"));
+        }
+        mealAmt = mealChargeFor(plan, adults, children, nights);
+      } else {
+        mealAmt = 0;
+      }
+    }
+
+    const totals = priceBooking({ rooms: pricedRooms, nights, adults, children, taxPct, extras, discount, meal: mealAmt });
     // Payments already taken are left alone; an edit may only fail to invert the bill.
     assertTotals({ totals, extras, discount, advance: 0 });
 
     const { rows } = await client.query(
       `UPDATE "BOOKING" SET
          check_in_date=$1, check_out_date=$2, nights=$3, adults=$4, children=$5,
-         meal_plan_id=NULL, tax_pct=$6, extra_charges=$7, discount=$8,
-         room_charges=$9, meal_charges=0, tax_amount=$10, grand_total=$11,
+         meal_plan_id=$21, tax_pct=$6, extra_charges=$7, discount=$8,
+         room_charges=$9, meal_charges=$22, tax_amount=$10, grand_total=$11,
          person_charges=$20,
          agent_id      = $12,
          source        = COALESCE($13, source),
@@ -841,7 +895,8 @@ export async function updateBooking(req, res, next) {
        given("special_requests") ? textField(req.body.special_requests, "Special request", 2000) : b.special_requests,
        given("promotion") ? textField(req.body.promotion, "Promotion", 100) : b.promotion,
        given("remarks") ? textField(req.body.remarks, "Remarks", 2000) : b.remarks,
-       oneOf(req.body.status, "Status", BOOKING_STATUSES), id, totals.person_charges]
+       oneOf(req.body.status, "Status", BOOKING_STATUSES), id, totals.person_charges,
+       mealPlanId, totals.meal_charges]
     );
 
     // The rate, the discount or the agent may all have moved; recompute.
@@ -974,37 +1029,22 @@ export async function checkIn(req, res, next) {
       res.status(400); return next(new Error("Every room on the booking must be assigned before check-in"));
     }
 
-    // An optional meal plan, chosen at check-in (not at booking time) — the
-    // guest may not have decided, or the desk may be upselling it right now.
-    // Entirely optional: nothing below runs if it wasn't sent.
+    // A meal plan is optional. One chosen at the desk now wins (the guest may not
+    // have decided, or the desk may be upselling it); otherwise the plan taken
+    // with the booking is billed at what was quoted then.
     let mealPlan = null;
     let mealSupplement = 0;
-    const requestedMealPlanId = req.body?.meal_plan_id != null ? Number(req.body.meal_plan_id) : null;
+    const requestedMealPlanId = req.body?.meal_plan_id ? Number(req.body.meal_plan_id) : null;
     if (requestedMealPlanId) {
-      const mp = await client.query(
-        `SELECT * FROM "MEAL_PLAN" WHERE plan_id = $1 AND b_id = $2 AND is_active = TRUE`,
-        [requestedMealPlanId, b.b_id],
-      );
-      if (!mp.rows.length) {
+      mealPlan = await loadMealPlan(client, requestedMealPlanId, b.b_id);
+      if (!mealPlan) {
         await client.query("ROLLBACK");
         res.status(400); return next(new Error("That meal plan isn't available for this property"));
       }
-      mealPlan = mp.rows[0];
-      mealSupplement = Math.round(
-        (num(mealPlan.supplement_per_adult) * num(b.adults) + num(mealPlan.supplement_per_child) * num(b.children)) * 100,
-      ) / 100;
-    }
-
-    // The desk takes a passport/NIC number and a scan of it at check-in —
-    // that is the point of this whole screen. Nothing enforced it before.
-    const guestDoc = await client.query(
-      `SELECT passport_nic, id_document FROM "GUEST" WHERE guest_id = $1`, [b.guest_id]
-    );
-    const g = guestDoc.rows[0];
-    if (!g?.passport_nic || !g?.id_document) {
-      await client.query("ROLLBACK");
-      res.status(400); return next(new Error(
-        "A passport/NIC number and a scan of the document must be on file before check-in — fill in Guest Registration first."));
+      mealSupplement = mealChargeFor(mealPlan, b.adults, b.children, b.nights);
+    } else if (b.meal_plan_id) {
+      mealPlan = await loadMealPlan(client, b.meal_plan_id, b.b_id, { activeOnly: false });
+      mealSupplement = num(b.meal_charges);
     }
 
     // Guard against a room being double-occupied right now

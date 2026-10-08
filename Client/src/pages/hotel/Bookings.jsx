@@ -4,6 +4,7 @@ import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
 import {
   getBookings, createBooking, updateBooking, updateGuest, getAvailability, getGuests, getAgents, getStayPolicy,
+  getMealPlans,
 } from "../../services/api";
 import {
   card, input, label, btn, badge, th, td,
@@ -361,6 +362,8 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   const [arrivalTime, setArrivalTime] = useState(isEdit ? (initial.arrival_time || "").slice(0, 5) : "");
   const [specialRequests, setSpecialRequests] = useState(isEdit ? initial.special_requests || "" : "");
   const [remarks, setRemarks]   = useState(isEdit ? initial.remarks || "" : "");
+  const [mealPlans, setMealPlans]   = useState([]);
+  const [mealPlanId, setMealPlanId] = useState(isEdit && initial.meal_plan_id ? String(initial.meal_plan_id) : "");
 
   const [existingGuest, setExistingGuest] = useState("");
   const [newGuestMode, setNewGuestMode]   = useState(true);
@@ -370,6 +373,8 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   const [error, setError] = useState("");
 
   const nights = Math.max(nightsBetween(checkIn, checkOut), 0);
+
+  useEffect(() => { getMealPlans({ active: 1 }).then(setMealPlans).catch(() => {}); }, []);
 
   const searchSeq = useRef(0);
   const pickedRef = useRef(picked);
@@ -570,14 +575,30 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
     return { amount: +amount.toFixed(2), extraAdults, extraChildren };
   }, [seated, nights]);
 
+  // A plan the property has since retired stays on the form under its saved name
+  // when a booking that already has it is edited, rather than silently dropping off.
+  const planOptions = useMemo(() => {
+    if (isEdit && initial.meal_plan_id && !mealPlans.some(p => String(p.plan_id) === String(initial.meal_plan_id))) {
+      return [{ plan_id: initial.meal_plan_id, plan_name: initial.plan_name || "Current plan",
+               plan_code: initial.plan_code || "", supplement_per_adult: null, supplement_per_child: null }, ...mealPlans];
+    }
+    return mealPlans;
+  }, [mealPlans, isEdit, initial]);
+  const selectedPlan = planOptions.find(p => String(p.plan_id) === String(mealPlanId)) || null;
+  // Per adult and per child, per night — the same sum the server makes.
+  const mealAmt = !selectedPlan ? 0
+    : selectedPlan.supplement_per_adult == null ? Number(initial?.meal_charges) || 0
+    : +((Number(selectedPlan.supplement_per_adult) * numOr(adults, 0)
+        + Number(selectedPlan.supplement_per_child) * numOr(children, 0)) * nights).toFixed(2);
+
   const totals = useMemo(() => {
     const room = expanded.reduce((s, r) => s + Number(r.rate_per_night || 0) * nights, 0);
     const tax = room * (Number(taxPct) || 0) / 100;
-    const beforeDiscount = room + tax + extraGuests.amount + numOr(extras);
+    const beforeDiscount = room + tax + extraGuests.amount + mealAmt + numOr(extras);
     const grand = beforeDiscount - numOr(discount);
-    return { room, tax, guests: extraGuests.amount, beforeDiscount, grand,
+    return { room, tax, guests: extraGuests.amount, meal: mealAmt, beforeDiscount, grand,
              balance: grand - numOr(advance) };
-  }, [expanded, nights, adults, children, taxPct, extras, discount, advance, extraGuests]);
+  }, [expanded, nights, adults, children, taxPct, extras, discount, advance, extraGuests, mealAmt]);
 
   // Does the arrival time make sense for the rooms picked? Advice, never a block:
   // the desk may well have arranged an early check-in, or a room that is already
@@ -640,6 +661,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
           : {
               check_in_date: checkIn, check_out_date: checkOut,
               adults: numOr(adults, 1), children: numOr(children, 0),
+              meal_plan_id: mealPlanId ? Number(mealPlanId) : "",
               tax_pct: numOr(taxPct, 0), extra_charges: numOr(extras), discount: numOr(discount),
               source, agent_id: source === "agent" ? agentId : "",
               arrival_time: arrivalTime, special_requests: specialRequests, remarks,
@@ -683,7 +705,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
         check_in_date: checkIn,
         check_out_date: checkOut,
         adults: numOr(adults, 1), children: numOr(children, 0),
-        meal_plan_id: undefined,
+        meal_plan_id: mealPlanId ? Number(mealPlanId) : undefined,
         arrival_time: arrivalTime || undefined,
         special_requests: specialRequests || undefined,
         remarks: remarks || undefined,
@@ -765,6 +787,30 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                   </span>
                 )}
               </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Meal Plan (optional)
+                <select value={mealPlanId} onChange={e => setMealPlanId(e.target.value)} disabled={inHouse}
+                  style={{ ...input, marginTop: 4 }}>
+                  <option value="">None — Room Only</option>
+                  {planOptions.map(p => (
+                    <option key={p.plan_id} value={p.plan_id}>
+                      {p.plan_name}{p.plan_code ? ` (${p.plan_code})` : ""}
+                      {(Number(p.supplement_per_adult) > 0 || Number(p.supplement_per_child) > 0)
+                        ? ` — ${money(p.supplement_per_adult)}/adult, ${money(p.supplement_per_child)}/child per night`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedPlan && (
+                <div style={{ fontSize: 12, color: "#64748B", marginTop: 6 }}>
+                  {money(mealAmt)} for {numOr(adults, 0)} adult{numOr(adults, 0) === 1 ? "" : "s"}
+                  {numOr(children, 0) ? ` and ${numOr(children, 0)} child${numOr(children, 0) === 1 ? "" : "ren"}` : ""}
+                  {" × "}{nights} night{nights === 1 ? "" : "s"}. It can still be changed at check-in.
+                </div>
+              )}
             </div>
           </Section>
 
@@ -1148,6 +1194,9 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                                     extraGuests.extraChildren ? `${extraGuests.extraChildren} child${extraGuests.extraChildren === 1 ? "" : "ren"}` : null]
                                     .filter(Boolean).join(", ")} × ${nights} night${nights === 1 ? "" : "s"})`,
                   money(totals.guests), "#1E293B"]] : []),
+                ...(totals.meal ? [[
+                  `Meal plan (${selectedPlan?.plan_code || selectedPlan?.plan_name} × ${nights} night${nights === 1 ? "" : "s"})`,
+                  money(totals.meal), "#1E293B"]] : []),
 
                 ...(Number(extras) ? [["Extra Charges", money(extras), "#1E293B"]] : []),
                 ...(Number(discount) ? [["Discount", `-${money(discount)}`, "#DC2626"]] : []),
