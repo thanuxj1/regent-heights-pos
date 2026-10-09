@@ -50,17 +50,24 @@ async function nextBookingRef(client) {
  * Tax is charged on the room and nothing else, which is how it has always been
  * here: not on meals, not on extras, and not on the extra-guest lines.
  */
-function priceBooking({ rooms, nights, adults, children, taxPct, extras, discount, meal = 0 }) {
+function priceBooking({ rooms, nights, adults, children, taxPct, extras, discount, discountPct = null, meal = 0 }) {
   const room_charges = rooms.reduce((s, r) => s + num(r.rate_per_night) * nights, 0);
   const guests = guestCharges(rooms, nights);
   const tax_amount  = room_charges * (num(taxPct, 0) / 100);
-  const grand_total = room_charges + tax_amount + guests.total
-    + num(meal) + num(extras) - num(discount);
+  const before_discount = room_charges + tax_amount + guests.total + num(meal) + num(extras);
+  // A percentage comes off the whole bill before discount, so the amount follows
+  // the bill when the nights, the party or the plan change. A booking saved
+  // before percentages keeps its fixed amount.
+  const discount_amount = discountPct != null
+    ? Math.round(before_discount * num(discountPct)) / 100
+    : num(discount);
+  const grand_total = before_discount - discount_amount;
   return {
     room_charges:   +room_charges.toFixed(2),
     person_charges: guests.total,
     person_lines:   guests.lines,
     meal_charges:   +num(meal).toFixed(2),
+    discount:       +discount_amount.toFixed(2),
     tax_amount:     +tax_amount.toFixed(2),
     grand_total:    +grand_total.toFixed(2),
   };
@@ -437,7 +444,7 @@ export async function createBooking(req, res, next) {
     const {
       guest_id, guest, agent_id, source, check_in_date, check_out_date,
       adults, children, meal_plan_id, arrival_time, special_requests,
-      rooms, tax_pct, extra_charges, discount, promotion, remarks,
+      rooms, tax_pct, extra_charges, discount, discount_pct, promotion, remarks,
       advance_payment, advance_method, status,
     } = req.body;
 
@@ -467,6 +474,7 @@ export async function createBooking(req, res, next) {
     const taxPct       = pctField(tax_pct, "Tax %", num((await loadPolicy(pool, b_id)).default_tax_pct, 0));
     const extrasAmt    = moneyField(extra_charges,   "Extra charges");
     const discountAmt  = moneyField(discount,        "Discount");
+    const discountPct  = discount_pct != null && discount_pct !== "" ? pctField(discount_pct, "Discount %", 0) : null;
     const advanceAmt   = moneyField(advance_payment, "Advance payment");
     const bookingSource  = oneOf(source, "Source", BOOKING_SOURCES, "phone");
     const bookingStatus  = oneOf(status, "Status", BOOKING_STATUSES, "confirmed");
@@ -597,10 +605,10 @@ export async function createBooking(req, res, next) {
       rooms: pricedRooms, nights,
       adults: adultCount, children: childCount,
       taxPct,
-      extras: extrasAmt, discount: discountAmt,
+      extras: extrasAmt, discount: discountAmt, discountPct,
       meal: mealAmt,
     });
-    assertTotals({ totals, extras: extrasAmt, discount: discountAmt, advance: advanceAmt });
+    assertTotals({ totals, extras: extrasAmt, discount: totals.discount, advance: advanceAmt });
 
     const ref = await nextBookingRef(client);
 
@@ -609,16 +617,16 @@ export async function createBooking(req, res, next) {
         (booking_ref, b_id, guest_id, agent_id, source, check_in_date, check_out_date, nights,
          adults, children, meal_plan_id, arrival_time, special_requests, status,
          room_charges, meal_charges, tax_pct, tax_amount, extra_charges, discount,
-         grand_total, advance_paid, promotion, remarks, taken_by, person_charges)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         grand_total, advance_paid, promotion, remarks, taken_by, person_charges, discount_pct)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
        RETURNING *`,
       [ref, Number(b_id), guestId, agent_id ? Number(agent_id) : null, bookingSource,
        checkIn, checkOut, nights, adultCount, childCount,
        mealPlanId, arrivalTime, requestsText,
        bookingStatus,
        totals.room_charges, totals.meal_charges, taxPct, totals.tax_amount,
-       extrasAmt, discountAmt, totals.grand_total, advanceAmt,
-       promotionText, remarksText, req.user?.u_id || null, totals.person_charges]
+       extrasAmt, totals.discount, totals.grand_total, advanceAmt,
+       promotionText, remarksText, req.user?.u_id || null, totals.person_charges, discountPct]
     );
     const booking = bk.rows[0];
 
@@ -707,6 +715,17 @@ export async function updateBooking(req, res, next) {
     const taxPct   = req.body.tax_pct  != null ? pctField(req.body.tax_pct, "Tax %", 0)                                 : num(b.tax_pct, 0);
     const extras   = req.body.extra_charges != null ? moneyField(req.body.extra_charges, "Extra charges") : num(b.extra_charges);
     const discount = req.body.discount      != null ? moneyField(req.body.discount,      "Discount")      : num(b.discount);
+    // Kept unless a new percentage is sent (blank clears it); a plain amount sent
+    // instead replaces it.
+    let discountPct = b.discount_pct != null ? num(b.discount_pct) : null;
+    let discountAmount = discount;
+    if (given("discount_pct")) {
+      discountPct = req.body.discount_pct === "" || req.body.discount_pct == null
+        ? null : pctField(req.body.discount_pct, "Discount %", 0);
+      if (discountPct == null) discountAmount = 0; // cleared: no discount at all
+    } else if (req.body.discount != null) {
+      discountPct = null;
+    }
 
     // Once a guest has checked in, the bill is open: the room charges were posted
     // to the folio at that moment. Moving the dates, the rooms or the prices from
@@ -721,7 +740,8 @@ export async function updateBooking(req, res, next) {
         || Math.abs(taxPct - num(b.tax_pct, 0)) > 0.001
         || Math.abs(extras - num(b.extra_charges)) > 0.001
         || Math.abs(discount - num(b.discount)) > 0.001
-        || (given("meal_plan_id") && Number(req.body.meal_plan_id || 0) !== Number(b.meal_plan_id || 0));
+        || (given("meal_plan_id") && Number(req.body.meal_plan_id || 0) !== Number(b.meal_plan_id || 0))
+        || (given("discount_pct") && Math.abs((discountPct ?? -1) - (b.discount_pct != null ? num(b.discount_pct) : -1)) > 0.001);
       if (moved) {
         await client.query("ROLLBACK");
         res.status(409);
@@ -866,16 +886,19 @@ export async function updateBooking(req, res, next) {
       }
     }
 
-    const totals = priceBooking({ rooms: pricedRooms, nights, adults, children, taxPct, extras, discount, meal: mealAmt });
+    // A checked-in bill already carries its discount line, so it stays as billed.
+    const totals = priceBooking({ rooms: pricedRooms, nights, adults, children, taxPct, extras,
+      discount: b.status === "checked_in" ? discount : discountAmount,
+      discountPct: b.status === "checked_in" ? null : discountPct, meal: mealAmt });
     // Payments already taken are left alone; an edit may only fail to invert the bill.
-    assertTotals({ totals, extras, discount, advance: 0 });
+    assertTotals({ totals, extras, discount: totals.discount, advance: 0 });
 
     const { rows } = await client.query(
       `UPDATE "BOOKING" SET
          check_in_date=$1, check_out_date=$2, nights=$3, adults=$4, children=$5,
          meal_plan_id=$21, tax_pct=$6, extra_charges=$7, discount=$8,
          room_charges=$9, meal_charges=$22, tax_amount=$10, grand_total=$11,
-         person_charges=$20,
+         person_charges=$20, discount_pct=$23,
          agent_id      = $12,
          source        = COALESCE($13, source),
          arrival_time  = $14,
@@ -884,7 +907,7 @@ export async function updateBooking(req, res, next) {
          remarks       = $17,
          status        = COALESCE($18, status)
        WHERE booking_id = $19 RETURNING *`,
-      [checkIn, checkOut, nights, adults, children, taxPct, extras, discount,
+      [checkIn, checkOut, nights, adults, children, taxPct, extras, totals.discount,
        totals.room_charges, totals.tax_amount, totals.grand_total,
        // A field the caller sent replaces what is there — including with nothing.
        // These were COALESCEd, so once an arrival time, a request or an agent had
@@ -896,7 +919,7 @@ export async function updateBooking(req, res, next) {
        given("promotion") ? textField(req.body.promotion, "Promotion", 100) : b.promotion,
        given("remarks") ? textField(req.body.remarks, "Remarks", 2000) : b.remarks,
        oneOf(req.body.status, "Status", BOOKING_STATUSES), id, totals.person_charges,
-       mealPlanId, totals.meal_charges]
+       mealPlanId, totals.meal_charges, discountPct]
     );
 
     // The rate, the discount or the agent may all have moved; recompute.
@@ -1098,7 +1121,10 @@ export async function checkIn(req, res, next) {
     }
     if (num(b.tax_amount) > 0) await post("tax", `Room charges tax (${b.tax_pct}%)`, 1, b.tax_amount, b.tax_amount);
     if (num(b.extra_charges) > 0) await post("misc", "Extra charges", 1, b.extra_charges, b.extra_charges);
-    if (num(b.discount) > 0)      await post("discount", "Discount", 1, -num(b.discount), -num(b.discount));
+    if (num(b.discount) > 0) {
+      await post("discount", `Discount${b.discount_pct != null ? ` (${num(b.discount_pct)}%)` : ""}`,
+                 1, -num(b.discount), -num(b.discount));
+    }
     if (mealPlan && mealSupplement > 0) {
       // "meal" — FOLIO_ITEM.source is CHECK-constrained to a fixed list
       // that doesn't include "meal_plan"; "meal" is also what
@@ -1570,7 +1596,7 @@ export async function getConfirmation(req, res, next) {
       `Tax (${b.tax_pct}%): ${money(b.tax_amount)}`,
       num(b.meal_charges) ? `Inclusions: ${money(b.meal_charges)}` : null,
       num(b.extra_charges) ? `Extra Charges: ${money(b.extra_charges)}` : null,
-      num(b.discount) ? `Discount: -${money(b.discount)}` : null,
+      num(b.discount) ? `Discount${b.discount_pct != null ? ` (${num(b.discount_pct)}%)` : ""}: -${money(b.discount)}` : null,
       `*Grand Total: ${money(b.grand_total)}*`,
       `Total Paid: ${money(b.paid_total)}`,
       `*Amount Due at Check-In: ${money(balance)}*`,

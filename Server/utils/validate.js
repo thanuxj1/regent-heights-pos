@@ -204,7 +204,8 @@ export function cleanGuest(raw, { requireName = true } = {}) {
  * never balance, and both are one fat-fingered keystroke away.
  */
 export function assertTotals({ totals, extras, discount, advance }) {
-  const beforeDiscount = totals.room_charges + totals.tax_amount + totals.meal_charges + extras;
+  const beforeDiscount = totals.room_charges + totals.tax_amount + totals.meal_charges
+    + (Number(totals.person_charges) || 0) + extras;
   if (discount > beforeDiscount) {
     invalid(`Discount of ${fmt(discount)} is more than the bill. The most you can take off is ${fmt(beforeDiscount)}.`);
   }

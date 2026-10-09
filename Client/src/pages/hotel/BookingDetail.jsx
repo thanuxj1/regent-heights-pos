@@ -953,7 +953,9 @@ function ConfirmationModal({ data, onClose }) {
               {Number(b.person_charges) > 0 && <Money k="Extra Guest Charges" v={b.person_charges} />}
               <Money k="Inclusions Including Tax" v={b.meal_charges} />
               <Money k="Extra Charges" v={b.extra_charges} />
-              {Number(b.discount) > 0 && <Money k="Discount" v={-Number(b.discount)} red />}
+              {Number(b.discount) > 0 && (
+                <Money k={b.discount_pct != null ? `Discount (${Number(b.discount_pct)}%)` : "Discount"} v={-Number(b.discount)} red />
+              )}
               <Money k="Grand Total" v={b.grand_total} strong />
               <Money k="Total Paid" v={paid} />
               <Money k="Amount Due at Check-In" v={Number(b.grand_total) - paid} strong red />

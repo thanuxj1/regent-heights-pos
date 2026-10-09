@@ -354,7 +354,15 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   // Set to the hotel's own rate once that is known — unless the desk has already typed one.
   const taxTouched = useRef(false);
   const [extras, setExtras]     = useState(isEdit ? Number(initial.extra_charges) || 0 : 0);
-  const [discount, setDiscount] = useState(isEdit ? Number(initial.discount) || 0 : 0);
+  // A percentage of the bill. A booking saved before percentages shows the
+  // percentage its fixed amount came to.
+  const [discountPct, setDiscountPct] = useState(() => {
+    if (!isEdit) return 0;
+    if (initial.discount_pct != null) return Number(initial.discount_pct);
+    const amt = Number(initial.discount) || 0;
+    const before = (Number(initial.grand_total) || 0) + amt;
+    return amt > 0 && before > 0 ? +((amt / before) * 100).toFixed(2) : 0;
+  });
   const [advance, setAdvance]   = useState(isEdit ? Number(initial.paid_total) || 0 : 0);
   const [advanceMethod, setAdvanceMethod] = useState("cash");
   const [source, setSource]     = useState(isEdit ? initial.source : "phone");
@@ -595,10 +603,12 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
     const room = expanded.reduce((s, r) => s + Number(r.rate_per_night || 0) * nights, 0);
     const tax = room * (Number(taxPct) || 0) / 100;
     const beforeDiscount = room + tax + extraGuests.amount + mealAmt + numOr(extras);
-    const grand = beforeDiscount - numOr(discount);
-    return { room, tax, guests: extraGuests.amount, meal: mealAmt, beforeDiscount, grand,
+    // The same sum the server makes: the percentage of everything above, to the cent.
+    const discount = Math.round(beforeDiscount * Math.min(100, Math.max(0, numOr(discountPct)))) / 100;
+    const grand = beforeDiscount - discount;
+    return { room, tax, guests: extraGuests.amount, meal: mealAmt, beforeDiscount, discount, grand,
              balance: grand - numOr(advance) };
-  }, [expanded, nights, adults, children, taxPct, extras, discount, advance, extraGuests, mealAmt]);
+  }, [expanded, nights, adults, children, taxPct, extras, discountPct, advance, extraGuests, mealAmt]);
 
   // Does the arrival time make sense for the rooms picked? Advice, never a block:
   // the desk may well have arranged an early check-in, or a room that is already
@@ -628,7 +638,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
   // bed is an everyday answer. Say so, and let them book it.
   const overCapacity = capacity > 0 && people > capacity;
 
-  const overDiscount = numOr(discount) > totals.beforeDiscount + 0.001;
+  const overDiscount = numOr(discountPct) > 100 || numOr(discountPct) < 0;
   // While the discount is out of range the grand total is meaningless (it goes
   // negative), so judging the advance against it would flag even an advance of 0.
   const overAdvance  = !isEdit && !overDiscount && numOr(advance) > totals.grand + 0.001;
@@ -645,7 +655,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
       if (checkIn !== dateInput(initial.check_in_date) && checkIn < today()) {
         setError("Check-in can't be moved to a date that has already passed."); return;
       }
-      if (overDiscount) { setError(`Discount cannot be more than ${money(totals.beforeDiscount)}.`); return; }
+      if (overDiscount) { setError("Discount must be between 0 and 100%."); return; }
     }
 
     setSubmitting(true);
@@ -662,7 +672,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
               check_in_date: checkIn, check_out_date: checkOut,
               adults: numOr(adults, 1), children: numOr(children, 0),
               meal_plan_id: mealPlanId ? Number(mealPlanId) : "",
-              tax_pct: numOr(taxPct, 0), extra_charges: numOr(extras), discount: numOr(discount),
+              tax_pct: numOr(taxPct, 0), extra_charges: numOr(extras), discount_pct: numOr(discountPct),
               source, agent_id: source === "agent" ? agentId : "",
               arrival_time: arrivalTime, special_requests: specialRequests, remarks,
               rooms: roomsPayload(picked),
@@ -691,7 +701,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
     if (!newGuestMode && !existingGuest)         { setError("Select a guest."); return; }
     if (numOr(adults, 0) < 1) { setError("At least one adult is required."); return; }
     if (source === "agent" && !agentId) { setError("Choose the agent this booking came through."); return; }
-    if (overDiscount) { setError(`Discount cannot be more than ${money(totals.beforeDiscount)}.`); return; }
+    if (overDiscount) { setError("Discount must be between 0 and 100%."); return; }
     if (overAdvance)  { setError(`Advance payment cannot be more than the grand total of ${money(totals.grand)}.`); return; }
 
     setSubmitting(true);
@@ -710,7 +720,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
         special_requests: specialRequests || undefined,
         remarks: remarks || undefined,
         tax_pct: numOr(taxPct, 0),
-        extra_charges: numOr(extras), discount: numOr(discount),
+        extra_charges: numOr(extras), discount_pct: numOr(discountPct),
         advance_payment: numOr(advance), advance_method: advanceMethod,
         rooms: roomsPayload(picked),
       });
@@ -1152,11 +1162,13 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                 <input type="number" min={0} max={MAX_MONEY} step="0.01" required value={extras}
                   onChange={e => setExtras(e.target.value)} style={{ ...input, marginTop: 4 }} />
               </label>
-              <label style={label}>Discount
-                <input type="number" min={0} max={MAX_MONEY} step="0.01" required value={discount}
-                  onChange={e => setDiscount(e.target.value)}
+              <label style={label}>Discount %
+                <input type="number" min={0} max={100} step="0.01" required value={discountPct}
+                  onChange={e => setDiscountPct(e.target.value)}
                   style={{ ...input, marginTop: 4, ...(overDiscount ? overStyle : null) }} />
-                {overDiscount && <span style={hint}>Most you can take off is {money(totals.beforeDiscount)}</span>}
+                {overDiscount
+                  ? <span style={hint}>Between 0 and 100%</span>
+                  : totals.discount > 0 && <span style={{ ...hint, color: "#64748B" }}>{money(totals.discount)} off the bill</span>}
               </label>
               {!isEdit && (
               <label style={label}>Advance Payment
@@ -1199,7 +1211,7 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                   money(totals.meal), "#1E293B"]] : []),
 
                 ...(Number(extras) ? [["Extra Charges", money(extras), "#1E293B"]] : []),
-                ...(Number(discount) ? [["Discount", `-${money(discount)}`, "#DC2626"]] : []),
+                ...(totals.discount ? [[`Discount (${numOr(discountPct)}%)`, `-${money(totals.discount)}`, "#DC2626"]] : []),
               ].map(([k, v, c]) => (
                 <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13, color: "#64748B" }}>
                   <span>{k}</span><span style={{ color: c, fontWeight: 600 }}>{v}</span>
