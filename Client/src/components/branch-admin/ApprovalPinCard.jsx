@@ -81,8 +81,10 @@ export default function ApprovalPinCard() {
             <span style={{ color: "#059669", fontWeight: 600 }}>PIN is set — you can approve a discount or void.</span>
           ) : (
             <span style={{ color: "#B45309", fontWeight: 600 }}>
-              Not set yet — a discount over {info.discount_needs_approval_above_pct}% or a void has nobody
-              who can approve it until a manager sets a PIN.
+              Not set yet.{" "}
+              {info.managers_who_can_approve > 0
+                ? "Another manager's PIN still covers discounts and voids."
+                : "Until a manager sets one, cashiers can give discounts without approval, and a void has nobody who can approve it."}
             </span>
           )}
           <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 4 }}>

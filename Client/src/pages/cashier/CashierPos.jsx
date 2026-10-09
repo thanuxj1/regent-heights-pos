@@ -41,6 +41,7 @@ import {
   deleteOrderItem,
   getDeliveryPartners,
   getUserDefaultRevocations,
+  getDiscountApproval,
 } from "../../services/api";
 import { connectSocket } from "../../services/socket";
 import { staleWhileRevalidate } from "../../services/localCache";
@@ -69,7 +70,7 @@ const ALL_ITEMS = { cat_id: "all", cat_name: "All Items" };
 
 // Mirrors DISCOUNT_APPROVAL_PCT on the server. Only decides when to ask for a
 // PIN — the server refuses regardless of what this file says. 0 means every
-// discount needs a manager's PIN.
+// discount needs a manager's PIN, once a manager at the property has set one.
 const DISCOUNT_LIMIT_PCT = 0;
 /** Roles that are their own approval. */
 const MANAGER_ROLES = [1, 2, 6];
@@ -79,6 +80,20 @@ const CashierPos = () => {
   const { user, logout } = useAuth();
   // A manager is already the approval — never ask them for a second signature.
   const isManager = MANAGER_ROLES.includes(Number(user?.role_id));
+  // Until a manager at this property sets an approval PIN, a discount needs
+  // none. Assumed needed until the server says otherwise, so an offline till
+  // never sends a discount it would have had to approve.
+  const [discountPinNeeded, setDiscountPinNeeded] = useState(true);
+  const refreshDiscountPin = async () => {
+    try {
+      const r = await getDiscountApproval();
+      setDiscountPinNeeded(Boolean(r?.pin_needed));
+      return Boolean(r?.pin_needed);
+    } catch {
+      return discountPinNeeded;
+    }
+  };
+  useEffect(() => { if (!isManager) refreshDiscountPin(); }, [isManager]); // eslint-disable-line react-hooks/exhaustive-deps
   const [branchName, setBranchName] = useState("");
   const [showOrderNotes, setShowOrderNotes] = useState(false);
   const [sentToKitchen, setSentToKitchen] = useState(false);
@@ -833,6 +848,13 @@ const CashierPos = () => {
    * its own setError for the same message.
    */
   const handlePossiblePinError = (msg) => {
+    if (!approvalPinRef.current && /approval PIN is required/i.test(msg || "")) {
+      setDiscountPinNeeded(true);
+      setPinEntry("");
+      setPinError("");
+      setPinPromptOpen(true);
+      return true;
+    }
     if (approvalPinRef.current && /\bpin\b/i.test(msg || "")) {
       approvalPinRef.current = "";
       setPinEntry("");
@@ -859,7 +881,9 @@ const CashierPos = () => {
     }
     // Ask for the manager's PIN before anything is sent, rather than letting the
     // cashier reach the end of a sale and be refused in front of the customer.
-    if (Number(discountPct || 0) > DISCOUNT_LIMIT_PCT && !approvalPinRef.current && !isManager) {
+    // Asked fresh each time: a manager may have set or removed their PIN since.
+    if (Number(discountPct || 0) > DISCOUNT_LIMIT_PCT && !approvalPinRef.current && !isManager
+        && await refreshDiscountPin()) {
       setPinEntry("");
       setPinPromptOpen(true);
       return;
@@ -1741,7 +1765,7 @@ const CashierPos = () => {
                     {discountAmount > 0 ? `-LKR ${discountAmount.toFixed(2)}` : "LKR 0.00"}
                   </span>
                 </div>
-                {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && (
+                {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && discountPinNeeded && (
                   <p className="mt-0.5 text-[11px] text-amber-600">A manager's PIN will be needed at checkout.</p>
                 )}
                 <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">

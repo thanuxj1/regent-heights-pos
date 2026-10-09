@@ -446,6 +446,11 @@ export const getSecurityOverview = async () => {
   return response.data;
 };
 
+export const getDiscountApproval = async () => {
+  const response = await api.get("/security/discount-approval");
+  return response.data;
+};
+
 export const setApprovalPin = async (pin) => {
   const response = await api.put("/security/approval-pin", { pin });
   return response.data;

@@ -338,6 +338,7 @@ export async function createRoomServiceOrder(req, res, next) {
       const approval = await requireApproval(req, {
         pin: approval_pin, b_id,
         what: `give a ${discountPct}% discount (over the ${DISCOUNT_APPROVAL_PCT}% limit)`,
+        openWithoutPin: true,
       });
       if (!approval.ok) {
         await client.query("ROLLBACK");

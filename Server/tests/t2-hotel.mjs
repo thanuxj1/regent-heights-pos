@@ -151,17 +151,17 @@ await t("owner adds a room-service menu item", async () => {
   bproId = bpro.data.Bpro_id;
 });
 
+await t("owner sets a real approval PIN", async () => {
+  const res = await api(owner, "PUT", "/security/approval-pin", { pin: "246810" });
+  status(res, 200);
+});
+
 await t("a discounted room-service charge with a wrong PIN is refused", async () => {
   const res = await api(cashier, "POST", "/hotel/room-service", {
     room_id: room1Id, tax_pct: 0, discount_pct: 10, approval_pin: "0000",
     items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 1000 }],
   });
   status(res, 403, "a wrong PIN on a room-service discount must be refused, not silently accepted");
-});
-
-await t("owner sets a real approval PIN", async () => {
-  const res = await api(owner, "PUT", "/security/approval-pin", { pin: "246810" });
-  status(res, 200);
 });
 
 await t("the same discount now succeeds with the real PIN, and the folio is charged the DISCOUNTED amount", async () => {

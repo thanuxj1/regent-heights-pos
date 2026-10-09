@@ -7,7 +7,7 @@ import pool from "../config/database.js";
 import { logActivity } from "../utils/activityLog.js";
 import { writeBranchId } from "../utils/scope.js";
 import { callerIp } from "../utils/loginLocation.js";
-import { hashApprovalPin, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
+import { hashApprovalPin, DISCOUNT_APPROVAL_PCT, approverExists } from "../utils/approval.js";
 import { textField } from "../utils/validate.js";
 
 /** GET /api/security/login-locations */
@@ -136,6 +136,17 @@ export async function clearApprovalPin(req, res, next) {
       summary: "Removed their manager approval PIN",
     });
     res.json({ success: true, message: "Approval PIN removed." });
+  } catch (err) { next(err); }
+}
+
+/** GET /api/security/discount-approval — does a discount at the caller's property need a PIN? */
+export async function getDiscountApproval(req, res, next) {
+  try {
+    const b_id = req.user?.b_id;
+    res.json({
+      limit_pct: DISCOUNT_APPROVAL_PCT,
+      pin_needed: b_id ? await approverExists(b_id) : false,
+    });
   } catch (err) { next(err); }
 }
 

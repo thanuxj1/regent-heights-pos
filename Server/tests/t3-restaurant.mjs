@@ -65,8 +65,15 @@ await t("kitchen staff cannot create an order (read-only role there)", async () 
   ok(res.status === 403, `expected 403, got ${res.status}`);
 });
 
-section("discount needs a manager PIN (till sale)");
-await t("a discounted sale with no PIN at all is refused", async () => {
+section("discount needs a manager PIN (till sale) — once a manager has set one");
+let noPinOrderId;
+await t("with no manager PIN set, the till is told no PIN is needed", async () => {
+  const res = await api(cashier, "GET", "/security/discount-approval");
+  status(res, 200);
+  eq(res.data.pin_needed, false);
+});
+
+await t("with no manager PIN set, a cashier's discounted sale goes through without one", async () => {
   const res = await api(cashier, "POST", "/orders/with-items", {
     order: {
       or_tax: 0, or_totalcost: 270, or_totalCostWtax: 270, or_status: "pending", or_type: "takeaway",
@@ -75,24 +82,44 @@ await t("a discounted sale with no PIN at all is refused", async () => {
     },
     items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 300 }],
   });
-  status(res, 403, "a discount with no approval PIN at all should be refused");
+  status(res, 201, "no PIN exists yet, so a discount needs none");
+  eq(res.data.data.discount_approved_by ?? null, null, "nobody approved it, and the sale says so");
+  noPinOrderId = res.data.data.or_id;
 });
 
-await t("a discounted sale with a WRONG PIN is refused (no manager PIN is set yet)", async () => {
-  const res = await api(cashier, "POST", "/orders/with-items", {
-    order: {
-      or_tax: 0, or_totalcost: 270, or_totalCostWtax: 270, or_status: "pending", or_type: "takeaway",
-      u_id: A.cashier.u_id, b_id: A.b_id, client_ref: `${stamp.toLowerCase()}-order-5`, payment_method: "cash",
-      discount_pct: 10, approval_pin: "0000",
-    },
-    items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 300 }],
-  });
-  status(res, 403, "a wrong PIN should be refused, not silently accepted");
+await t("but a void still needs a PIN, even with none set", async () => {
+  const res = await api(cashier, "POST", `/orders/${noPinOrderId}/void`, { reason: "ZZQA test void" });
+  status(res, 403, "voids are never waved through");
 });
 
 await t("owner sets their approval PIN through the real endpoint", async () => {
   const res = await api(owner, "PUT", "/security/approval-pin", { pin: "135790" });
   status(res, 200);
+  eq((await api(cashier, "GET", "/security/discount-approval")).data.pin_needed, true, "the till now has to ask");
+});
+
+await t("once a PIN is set, a discounted sale with no PIN is refused", async () => {
+  const res = await api(cashier, "POST", "/orders/with-items", {
+    order: {
+      or_tax: 0, or_totalcost: 270, or_totalCostWtax: 270, or_status: "pending", or_type: "takeaway",
+      u_id: A.cashier.u_id, b_id: A.b_id, client_ref: `${stamp.toLowerCase()}-order-5`, payment_method: "cash",
+      discount_pct: 10,
+    },
+    items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 300 }],
+  });
+  status(res, 403, "a discount with no approval PIN should be refused once a manager has one");
+});
+
+await t("once a PIN is set, a discounted sale with a WRONG PIN is refused", async () => {
+  const res = await api(cashier, "POST", "/orders/with-items", {
+    order: {
+      or_tax: 0, or_totalcost: 270, or_totalCostWtax: 270, or_status: "pending", or_type: "takeaway",
+      u_id: A.cashier.u_id, b_id: A.b_id, client_ref: `${stamp.toLowerCase()}-order-5b`, payment_method: "cash",
+      discount_pct: 10, approval_pin: "0000",
+    },
+    items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 300 }],
+  });
+  status(res, 403, "a wrong PIN should be refused, not silently accepted");
 });
 
 let discountedOrderId;

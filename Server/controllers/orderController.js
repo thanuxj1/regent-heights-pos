@@ -584,6 +584,7 @@ export const updateOrder = async (req, res) => {
       const approval = await requireApproval(req, {
         pin: approval_pin, b_id,
         what: `give a ${resolvedDiscountPct}% discount (over the ${DISCOUNT_APPROVAL_PCT}% limit)`,
+        openWithoutPin: true,
       });
       if (!approval.ok) {
         return res.status(approval.status).json({ success: false, error: approval.message });
@@ -1226,6 +1227,7 @@ export const createOrderWithItems = async (req, res) => {
       pin: order.approval_pin,
       b_id,
       what: `give a ${discountPct}% discount (over the ${DISCOUNT_APPROVAL_PCT}% limit)`,
+      openWithoutPin: true,
     });
     if (!approval.ok) {
       return res.status(approval.status).json({ success: false, error: approval.message });

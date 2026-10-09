@@ -50,6 +50,20 @@ export async function findApprover(pin, b_id) {
   return null;
 }
 
+/** Has any manager who could approve at this property set a PIN? */
+export async function approverExists(b_id) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM "User" u
+     WHERE u.u_approval_pin IS NOT NULL
+       AND u.u_status IS NOT FALSE
+       AND u.role_id = ANY($1::int[])
+       AND (u."B_id" = $2 OR u.role_id = $3)
+     LIMIT 1`,
+    [APPROVER_ROLES, Number(b_id), ROLES.SUPER_ADMIN]
+  );
+  return rows.length > 0;
+}
+
 /**
  * Does this action need a manager, and did it get one?
  *
@@ -58,10 +72,17 @@ export async function findApprover(pin, b_id) {
  *
  * @returns {Promise<{ok:true, approver:object|null} | {ok:false, status:number, message:string}>}
  */
-export async function requireApproval(req, { pin, b_id, what }) {
+export async function requireApproval(req, { pin, b_id, what, openWithoutPin = false }) {
   const role = Number(req.user?.role_id);
   if (APPROVER_ROLES.includes(role)) {
     return { ok: true, approver: { u_id: req.user.u_id, name: "self" } };
+  }
+
+  // A discount at a property where no manager has set a PIN goes through: until
+  // the owner sets one they have chosen not to gate discounts. A void or a short
+  // drawer is never waved through this way.
+  if (openWithoutPin && !(await approverExists(b_id))) {
+    return { ok: true, approver: null };
   }
 
   if (!pin) {
