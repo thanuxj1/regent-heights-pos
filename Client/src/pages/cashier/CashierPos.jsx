@@ -3,6 +3,10 @@ import { useNavigate } from "react-router-dom";
 import {
   FaBed,
   FaCalculator,
+  FaCreditCard,
+  FaFileInvoiceDollar,
+  FaMoneyBillWave,
+  FaUniversity,
   FaCoffee,
   FaChevronDown,
   FaDesktop,
@@ -1631,81 +1635,84 @@ const CashierPos = () => {
             </div>
           </section>
 
-          <aside className="flex flex-col rounded-3xl bg-white shadow-[0_10px_30px_rgba(15,23,42,0.09)] ring-1 ring-slate-200/70 lg:min-h-0 lg:overflow-y-auto">
-            <div className="shrink-0 rounded-t-3xl bg-linear-to-r from-[#0A5BAE] to-[#19A4E5] px-5 py-4 text-white">
+          {/* The order panel. Only the middle scrolls: the money and the buttons
+              are pinned below it, so Checkout can never fall off a laptop
+              screen, however much has been rung up. */}
+          <aside className="flex flex-col overflow-hidden rounded-3xl bg-white shadow-[0_10px_30px_rgba(15,23,42,0.09)] ring-1 ring-slate-200/70 lg:min-h-0">
+            <div className="shrink-0 bg-linear-to-r from-[#0A5BAE] to-[#19A4E5] px-4 py-3 text-white">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10">
-                    <FaShoppingCart className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold">Shopping Cart</h2>
-                    <p className="text-xs text-white/80">
-                      {selectedProductCount} item{selectedProductCount === 1 ? "" : "s"}
-                    </p>
-                  </div>
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <FaShoppingCart className="h-4 w-4 shrink-0 opacity-90" />
+                  <h2 className="truncate text-base font-semibold">Current order</h2>
+                  <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-semibold">
+                    {selectedProductCount} item{selectedProductCount === 1 ? "" : "s"}
+                  </span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setCart([])}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white transition hover:bg-white/20"
+                  disabled={cart.length === 0}
+                  aria-label="Clear the order"
+                  title="Clear the order"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white transition hover:bg-white/20 disabled:opacity-40"
                 >
-                  <FaTrashAlt className="h-4 w-4" />
+                  <FaTrashAlt className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
 
-            <div className="space-y-4 p-4 sm:p-5 lg:min-h-[220px] lg:flex-1 lg:overflow-y-auto">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5">
               {cart.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  Add products from the left panel to build the order.
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-[13px] text-slate-500">
+                  Tap a product on the left to start the order.
                 </div>
               ) : (
-                cart.map((item) => (
-                  <div key={item.Bpro_id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">{item.pro_name}</h3>
-                      <span className="text-[13px] font-semibold tracking-tight text-slate-900">
-                        LKR {(item.unitPrice * item.qty).toFixed(2)}
-                      </span>
-                      <button
-                        onClick={() => removeFromCart(item.Bpro_id)}
-                        aria-label={`Remove ${item.pro_name}`}
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-white hover:text-rose-500"
-                      >
-                        ×
-                      </button>
-                    </div>
-
-                    <div className="mt-1.5 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-1 py-0.5">
+                <div className="space-y-1.5">
+                  {cart.map((item) => (
+                    <div key={item.Bpro_id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">{item.pro_name}</h3>
+                        <span className="text-[13px] font-semibold tracking-tight text-slate-900">
+                          LKR {(item.unitPrice * item.qty).toFixed(2)}
+                        </span>
                         <button
-                          onClick={() => updateQuantity(item.Bpro_id, -1)}
-                          aria-label="Decrease quantity"
-                          className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100"
+                          onClick={() => removeFromCart(item.Bpro_id)}
+                          aria-label={`Remove ${item.pro_name}`}
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-white hover:text-rose-500"
                         >
-                          <FaMinus className="h-2.5 w-2.5" />
-                        </button>
-                        <span className="min-w-6 text-center text-xs font-semibold">{item.qty}</span>
-                        <button
-                          onClick={() => updateQuantity(item.Bpro_id, 1)}
-                          aria-label="Increase quantity"
-                          className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100"
-                        >
-                          <FaPlus className="h-2.5 w-2.5" />
+                          ×
                         </button>
                       </div>
-
-                      <div className="flex items-baseline gap-1.5 text-[11px] text-slate-500">
-                        <span>LKR {item.unitPrice.toFixed(2)} ea</span>
-                        {item.originalPrice && (
-                          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                            -{item.discountPct}%
-                          </span>
-                        )}
+                      <div className="mt-1.5 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-1 py-0.5">
+                          <button
+                            onClick={() => updateQuantity(item.Bpro_id, -1)}
+                            aria-label="Decrease quantity"
+                            className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100"
+                          >
+                            <FaMinus className="h-2.5 w-2.5" />
+                          </button>
+                          <span className="min-w-6 text-center text-xs font-semibold">{item.qty}</span>
+                          <button
+                            onClick={() => updateQuantity(item.Bpro_id, 1)}
+                            aria-label="Increase quantity"
+                            className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100"
+                          >
+                            <FaPlus className="h-2.5 w-2.5" />
+                          </button>
+                        </div>
+                        <div className="flex items-baseline gap-1.5 text-[11px] text-slate-500">
+                          <span>LKR {item.unitPrice.toFixed(2)} ea</span>
+                          {item.originalPrice && (
+                            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                              -{item.discountPct}%
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
 
               {/* Collapsed by default: three always-open inputs cost more height
@@ -1722,7 +1729,6 @@ const CashierPos = () => {
                       <span>Allergies, add-ons &amp; notes{filled > 0 ? ` (${filled})` : ""}</span>
                       <span className="text-slate-400">{showOrderNotes ? "−" : "+"}</span>
                     </button>
-
                     {showOrderNotes && (
                       <div className="grid gap-2 border-t border-slate-100 p-3">
                         <input
@@ -1754,339 +1760,353 @@ const CashierPos = () => {
                   </div>
                 );
               })()}
-            </div>
 
-            {/* Pinned: the money and the buttons never scroll out of reach.
-                Kept deliberately tight — every pixel this takes is a pixel the
-                cashier cannot use to see what they have rung up. Order type and
-                payment sit side by side rather than in two stacked cards. */}
-            <div className="sticky bottom-0 z-10 shrink-0 space-y-2 border-t border-slate-200 bg-white px-4 pb-3 pt-2.5 sm:px-5">
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                <div className="flex items-center justify-between text-[13px] text-slate-500">
-                  <span>Subtotal</span>
-                  <span className="font-semibold text-slate-900">LKR {subtotal.toFixed(2)}</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
-                  <span className="flex items-center gap-1.5">
-                    Discount
-                    <input
-                      type="number" min={0} max={100} step="0.5"
-                      value={discountPct || ""}
-                      onChange={(e) => {
-                        const v = Math.max(0, Math.min(100, Number(e.target.value) || 0));
-                        setDiscountPct(v);
+              <div>
+                <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Order type</h3>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    ["takeaway", "Takeaway", FaShoppingBag],
+                    ["dine-in", "Dine-in", FaUtensils],
+                    ["delivery", "Delivery", FaMotorcycle],
+                  ].map(([value, text, Icon]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={orderType === value}
+                      onClick={() => {
+                        setOrderType(value);
+                        // Only a delivery has a charge; leaving delivery forgets it.
+                        if (value !== "delivery") setDeliveryCharge(null);
                       }}
-                      placeholder="0"
-                      className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-right text-xs outline-none focus:border-[#0A5BAE]"
-                    />
-                    <span>%</span>
-                  </span>
-                  <span className="font-semibold text-slate-900">
-                    {discountAmount > 0 ? `-LKR ${discountAmount.toFixed(2)}` : "LKR 0.00"}
-                  </span>
-                </div>
-                {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && discountPinNeeded && (
-                  <p className="mt-0.5 text-[11px] text-amber-600">A manager's PIN will be needed at checkout.</p>
-                )}
-                <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
-                  <span className="flex items-center gap-1.5">
-                    Service charge
-                    <input
-                      type="number" min={0} max={100} step="0.5"
-                      value={servicePct || ""}
-                      onChange={(e) => setServicePct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
-                      placeholder="0"
-                      className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-right text-xs outline-none focus:border-[#0A5BAE]"
-                    />
-                    <span>%</span>
-                  </span>
-                  <span className="font-semibold text-slate-900">
-                    {serviceFee > 0 ? `LKR ${serviceFee.toFixed(2)}` : "LKR 0.00"}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
-                  <span>Tax {effectiveTaxRate > 0 ? `(${effectiveTaxRate.toFixed(1)}%)` : ""}</span>
-                  <span className="font-semibold text-slate-900">LKR {tax.toFixed(2)}</span>
-                </div>
-                {isDeliveryOrder && (
-                  <div className="mt-1 flex items-center justify-between text-[13px] text-slate-500">
-                    <span>Delivery charge</span>
-                    <span className={`font-semibold ${deliveryChargeMissing ? "text-amber-600" : "text-slate-900"}`}>
-                      {deliveryChargeMissing ? "choose below" : `LKR ${deliveryChargeAmount.toFixed(2)}`}
-                    </span>
-                  </div>
-                )}
-                <div className="my-1.5 h-px bg-slate-200" />
-                <div className="flex items-baseline justify-between font-semibold text-slate-900">
-                  <span className="text-sm">Total</span>
-                  <span className="text-xl tracking-tight">LKR {total.toFixed(2)}</span>
+                      className={`flex flex-col items-center gap-1 rounded-xl border px-1 py-2 text-[11.5px] font-semibold transition ${
+                        orderType === value
+                          ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
+                      }`}
+                    >
+                      <Icon size={15} className={orderType === value ? "text-[#1F9254]" : "text-slate-400"} />
+                      {text}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div className="space-y-2">
-                {/* Full width, three icons — each one clear enough to read at
-                    a glance, since the label alone truncated once a third
-                    option had to share a squeezed half-width column. */}
+              {/* The delivery panel when Delivery is chosen, the till's own
+                  payment choice otherwise — never both at once. */}
+              {orderType === "delivery" ? (
                 <div>
-                  <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Order Type</h3>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {[
-                      ["takeaway", "Takeaway", FaShoppingBag],
-                      ["dine-in", "Dine-in", FaUtensils],
-                      ["delivery", "Delivery", FaMotorcycle],
-                    ].map(([value, text, Icon]) => (
+                  <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Delivery partner</h3>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setPartnerPickerOpen((o) => !o)}
+                      className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-xs text-slate-700 transition hover:border-sky-300"
+                    >
+                      <span className="truncate font-medium">
+                        {deliveryPartners.find((p) => p.key === deliveryPartner)?.name || "Select a partner…"}
+                      </span>
+                      <FaChevronDown size={10} className="shrink-0 text-slate-400" />
+                    </button>
+                    {partnerPickerOpen && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setPartnerPickerOpen(false)} />
+                        <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                          {deliveryPartners.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-slate-400">No partners yet — add one on Delivery COD.</div>
+                          ) : deliveryPartners.map((p) => (
+                            <button
+                              key={p.key}
+                              type="button"
+                              onClick={() => { setDeliveryPartner(p.key); setPartnerPickerOpen(false); }}
+                              className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${
+                                p.key === deliveryPartner ? "font-semibold text-[#0A5BAE]" : "text-slate-700"
+                              }`}
+                            >
+                              {p.name}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Delivery charge
+                    {deliveryChargeMissing && <span className="ml-1.5 normal-case tracking-normal text-amber-600">— choose one</span>}
+                  </h3>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {DELIVERY_CHARGES.map((amount) => (
+                      <button
+                        key={amount}
+                        type="button"
+                        onClick={() => { setDeliveryCharge(amount); setError(""); }}
+                        className={`rounded-lg border px-1 py-2 text-xs font-semibold transition ${
+                          deliveryCharge === amount
+                            ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
+                            : deliveryChargeMissing
+                              ? "border-amber-300 bg-white text-slate-600 hover:border-emerald-300"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
+                        }`}
+                      >
+                        {amount === 0 ? "None" : amount}
+                      </button>
+                    ))}
+                  </div>
+
+                  <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Collected by rider as</h3>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[["cod", "Cash on delivery"], ["card", "Card"]].map(([value, text]) => (
                       <button
                         key={value}
                         type="button"
-                        onClick={() => {
-                          setOrderType(value);
-                          // Only a delivery has a charge; leaving delivery forgets it.
-                          if (value !== "delivery") setDeliveryCharge(null);
-                        }}
-                        className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2 text-xs font-medium transition ${
-                          orderType === value
+                        aria-pressed={deliveryPaymentMethod === value}
+                        onClick={() => setDeliveryPaymentMethod(value)}
+                        className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+                          deliveryPaymentMethod === value
                             ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
                             : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
                         }`}
                       >
-                        <Icon size={16} className={orderType === value ? "text-[#1F9254]" : "text-slate-400"} />
                         {text}
                       </button>
                     ))}
                   </div>
+                  {deliveryPaymentMethod === "cod" && (
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                      Cash the partner collects and owes back — tracked on Delivery COD, not this drawer.
+                    </p>
+                  )}
                 </div>
-
-                {/* One full-width block below: the delivery panel when
-                    Delivery is selected, the normal till Payment row
-                    otherwise — never both at once, so nothing looks dimmed
-                    or redundant. */}
-                {orderType === "delivery" ? (
-                  <div>
-                    <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Delivery Partner</h3>
-                    <div className="relative">
+              ) : (
+                <div>
+                  <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</h3>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {[
+                      ["Cash", FaMoneyBillWave],
+                      ["Card", FaCreditCard],
+                      ["Bank", FaUniversity],
+                      ["Credit", FaFileInvoiceDollar],
+                      ["Room", FaBed],
+                    ].map(([method, Icon]) => (
                       <button
+                        key={method}
                         type="button"
-                        onClick={() => setPartnerPickerOpen((o) => !o)}
-                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-xs text-slate-700 transition hover:border-sky-300"
+                        aria-pressed={paymentMethod === method}
+                        onClick={() => {
+                          setPaymentMethod(method);
+                          // Choosing "Room" is a question — which room? — so ask
+                          // it straight away instead of leaving a second tap
+                          // between the cashier and the answer.
+                          if (method === "Room" && !chargeRoomId) {
+                            setRoomQuery("");
+                            setRoomPickerOpen(true);
+                          }
+                        }}
+                        className={`flex flex-col items-center gap-1 rounded-xl border px-0.5 py-2 text-[11px] font-semibold transition ${
+                          paymentMethod === method
+                            ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
+                        }`}
                       >
-                        <span className="truncate font-medium">
-                          {deliveryPartners.find((p) => p.key === deliveryPartner)?.name || "Select a partner…"}
-                        </span>
-                        <FaChevronDown size={10} className="shrink-0 text-slate-400" />
+                        <Icon size={15} className={paymentMethod === method ? "text-[#1F9254]" : "text-slate-400"} />
+                        {method}
                       </button>
-                      {partnerPickerOpen && (
+                    ))}
+                  </div>
+
+                  {paymentMethod === "Credit" && (
+                    <div className="mt-2 space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/60 p-2.5">
+                      <input
+                        type="text"
+                        value={creditName}
+                        maxLength={120}
+                        onChange={(e) => setCreditName(e.target.value)}
+                        placeholder="Customer name (required)"
+                        aria-label="Credit customer name"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
+                      />
+                      <input
+                        type="tel"
+                        value={creditPhone}
+                        maxLength={30}
+                        onChange={(e) => setCreditPhone(e.target.value)}
+                        placeholder="Phone (optional)"
+                        aria-label="Credit customer phone"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
+                      />
+                      <p className="text-[11px] leading-relaxed text-amber-900/80">
+                        Paid later. Not in today's takings or the drawer; record the payment on Credit Sales.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Charging to a room is not a way of paying — it is a way of
+                      deferring payment onto the guest's folio, so the room has
+                      to be named before the order can go anywhere. */}
+                  {paymentMethod === "Room" && (
+                    <div className="mt-2">
+                      {inHouseCount === 0 ? (
+                        <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                          No guests are checked in, so there is no room to charge. Take payment instead.
+                        </p>
+                      ) : (
                         <>
-                          <div className="fixed inset-0 z-10" onClick={() => setPartnerPickerOpen(false)} />
-                          <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-                            {deliveryPartners.length === 0 ? (
-                              <div className="px-3 py-2 text-xs text-slate-400">No partners yet — add one on Delivery COD.</div>
-                            ) : deliveryPartners.map((p) => (
-                              <button
-                                key={p.key}
-                                type="button"
-                                onClick={() => { setDeliveryPartner(p.key); setPartnerPickerOpen(false); }}
-                                className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${
-                                  p.key === deliveryPartner ? "font-semibold text-[#0A5BAE]" : "text-slate-700"
-                                }`}
-                              >
-                                {p.name}
-                              </button>
-                            ))}
-                          </div>
+                          {/* A button, not a dropdown. A property with eighty rooms
+                              cannot be scrolled through in a 340px sidebar, and the
+                              cashier usually already knows the number or the name. */}
+                          <button
+                            type="button"
+                            onClick={() => setRoomPickerOpen(true)}
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs transition ${
+                              chargeRoom
+                                ? "border-emerald-300 bg-emerald-50 text-slate-900"
+                                : "border-slate-200 bg-white text-slate-500 hover:border-sky-300"
+                            }`}
+                          >
+                            {chargeRoom ? (
+                              <span className="min-w-0">
+                                <span className="font-semibold">Room {chargeRoom.room_number}</span>
+                                <span className="block truncate text-[11px] text-slate-500">{chargeRoom.guest_name}</span>
+                              </span>
+                            ) : (
+                              <span>Choose the guest&apos;s room…</span>
+                            )}
+                            <span className="shrink-0 text-[11px] font-semibold text-[#0A5BAE]">
+                              {chargeRoom ? "Change" : `${inHouseCount} in house`}
+                            </span>
+                          </button>
+                          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                            Goes to the kitchen and onto the guest&apos;s bill. Nothing is collected now.
+                          </p>
                         </>
                       )}
                     </div>
+                  )}
+                </div>
+              )}
 
-                    <h3 className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      Delivery Charge
-                      {deliveryChargeMissing && <span className="ml-1.5 normal-case tracking-normal text-amber-600">— choose one</span>}
-                    </h3>
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {DELIVERY_CHARGES.map((amount) => (
-                        <button
-                          key={amount}
-                          type="button"
-                          onClick={() => { setDeliveryCharge(amount); setError(""); }}
-                          className={`rounded-lg border px-1 py-2 text-xs font-medium transition ${
-                            deliveryCharge === amount
-                              ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
-                              : deliveryChargeMissing
-                                ? "border-amber-300 bg-white text-slate-600 hover:border-emerald-300"
-                                : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
-                          }`}
-                        >
-                          {amount === 0 ? "None" : amount}
-                        </button>
-                      ))}
-                    </div>
+              <div>
+                <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Adjustments</h3>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                    Discount
+                    <span className="flex items-center gap-1">
+                      <input
+                        type="number" min={0} max={100} step="0.5"
+                        value={discountPct || ""}
+                        onChange={(e) => {
+                          const v = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                          setDiscountPct(v);
+                        }}
+                        placeholder="0"
+                        aria-label="Discount percent"
+                        className="w-12 rounded-md border border-slate-200 px-1.5 py-1 text-right text-xs outline-none focus:border-[#0A5BAE]"
+                      />
+                      %
+                    </span>
+                  </label>
+                  <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                    Service
+                    <span className="flex items-center gap-1">
+                      <input
+                        type="number" min={0} max={100} step="0.5"
+                        value={servicePct || ""}
+                        onChange={(e) => setServicePct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                        placeholder="0"
+                        aria-label="Service charge percent"
+                        className="w-12 rounded-md border border-slate-200 px-1.5 py-1 text-right text-xs outline-none focus:border-[#0A5BAE]"
+                      />
+                      %
+                    </span>
+                  </label>
+                </div>
+                {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && discountPinNeeded && (
+                  <p className="mt-1 text-[11px] text-amber-600">A manager's PIN will be needed at checkout.</p>
+                )}
+              </div>
+            </div>
 
-                    <h3 className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Collected By Rider As</h3>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {[["cod", "COD"], ["card", "Card"]].map(([value, text]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => setDeliveryPaymentMethod(value)}
-                          className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
-                            deliveryPaymentMethod === value
-                              ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
-                          }`}
-                        >
-                          {text}
-                        </button>
-                      ))}
-                    </div>
-                    {deliveryPaymentMethod === "cod" && (
-                      <p className="mt-1 text-[10.5px] leading-relaxed text-slate-500">
-                        Cash the partner collects and owes back — tracked on Delivery COD, not this drawer.
-                      </p>
-                    )}
+            {/* Pinned: what it comes to, and what to do with it. */}
+            <div className="shrink-0 border-t border-slate-200 bg-white px-3.5 pb-3.5 pt-2.5 shadow-[0_-8px_18px_rgba(15,23,42,0.05)]">
+              <div className="space-y-0.5 text-[12px] text-slate-500">
+                <div className="flex justify-between">
+                  <span>Subtotal</span>
+                  <span className="font-medium text-slate-700">LKR {subtotal.toFixed(2)}</span>
+                </div>
+                {discountAmount > 0 && (
+                  <div className="flex justify-between">
+                    <span>Discount ({Number(discountPct)}%)</span>
+                    <span className="font-medium text-rose-600">-LKR {discountAmount.toFixed(2)}</span>
                   </div>
-                ) : (
-                  <div>
-                    <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</h3>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {["Cash", "Card", "Bank", "Credit", "Room"].map((method) => (
-                        <button
-                          key={method}
-                          type="button"
-                          onClick={() => {
-                            setPaymentMethod(method);
-                            // Choosing "Room" is a question — which room? — so ask
-                            // it straight away instead of leaving a second tap
-                            // between the cashier and the answer.
-                            if (method === "Room" && !chargeRoomId) {
-                              setRoomQuery("");
-                              setRoomPickerOpen(true);
-                            }
-                          }}
-                          className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition ${
-                            paymentMethod === method
-                              ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
-                          }`}
-                        >
-                          <span className={`h-2 w-2 rounded-full ${paymentMethod === method ? "bg-[#00B67A]" : "bg-slate-300"}`} />
-                          {method}
-                        </button>
-                      ))}
-                    </div>
-
-                    {paymentMethod === "Credit" && (
-                      <div className="mt-2 space-y-1.5">
-                        <input
-                          type="text"
-                          value={creditName}
-                          maxLength={120}
-                          onChange={(e) => setCreditName(e.target.value)}
-                          placeholder="Customer name (required)"
-                          aria-label="Credit customer name"
-                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
-                        />
-                        <input
-                          type="tel"
-                          value={creditPhone}
-                          maxLength={30}
-                          onChange={(e) => setCreditPhone(e.target.value)}
-                          placeholder="Phone (optional)"
-                          aria-label="Credit customer phone"
-                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
-                        />
-                        <p className="text-[11px] leading-relaxed text-slate-500">
-                          Paid later. Not in today's takings or the drawer; record the payment on Credit Sales.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Charging to a room is not a way of paying — it is a way of
-                        deferring payment onto the guest's folio, so the room has
-                        to be named before the order can go anywhere. */}
-                    {paymentMethod === "Room" && (
-                      <div className="mt-2">
-                        {inHouseCount === 0 ? (
-                          <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-amber-200">
-                            No guests are checked in, so there is no room to charge. Take payment instead.
-                          </p>
-                        ) : (
-                          <>
-                            {/* A button, not a dropdown. A property with eighty rooms
-                                cannot be scrolled through in a 340px sidebar, and the
-                                cashier usually already knows the number or the name. */}
-                            <button
-                              type="button"
-                              onClick={() => setRoomPickerOpen(true)}
-                              className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition ${
-                                chargeRoom
-                                  ? "border-emerald-300 bg-emerald-50 text-slate-900"
-                                  : "border-slate-200 bg-white text-slate-500 hover:border-sky-300"
-                              }`}
-                            >
-                              {chargeRoom ? (
-                                <span className="min-w-0">
-                                  <span className="font-semibold">Room {chargeRoom.room_number}</span>
-                                  <span className="block truncate text-[11px] text-slate-500">{chargeRoom.guest_name}</span>
-                                </span>
-                              ) : (
-                                <span>Choose the guest&apos;s room…</span>
-                              )}
-                              <span className="shrink-0 text-[11px] font-semibold text-[#0A5BAE]">
-                                {chargeRoom ? "Change" : `${inHouseCount} in house`}
-                              </span>
-                            </button>
-                            <p className="mt-1 text-[10.5px] leading-relaxed text-slate-500">
-                              Goes to the kitchen and onto the guest&apos;s bill. Nothing is collected now.
-                            </p>
-                          </>
-                        )}
-                      </div>
-                    )}
+                )}
+                {serviceFee > 0 && (
+                  <div className="flex justify-between">
+                    <span>Service ({Number(servicePct)}%)</span>
+                    <span className="font-medium text-slate-700">LKR {serviceFee.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>Tax{effectiveTaxRate > 0 ? ` (${effectiveTaxRate.toFixed(1)}%)` : ""}</span>
+                  <span className="font-medium text-slate-700">LKR {tax.toFixed(2)}</span>
+                </div>
+                {isDeliveryOrder && (
+                  <div className="flex justify-between">
+                    <span>Delivery charge</span>
+                    <span className={`font-medium ${deliveryChargeMissing ? "text-amber-600" : "text-slate-700"}`}>
+                      {deliveryChargeMissing ? "choose above" : `LKR ${deliveryChargeAmount.toFixed(2)}`}
+                    </span>
                   </div>
                 )}
               </div>
+              <div className="mt-1.5 flex items-baseline justify-between border-t border-dashed border-slate-200 pt-1.5">
+                <span className="text-sm font-semibold text-slate-900">Total</span>
+                <span className="text-2xl font-bold tracking-tight text-slate-900">LKR {total.toFixed(2)}</span>
+              </div>
 
-              {/* Charging a room already tickets the kitchen and bills the guest in
-                  one transaction. Leaving this button here let a cashier send a
-                  second, detached order that the kitchen cooked and nobody paid
-                  for. In Room mode there is one action, below. */}
-              <button
-                type="button"
-                onClick={handleSendToKitchen}
-                hidden={paymentMethod === "Room"}
-                disabled={submitting || cart.length === 0 || sentToKitchen || paymentMethod === "Room"}
-                className={`mt-0.5 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
-                  sentToKitchen
-                    ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                    : "bg-slate-900 text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                }`}
-              >
-                <FaUtensils className="h-3.5 w-3.5" />
-                {sentToKitchen ? "Sent to Kitchen" : "Send to Kitchen (KOT)"}
-              </button>
-
-              <div className="flex gap-2 pt-0.5">
+              <div className="mt-2.5 flex gap-2">
+                {/* Charging a room already tickets the kitchen and bills the guest
+                    in one transaction. A separate KOT here let a cashier send a
+                    second, detached order that the kitchen cooked and nobody paid
+                    for. In Room mode there is one action, below. */}
+                {!(paymentMethod === "Room" && orderType !== "delivery") && (
+                  <button
+                    type="button"
+                    onClick={handleSendToKitchen}
+                    disabled={submitting || cart.length === 0 || sentToKitchen}
+                    className={`inline-flex flex-[3] items-center justify-center gap-1.5 rounded-xl px-2 py-2.5 text-[13px] font-semibold transition ${
+                      sentToKitchen
+                        ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                        : "bg-slate-900 text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                    }`}
+                  >
+                    <FaUtensils className="h-3.5 w-3.5" />
+                    {sentToKitchen ? "Sent to kitchen" : "Send to kitchen"}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleHoldOrder}
                   disabled={submitting || cart.length === 0}
-                  className="inline-flex flex-1 items-center justify-center rounded-xl border border-[#0A5BAE] bg-white px-3 py-2.5 text-sm font-semibold text-[#0A5BAE] transition hover:bg-[#0A5BAE] hover:text-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  className="inline-flex flex-[2] items-center justify-center rounded-xl border border-[#0A5BAE] bg-white px-2 py-2.5 text-[13px] font-semibold text-[#0A5BAE] transition hover:bg-[#0A5BAE] hover:text-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
                 >
                   Hold
                 </button>
-
-                <button
-                  onClick={handleCheckout}
-                  disabled={submitting || cart.length === 0 || !branchId}
-                  className="inline-flex flex-[2] items-center justify-center gap-2 rounded-xl bg-[#55C24A] px-3 py-2.5 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(85,194,74,0.25)] transition hover:bg-[#49b03f] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-                >
-                  <FaShoppingCart className="h-4 w-4" />
-                  {submitting
-                    ? "Processing..."
-                    : paymentMethod === "Room"
-                      ? (chargeRoom ? `Charge to Room ${chargeRoom.room_number}` : "Charge to Room")
-                      : "Checkout"}
-                </button>
               </div>
+
+              <button
+                onClick={handleCheckout}
+                disabled={submitting || cart.length === 0 || !branchId}
+                className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#55C24A] px-3 py-3 text-[15px] font-bold text-white shadow-[0_8px_20px_rgba(85,194,74,0.28)] transition hover:bg-[#49b03f] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+              >
+                <FaShoppingCart className="h-4 w-4" />
+                {submitting
+                  ? "Processing…"
+                  : paymentMethod === "Room" && orderType !== "delivery"
+                    ? (chargeRoom ? `Charge to Room ${chargeRoom.room_number}` : "Charge to room")
+                    : paymentMethod === "Credit" && orderType !== "delivery"
+                      ? `Give on credit · LKR ${total.toFixed(2)}`
+                      : `Checkout · LKR ${total.toFixed(2)}`}
+              </button>
             </div>
           </aside>
         </div>
