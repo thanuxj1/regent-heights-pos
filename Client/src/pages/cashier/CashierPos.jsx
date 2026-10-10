@@ -81,8 +81,14 @@ const DISCOUNT_LIMIT_PCT = 0;
 const TENDER_OF = { Cash: "cash", Card: "card", Bank: "bank_transfer", Credit: "credit", Room: "room" };
 const tenderOf = (label) => TENDER_OF[label] || String(label || "cash").toLowerCase();
 // How a delivery's customer pays: the rider's cash or card, a transfer, or credit.
-const DELIVERY_PAY = [["cod", "Cash on delivery"], ["card", "Card"], ["bank_transfer", "Bank transfer"], ["credit", "Credit"]];
-const DELIVERY_PAY_LABEL = Object.fromEntries(DELIVERY_PAY);
+// [stored value, name on the bill, short tile label, icon]
+const DELIVERY_PAY = [
+  ["cod", "Cash on delivery", "COD", FaMotorcycle],
+  ["card", "Card", "Card", FaCreditCard],
+  ["bank_transfer", "Bank transfer", "Bank", FaUniversity],
+  ["credit", "Credit", "Credit", FaFileInvoiceDollar],
+];
+const DELIVERY_PAY_LABEL = Object.fromEntries(DELIVERY_PAY.map(([value, label]) => [value, label]));
 /** What a saved order's tender says on a bill or a card. */
 const paidByLabel = (method) => ({
   cod: "Cash on delivery", card: "Card", cash: "Cash", bank_transfer: "Bank transfer", credit: "Credit", room: "Room",
@@ -1901,20 +1907,23 @@ const CashierPos = () => {
                   </div>
 
                   <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Customer pays by</h3>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {DELIVERY_PAY.map(([value, text]) => (
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {DELIVERY_PAY.map(([value, label, short, Icon]) => (
                       <button
                         key={value}
                         type="button"
+                        title={label}
+                        aria-label={label}
                         aria-pressed={deliveryPaymentMethod === value}
                         onClick={() => setDeliveryPaymentMethod(value)}
-                        className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+                        className={`flex flex-col items-center gap-1 rounded-xl border px-0.5 py-2 text-[11px] font-semibold transition ${
                           deliveryPaymentMethod === value
                             ? "border-[#55C24A] bg-emerald-50 text-slate-900 ring-1 ring-emerald-200"
                             : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300"
                         }`}
                       >
-                        {text}
+                        <Icon size={15} className={deliveryPaymentMethod === value ? "text-[#1F9254]" : "text-slate-400"} />
+                        {short}
                       </button>
                     ))}
                   </div>
