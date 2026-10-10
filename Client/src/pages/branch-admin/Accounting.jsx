@@ -103,6 +103,8 @@ export default function Accounting() {
   // Cash a delivery partner (PickMe, Uber Eats...) is holding for us, not yet
   // settled — a receivable, not a cost, so it never enters moneyOut/netProfit.
   const codOutstanding = Number(summary.codOutstanding || 0);
+  // Credit sales given and not yet paid: owed to us, not revenue until paid.
+  const creditOutstanding = Number(summary.creditOutstanding || 0);
 
   const byCategory = useMemo(() => {
     const rows = [...(summary.byCategory || [])];
@@ -185,6 +187,7 @@ export default function Accounting() {
               { label:"Net Profit",         value:`LKR ${fmt(netProfit)}`,     color: netProfit>=0?"#1565C0":"#DC2626", bg:"#EFF6FF", border:"#BFDBFE" },
               { label:"Commission Pending", value:`LKR ${fmt(commPending)}`,   color:"#92400E", bg:"#FEF9C3", border:"#FDE68A" },
               { label:"COD Outstanding",    value:`LKR ${fmt(codOutstanding)}`, color:"#7C3AED", bg:"#F5F3FF", border:"#DDD6FE" },
+              { label:"Credit Outstanding", value:`LKR ${fmt(creditOutstanding)}`, color:"#B45309", bg:"#FFFBEB", border:"#FDE68A" },
             ].map(s => (
               <div key={s.label} style={{ background:s.bg, border:`1px solid ${s.border}`, borderRadius:12, padding:"16px 20px" }}>
                 <div style={{ fontSize:11, fontWeight:600, color:"#64748B", textTransform:"uppercase", letterSpacing:1 }}>{s.label}</div>

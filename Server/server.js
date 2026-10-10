@@ -79,6 +79,7 @@ import hotelRoutes from "./routes/hotelRoutes.js";
 import securityRoutes from "./routes/securityRoutes.js";
 import cashRoutes from "./routes/cashRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
+import creditRoutes from "./routes/creditRoutes.js";
 import activityRoutes from "./routes/activityRoutes.js";
 
 // ─────────────────────────────────────────────
@@ -200,6 +201,7 @@ app.use("/api/discounts", discountRoutes);
 // -- Delivery & Terminals
 app.use("/api/deliveries", deliveryRoutes);
 app.use("/api/delivery-cod", deliveryCodRoutes);
+app.use("/api/credit", creditRoutes);
 app.use("/api/delivery-partners", deliveryPartnerRoutes);
 app.use("/api/terminals", terminalRoutes);
 

@@ -291,6 +291,21 @@ export const getCodHistory = async () => {
   return response.data;
 };
 
+export const getOutstandingCredit = async () => {
+  const response = await api.get("/credit/outstanding");
+  return response.data;
+};
+
+export const getCreditHistory = async () => {
+  const response = await api.get("/credit/history");
+  return response.data;
+};
+
+export const settleCredit = async (payload) => {
+  const response = await api.post("/credit/settle", payload);
+  return response.data;
+};
+
 export const createCodSettlement = async (payload) => {
   const response = await api.post("/delivery-cod/settle", payload);
   return response.data;

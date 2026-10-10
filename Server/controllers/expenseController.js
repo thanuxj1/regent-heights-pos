@@ -100,8 +100,8 @@ export async function getExpenseSummary(req, res, next) {
            LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
           WHERE o.folio_id IS NULL AND o.or_status <> 'cancelled'
             AND (
-              (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND EXTRACT(YEAR FROM o.or_date) = $1)
-              OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NOT NULL AND EXTRACT(YEAR FROM cs.settled_date) = $1)
+              (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND EXTRACT(YEAR FROM o.or_date) = $1)
+              OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date IS NOT NULL AND EXTRACT(YEAR FROM cs.settled_date) = $1)
             )${o.where}`, o.params),
       // Money paid to suppliers is money out too, even though it is not typed
       // in on this page — it is recorded against purchase orders.
@@ -149,8 +149,8 @@ export async function getExpenseSummary(req, res, next) {
            LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
           WHERE o.folio_id IS NULL AND o.or_status <> 'cancelled'
             AND (
-              (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND EXTRACT(YEAR FROM o.or_date) = $1)
-              OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NOT NULL AND EXTRACT(YEAR FROM cs.settled_date) = $1)
+              (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND EXTRACT(YEAR FROM o.or_date) = $1)
+              OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date IS NOT NULL AND EXTRACT(YEAR FROM cs.settled_date) = $1)
             )${o.where}
           GROUP BY 1`, o.params),
       pool.query(
@@ -195,6 +195,12 @@ export async function getExpenseSummary(req, res, next) {
     const wasteTotal = Number(waste.rows[0].t);
     const hotelRevenue = Number(hotel.rows[0].t);
     const restaurantRevenue = Number(restaurant.rows[0].t);
+    // Credit sales given this year and not yet paid: owed to the house, not revenue.
+    const creditOutstanding = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE("or_totalCostWtax", or_totalcost, 0)), 0) AS t
+         FROM "ORDER"
+        WHERE payment_method = 'credit' AND cod_settlement_id IS NULL AND or_status <> 'cancelled'
+          AND EXTRACT(YEAR FROM or_date) = $1${cod.where}`, cod.params);
 
     res.json({
       year,
@@ -209,6 +215,7 @@ export async function getExpenseSummary(req, res, next) {
       commissionPending: Number(commissions.rows[0].pending),
       commissionTotal: Number(commissions.rows[0].total),
       codOutstanding: Number(codOutstanding.rows[0].t),
+      creditOutstanding: Number(creditOutstanding.rows[0].t),
       monthlyTotals,
     });
   } catch (err) { next(err); }

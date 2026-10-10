@@ -72,7 +72,7 @@ export async function getCodHistory(req, res, next) {
   try {
     const params = [];
     const scope = branchClause(req, "s.b_id", params);
-    const where = scope ? `WHERE ${scope}` : "";
+    const where = `WHERE s.kind = 'cod'${scope ? ` AND ${scope}` : ""}`;
 
     const { rows } = await pool.query(
       `SELECT s.settlement_id, s.delivery_partner, s.amount, s.settled_date,

@@ -63,12 +63,24 @@ const InvoicePreview = () => {
     setPrinted(true);
   };
 
+  // A credit bill is handed over unpaid: print it, record no payment. The money
+  // is recorded on Credit Sales when the customer pays.
+  const handleCreditBill = () => {
+    try {
+      printReceipt(invoice);
+      setPrinted(true);
+    } catch {
+      setPayError("The bill did not print. Use Print Bill.");
+    }
+    setIsPaid(true);
+  };
+
   const handlePay = async () => {
     setPayError("");
     try {
       const numericOrderId = Number(invoice.orderId);
       const rawMethod = (invoice.paymentMethod || "cash").toLowerCase().replace(/\s+/g, "_");
-      const validMethods = ["cash", "card", "mobile_pay", "voucher", "split"];
+      const validMethods = ["cash", "card", "mobile_pay", "voucher", "split", "bank_transfer"];
       await createPayment({
         pay_method: validMethods.includes(rawMethod) ? rawMethod : "cash",
         pay_status: "paid",
@@ -239,18 +251,27 @@ const InvoicePreview = () => {
           <section className="flex flex-col gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Payment Method</div>
-              <div className="mt-1 text-sm font-semibold text-emerald-600 sm:text-base">{invoice.paymentMethod} Payment</div>
+              {invoice.credit ? (
+                <>
+                  <div className="mt-1 text-sm font-semibold text-amber-600 sm:text-base">Credit — to be paid later</div>
+                  <div className="mt-0.5 text-xs text-slate-600">
+                    {invoice.credit.customer}{invoice.credit.phone ? ` · ${invoice.credit.phone}` : ""}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-1 text-sm font-semibold text-emerald-600 sm:text-base">{invoice.paymentMethod} Payment</div>
+              )}
               {printed && (
                 <div className="mt-0.5 text-[11px] text-slate-500">Bill sent to the printer</div>
               )}
             </div>
             <button
               type="button"
-              onClick={handlePay}
+              onClick={invoice.credit ? handleCreditBill : handlePay}
               disabled={isPaid}
               className="inline-flex items-center justify-center rounded-xl bg-[#55C24A] px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#49b03f] disabled:cursor-default disabled:opacity-70 sm:text-sm"
             >
-              {isPaid ? "PAID" : "PAY NOW"}
+              {invoice.credit ? (isPaid ? "DONE" : "PRINT CREDIT BILL") : isPaid ? "PAID" : "PAY NOW"}
             </button>
           </section>
 

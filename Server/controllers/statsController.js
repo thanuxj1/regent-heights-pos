@@ -34,7 +34,9 @@ export async function getOverview(req, res, next) {
     const rev = await pool.query(
       `SELECT COALESCE(SUM(o."or_totalCostWtax"),0)::numeric(12,2) AS total_revenue
          FROM "ORDER" o JOIN "Branch" br ON br."B_id" = o.b_id
-        WHERE o.or_status = 'completed' ${cond ? `AND ${cond}` : ""}`,
+        WHERE o.or_status = 'completed'
+          AND NOT (o.payment_method = 'credit' AND o.cod_settlement_id IS NULL)
+          ${cond ? `AND ${cond}` : ""}`,
       params,
     );
     const totalRevenue = Number(rev.rows[0]?.total_revenue ?? 0);
@@ -69,6 +71,7 @@ export async function getBranchStats(req, res, next) {
                 COUNT(or_id)            AS orders
            FROM "ORDER"
           WHERE or_status = 'completed'
+            AND NOT (payment_method = 'credit' AND cod_settlement_id IS NULL)
           GROUP BY b_id
        ) ord ON ord.b_id = b."B_id"
        LEFT JOIN (

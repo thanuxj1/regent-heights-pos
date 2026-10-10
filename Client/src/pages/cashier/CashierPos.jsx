@@ -72,6 +72,11 @@ const ALL_ITEMS = { cat_id: "all", cat_name: "All Items" };
 // PIN — the server refuses regardless of what this file says. 0 means every
 // discount needs a manager's PIN, once a manager at the property has set one.
 const DISCOUNT_LIMIT_PCT = 0;
+// What each payment button is stored as on the sale. "Credit" is food given to
+// someone the house knows, paid later; it is recorded on Credit Sales.
+const TENDER_OF = { Cash: "cash", Card: "card", Bank: "bank_transfer", Credit: "credit", Room: "room" };
+const tenderOf = (label) => TENDER_OF[label] || String(label || "cash").toLowerCase();
+
 /** Roles that are their own approval. */
 const MANAGER_ROLES = [1, 2, 6];
 
@@ -123,6 +128,12 @@ const CashierPos = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("Cash");
+  // Who is taking the food on credit: their name goes on the bill and on Credit Sales.
+  const [creditName, setCreditName] = useState("");
+  const [creditPhone, setCreditPhone] = useState("");
+  const creditFields = (method) => (tenderOf(method) === "credit"
+    ? { credit_customer: creditName.trim(), credit_phone: creditPhone.trim() || null }
+    : {});
   const [orderType, setOrderType] = useState("takeaway");
   // How a delivery order was paid — the rider collects it, not this till, so
   // it's tracked separately from the Cash/Card/Room buttons above.
@@ -905,6 +916,10 @@ const CashierPos = () => {
     // changes hands now, the food goes to the kitchen, and the charge waits on
     // the folio until they check out. The hotel endpoint does all three, and
     // refuses a room whose guest has already left.
+    if (paymentMethod === "Credit" && orderType !== "delivery" && !creditName.trim()) {
+      setError("Write who is taking this on credit. Their name goes on the bill and on Credit Sales.");
+      return;
+    }
     if (paymentMethod === "Room" && orderType !== "delivery") {
       // Charging a room means answering a question only the server can: is this
       // guest still in house? Queueing it offline could put a meal on the bill
@@ -1039,7 +1054,7 @@ const CashierPos = () => {
           u_id: user.u_id,
           b_id: branchId,
           table_id: editingOrderTableId ?? null,
-          payment_method: String(effectivePaymentMethod || "cash").toLowerCase(),
+          payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod),
           delivery_partner: effectiveDeliveryPartner,
           // A waiter-placed ticket has never had a discount or service fee on
           // it — this settle step is the only chance to declare one, same as
@@ -1080,7 +1095,7 @@ const CashierPos = () => {
             // drawer cannot be counted at the end of the day: there is no way
             // to tell which takings were notes and which were card. For a
             // delivery order this is COD/card as paid to the rider, not the till.
-            payment_method: String(effectivePaymentMethod || "cash").toLowerCase(),
+            payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod),
             ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
           },
           items: cart.map((item) => ({
@@ -1135,13 +1150,18 @@ const CashierPos = () => {
       approvalPinRef.current = "";
       // And the next delivery has to choose its charge again.
       setDeliveryCharge(null);
+      setCreditName("");
+      setCreditPhone("");
       navigate("/cashier/invoice-preview", {
         state: {
           orderId,
           cashierName: `${user?.u_fname || "Cashier"} ${user?.u_lname || ""}`.trim(),
           branchName,
           branchLabel: `${branchName.split(" ")[0] || branchName}\nBranch`,
-          paymentMethod,
+          paymentMethod: paymentMethod === "Bank" ? "Bank transfer" : paymentMethod,
+          credit: paymentMethod === "Credit" && orderType !== "delivery"
+            ? { customer: creditName.trim(), phone: creditPhone.trim() }
+            : null,
           items: invoiceItems,
           subtotal: Number(subtotal.toFixed(2)),
           discount: Number(discountPct || 0),
@@ -1927,7 +1947,7 @@ const CashierPos = () => {
                   <div>
                     <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</h3>
                     <div className="grid grid-cols-3 gap-1.5">
-                      {["Cash", "Card", "Room"].map((method) => (
+                      {["Cash", "Card", "Bank", "Credit", "Room"].map((method) => (
                         <button
                           key={method}
                           type="button"
@@ -1952,6 +1972,32 @@ const CashierPos = () => {
                         </button>
                       ))}
                     </div>
+
+                    {paymentMethod === "Credit" && (
+                      <div className="mt-2 space-y-1.5">
+                        <input
+                          type="text"
+                          value={creditName}
+                          maxLength={120}
+                          onChange={(e) => setCreditName(e.target.value)}
+                          placeholder="Customer name (required)"
+                          aria-label="Credit customer name"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
+                        />
+                        <input
+                          type="tel"
+                          value={creditPhone}
+                          maxLength={30}
+                          onChange={(e) => setCreditPhone(e.target.value)}
+                          placeholder="Phone (optional)"
+                          aria-label="Credit customer phone"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
+                        />
+                        <p className="text-[11px] leading-relaxed text-slate-500">
+                          Paid later. Not in today's takings or the drawer; record the payment on Credit Sales.
+                        </p>
+                      </div>
+                    )}
 
                     {/* Charging to a room is not a way of paying — it is a way of
                         deferring payment onto the guest's folio, so the room has

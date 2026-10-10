@@ -5,7 +5,7 @@ import {
   FaTachometerAlt, FaChevronDown, FaChartLine, FaSignOutAlt,
   FaConciergeBell, FaBed, FaAngleDoubleLeft, FaAngleDoubleRight,
   FaCashRegister, FaTrash, FaBoxes, FaClipboardList, FaHandshake,
-  FaUsers, FaHistory, FaCog, FaTruck,
+  FaUsers, FaHistory, FaCog, FaTruck, FaFileInvoiceDollar,
 } from "react-icons/fa";
 import { useAuth } from "../../context/AuthContext";
 import { colors, sidebar as S, radius, font } from "../../theme";
@@ -49,6 +49,7 @@ const ADMIN_NAV = [
       ["Add Inventory Item", "/branch-admin/raw-ingredient"],
       ["Waste Tracking",     "/branch-admin/waste"],
       ["Delivery COD",       "/branch-admin/delivery-cod"],
+      ["Credit Sales",       "/credit-sales"],
       ["Suppliers",          "/branch-admin/suppliers"],
       ["Supplier Ledger",    "/branch-admin/supplier-ledger"],
       ["Recipe Mapper",      "/branch-admin/recipe-mapper"],
@@ -328,6 +329,15 @@ export default function Sidebar() {
             <SideLink
               to={HOME.cashier[1]} icon={HOME.cashier[2]} label={HOME.cashier[0]}
               active={isActive(HOME.cashier[1])} collapsed={collapsed}
+              hovered={hovered} setHovered={setHovered}
+            />
+          )}
+
+          {/* The till that gives credit is where the customer comes back to pay. */}
+          {isCashier && (
+            <SideLink
+              to="/credit-sales" icon={FaFileInvoiceDollar} label="Credit Sales"
+              active={isActive("/credit-sales")} collapsed={collapsed}
               hovered={hovered} setHovered={setHovered}
             />
           )}

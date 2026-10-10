@@ -16,7 +16,7 @@ async function paymentInScope(req, res, p_id) {
 
 // ─── DB-Aligned Constants ─────────────────────────────────────────────────────
 // Adjust these to match your Payment table CHECK constraints if you have them
-const PAY_METHODS = ["cash", "card", "mobile_pay", "voucher", "split"];
+const PAY_METHODS = ["cash", "card", "mobile_pay", "voucher", "split", "bank_transfer"];
 const PAY_STATUSES = ["pending", "paid", "failed", "refunded", "voided"];
 
 // ─── Validation Error Handler ─────────────────────────────────────────────────

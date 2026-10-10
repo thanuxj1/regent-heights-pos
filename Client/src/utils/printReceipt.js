@@ -8,6 +8,8 @@ import { printHtml } from "./printElement";
  * no click left to lean on, so the window was blocked and the customer got no
  * receipt. It goes through a hidden frame now, like every other print here.
  */
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 export const printReceipt = (invoice) => {
   const subtotal = Number(invoice.subtotal || 0).toFixed(2);
   const discount = Number(invoice.discount || 0).toFixed(2);
@@ -201,7 +203,9 @@ export const printReceipt = (invoice) => {
         </div>
 
         <div class="payment">
-          ${invoice.paymentMethod}
+          ${invoice.credit
+            ? `CREDIT — TO BE PAID LATER<br/>${escapeHtml(invoice.credit.customer)}${invoice.credit.phone ? ` · ${escapeHtml(invoice.credit.phone)}` : ""}`
+            : invoice.paymentMethod}
         </div>
 
         <div class="footer">

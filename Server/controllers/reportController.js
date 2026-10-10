@@ -32,7 +32,7 @@ export async function getSummary(req, res, next) {
 
     const [hotel, restaurant, expenses, commissions, hotelDaily, restDaily, expDaily,
            expByCat, roomNights, occupancy, suppliers, supplierDaily, waste, wasteDaily,
-           codOutstanding] = await Promise.all([
+           codOutstanding, creditOutstanding] = await Promise.all([
 
       pool.query(
         `SELECT COALESCE(SUM(fi.amount),0) AS total
@@ -57,14 +57,17 @@ export async function getSummary(req, res, next) {
                 -- paid at the till or by card.
                 COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) FILTER (WHERE o.or_type = 'delivery' AND o.payment_method = 'cod'), 0) AS cod_received,
                 COUNT(*) FILTER (WHERE o.or_type = 'delivery' AND o.payment_method = 'cod') AS cod_orders,
-                COUNT(*) FILTER (WHERE NOT (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date IS NULL)) AS orders
+                -- Credit sales paid in the range, counted on the day they were paid.
+                COALESCE(SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) FILTER (WHERE o.payment_method = 'credit'), 0) AS credit_received,
+                COUNT(*) FILTER (WHERE o.payment_method = 'credit') AS credit_orders,
+                COUNT(*) FILTER (WHERE NOT ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date IS NULL)) AS orders
          FROM "ORDER" o
          LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
          WHERE o.b_id = $1 AND o.folio_id IS NULL
            AND o.or_status <> 'cancelled'
            AND (
-             (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND o.or_date BETWEEN $2::date AND $3::date)
-             OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date BETWEEN $2::date AND $3::date)
+             (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND o.or_date BETWEEN $2::date AND $3::date)
+             OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date BETWEEN $2::date AND $3::date)
            )`,
         [b_id, from, to]
       ),
@@ -102,8 +105,8 @@ export async function getSummary(req, res, next) {
          LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
          WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
            AND (
-             (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND o.or_date BETWEEN $2::date AND $3::date)
-             OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date BETWEEN $2::date AND $3::date)
+             (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND o.or_date BETWEEN $2::date AND $3::date)
+             OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date BETWEEN $2::date AND $3::date)
            )
          GROUP BY day ORDER BY day`,
         [b_id, from, to]
@@ -188,6 +191,15 @@ export async function getSummary(req, res, next) {
            AND cod_settlement_id IS NULL AND or_status <> 'cancelled'
            AND or_date BETWEEN $2::date AND $3::date`,
         [b_id, from, to]
+      ),
+
+      // Credit sales nobody has paid for yet, whenever they were given: owed to
+      // the house, not revenue until paid.
+      pool.query(
+        `SELECT COALESCE(SUM(COALESCE("or_totalCostWtax", or_totalcost, 0)),0) AS total, COUNT(*)::int AS orders
+         FROM "ORDER"
+         WHERE b_id = $1 AND payment_method = 'credit' AND cod_settlement_id IS NULL AND or_status <> 'cancelled'`,
+        [b_id]
       ),
     ]);
 
@@ -287,7 +299,9 @@ export async function getSummary(req, res, next) {
         revenue: restRev,
         cod_received: num(restaurant.rows[0].cod_received),
         cod_orders: num(restaurant.rows[0].cod_orders),
-        paid_at_till: +(restRev - num(restaurant.rows[0].cod_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        credit_received: num(restaurant.rows[0].credit_received),
+        credit_orders: num(restaurant.rows[0].credit_orders),
+        paid_at_till: +(restRev - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
         costs: restCosts, cost_total: +restCostTotal.toFixed(2),
         profit: +(restRev - restCostTotal).toFixed(2),
       },
@@ -339,6 +353,8 @@ export async function getSummary(req, res, next) {
       restaurant_orders: num(restaurant.rows[0].orders),
       receivables: {
         cod_outstanding: num(codOutstanding.rows[0].total),
+        credit_outstanding: num(creditOutstanding.rows[0].total),
+        credit_outstanding_orders: num(creditOutstanding.rows[0].orders),
       },
       daily,
     });
@@ -376,8 +392,8 @@ async function productProfitRows(b_id, from, to) {
      LEFT JOIN "category" c ON c.cat_id = p.cat_id
      WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
        AND (
-         (NOT (o.or_type = 'delivery' AND o.payment_method = 'cod') AND o.or_date BETWEEN $2::date AND $3::date)
-         OR (o.or_type = 'delivery' AND o.payment_method = 'cod' AND cs.settled_date BETWEEN $2::date AND $3::date)
+         (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND o.or_date BETWEEN $2::date AND $3::date)
+         OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date BETWEEN $2::date AND $3::date)
        )
      GROUP BY 1, 2, 3
      ORDER BY 5 DESC`,
@@ -707,7 +723,7 @@ export async function getTransactions(req, res, next) {
          LEFT JOIN "CUSTOMER" c ON c.cust_id = o.cust_id
          LEFT JOIN "User" u     ON u.u_id = o.u_id
          WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
-           AND NOT (o.or_type = 'delivery' AND o.payment_method = 'cod')
+           AND NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod'))
            AND o.or_date BETWEEN $2::date AND $3::date
          ORDER BY o.or_date DESC, o.or_id DESC`,
         [b_id, from, to]
@@ -807,9 +823,12 @@ export async function getTransactions(req, res, next) {
     // A delivery-partner COD settlement — cash the partner was holding on the
     // hotel's behalf actually arriving. One row per settlement (like one
     // supplier payment is one row, not one per purchase order it covers).
-    if (kind === "all" || kind === "delivery_cod") {
+    // A credit payment is the same kind of row: money for specific orders,
+    // arriving on the day it is paid.
+    if (kind === "all" || kind === "delivery_cod" || kind === "credit") {
       const r = await pool.query(
         `SELECT s.settlement_id, s.created_at AS at, s.amount, s.delivery_partner, s.method, s.note,
+                s.kind, s.customer_name,
                 -- The delivery charges inside the orders this settlement closed: the order itself is
                 -- not listed (its money is this row), so its charge is shown here.
                 (SELECT COALESCE(SUM(o.delivery_charge), 0) FROM "ORDER" o WHERE o.cod_settlement_id = s.settlement_id) AS delivery_charge,
@@ -817,12 +836,14 @@ export async function getTransactions(req, res, next) {
          FROM "DELIVERY_COD_SETTLEMENT" s
          LEFT JOIN "User" u ON u.u_id = s.created_by
          WHERE s.b_id = $1 AND s.settled_date BETWEEN $2::date AND $3::date
+           ${kind === "credit" ? "AND s.kind = 'credit'" : kind === "delivery_cod" ? "AND s.kind = 'cod'" : ""}
          ORDER BY s.created_at DESC`,
         [b_id, from, to]
       );
       r.rows.forEach(x => out.push({
-        at: x.at, type: "Delivery COD Settlement", direction: "in",
-        amount: num(x.amount), method: x.method, reference: x.note || "", party: x.delivery_partner,
+        at: x.at, type: x.kind === "credit" ? "Credit payment" : "Delivery COD Settlement", direction: "in",
+        amount: num(x.amount), method: x.method, reference: x.note || "",
+        party: x.kind === "credit" ? x.customer_name : x.delivery_partner,
         handled_by: x.handled_by || null,
         settlement_id: x.settlement_id,
         delivery_charge: num(x.delivery_charge),

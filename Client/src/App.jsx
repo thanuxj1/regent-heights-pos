@@ -63,6 +63,7 @@ const BranchProfileRouter = () => {
 const AddRawMaterials = lazy(() => import('./pages/branch-admin/AddRawMaterials'));
 const WasteTracking = lazy(() => import('./pages/branch-admin/WasteTracking'));
 const DeliveryCod = lazy(() => import('./pages/branch-admin/DeliveryCod'));
+const CreditSales = lazy(() => import('./pages/branch-admin/CreditSales'));
 const InventoryDashboard = lazy(() => import('./pages/branch-admin/InventoryDashboard'));
 const SupplierManagement = lazy(() => import('./pages/branch-admin/SupplierManagement'));
 const BranchAdminDashboard = lazy(() => import('./pages/branch-admin/Dashboard'));
@@ -409,6 +410,15 @@ function App() {
           // could never reach the one page where that control appears.
           <ProtectedRoute allowedRoles={[1, 2, 6]} orCapability={CAP.WASTE_TRACKING}>
             <WasteTracking />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/credit-sales"
+        element={
+          <ProtectedRoute allowedRoles={[1, 2, 3]}>
+            <CreditSales />
           </ProtectedRoute>
         }
       />

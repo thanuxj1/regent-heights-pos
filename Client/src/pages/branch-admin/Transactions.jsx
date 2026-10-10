@@ -20,6 +20,7 @@ function ledgerType(reportType) {
   if (reportType === "Supplier payment") return "purchase";
   if (reportType === "Waste") return "waste";
   if (reportType === "Delivery COD Settlement") return "cod";
+  if (reportType === "Credit payment") return "credit";
   return "other";
 }
 

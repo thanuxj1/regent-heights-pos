@@ -26,7 +26,21 @@ const VALID_TYPES = ["dine-in", "takeaway", "delivery"];
 // in the drawer, so it is a tender but never a cash one. "cod" is cash the
 // delivery partner's rider collected from the customer — also never a till
 // tender, since the hotel's own cashier never touches it until settlement.
-const TENDERS = ["cash", "card", "mobile_pay", "voucher", "room", "split", "cod"];
+// "bank_transfer" is money straight into the bank, never the drawer. "credit" is
+// food given to someone the house knows who pays later: like "cod" it is not
+// money in the drawer, and it counts as revenue only once paid (see
+// creditController.js). A credit sale must say who owes it.
+const TENDERS = ["cash", "card", "mobile_pay", "voucher", "room", "split", "cod", "bank_transfer", "credit"];
+
+/** Who owes a credit sale; null for any other tender. Throws a 400 when the name is missing. */
+function creditCustomer(tender, name, phone) {
+  if (tender !== "credit") return { name: null, phone: null };
+  const n = String(name ?? "").trim().slice(0, 120);
+  if (!n) {
+    throw Object.assign(new Error("A credit sale needs the customer's name — who is going to pay it?"), { status: 400 });
+  }
+  return { name: n, phone: String(phone ?? "").trim().slice(0, 30) || null };
+}
 
 // Delivery partners a "delivery" order can be attributed to — a real,
 // manager-editable list (Server/controllers/deliveryPartnerController.js),
@@ -454,6 +468,8 @@ export const updateOrder = async (req, res) => {
       service_fee,
       delivery_charge,
       approval_pin,
+      credit_customer,
+      credit_phone,
     } = req.body;
 
     // ── Required fields for full update ──
@@ -634,6 +650,9 @@ export const updateOrder = async (req, res) => {
     const tender = TENDERS.includes(String(payment_method || "").toLowerCase())
       ? String(payment_method).toLowerCase()
       : null;
+    let credit;
+    try { credit = creditCustomer(tender, credit_customer, credit_phone); }
+    catch (e) { return res.status(400).json({ success: false, error: e.message }); }
     let drawerId = null;
     if (or_status === "completed" && tender) {
       const drawer = await pool.query(
@@ -666,7 +685,9 @@ export const updateOrder = async (req, res) => {
          discount_pct       = $14,
          service_fee        = $15,
          discount_approved_by = $16,
-         delivery_charge    = $17
+         delivery_charge    = $17,
+         credit_customer    = CASE WHEN $11::text IS NULL THEN credit_customer WHEN $11::text = 'credit' THEN $18 ELSE NULL END,
+         credit_phone       = CASE WHEN $11::text IS NULL THEN credit_phone    WHEN $11::text = 'credit' THEN $19 ELSE NULL END
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -687,6 +708,8 @@ export const updateOrder = async (req, res) => {
         resolvedServiceFee,
         discountApprovedBy,
         resolvedDeliveryCharge,
+        credit.name,
+        credit.phone,
       ],
     );
 
@@ -1256,6 +1279,9 @@ export const createOrderWithItems = async (req, res) => {
   const tender = TENDERS.includes(String(order.payment_method || "").toLowerCase())
     ? String(order.payment_method).toLowerCase()
     : null;
+  let credit;
+  try { credit = creditCustomer(tender, order.credit_customer, order.credit_phone); }
+  catch (e) { return res.status(400).json({ success: false, error: e.message }); }
 
   // Attach the sale to the cashier's open drawer if they have one. Deliberately
   // not required: a missing shift must never stop a queue being served. The
@@ -1282,8 +1308,8 @@ export const createOrderWithItems = async (req, res) => {
           cust_id, u_id, b_id, table_id, client_ref,
           discount_pct, service_fee, discount_approved_by,
           payment_method, session_id, kitchen_note, delivery_partner,
-          delivery_charge)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          delivery_charge, credit_customer, credit_phone)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1295,6 +1321,8 @@ export const createOrderWithItems = async (req, res) => {
         String(order.kitchen_note ?? "").trim().slice(0, 500) || null,
         resolvedDeliveryPartner,
         deliveryCharge,
+        credit.name,
+        credit.phone,
       ],
     );
     const created = rows[0];

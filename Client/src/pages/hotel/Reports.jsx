@@ -100,7 +100,7 @@ export default function Reports() {
   };
 
   const exportRevenueCsv = async () => {
-    const all = (await fullLedger()).filter(t => /^(Hotel payment|Restaurant|Delivery COD)/.test(t.type))
+    const all = (await fullLedger()).filter(t => /^(Hotel payment|Restaurant|Delivery COD|Credit payment)/.test(t.type))
       .map(t => ({ ...t, signed: t.direction === "out" ? -t.amount : t.amount }));
     const head = ["Date", "Time", "Source", "Amount (refunds negative)", "Of which delivery charge", "Payment method", "Reference", "Customer / guest", "Handled by"];
     const rows = all.map(t => [dateCell(dayKey(t.at)), clockOf(t.at), t.type, t.signed,
@@ -206,6 +206,7 @@ export default function Reports() {
       line("Revenue", money(d.restaurant.revenue), `${d.restaurant.orders} orders`),
       line("  of which paid at the till or by card", money(d.restaurant.paid_at_till ?? 0)),
       line("  of which cash on delivery received", money(d.restaurant.cod_received ?? 0), `${d.restaurant.cod_orders ?? 0} delivery order(s) — counted on the day the rider handed the cash over`),
+      line("  of which credit sales paid", money(d.restaurant.credit_received ?? 0), `${d.restaurant.credit_orders ?? 0} bill(s) — counted on the day the customer paid`),
       line("  of which delivery charges", money(d.restaurant.delivery_charges ?? 0), "Already included in revenue"),
       line("  Food and drink bought", money(d.restaurant.costs.food_and_drink_bought), "Ingredients and resale products, as paid to suppliers"),
       line("  Food wasted", money(d.restaurant.costs.food_wasted)),
@@ -345,11 +346,20 @@ export default function Reports() {
                     · cash on delivery handed over by riders{" "}
                     <strong style={{ color: "#1E293B" }}>{money(data.by_department?.restaurant.cod_received ?? 0)}</strong>
                     {" "}({data.by_department?.restaurant.cod_orders ?? 0} order(s))<br />
+                    · credit sales paid{" "}
+                    <strong style={{ color: "#1E293B" }}>{money(data.by_department?.restaurant.credit_received ?? 0)}</strong>
+                    {" "}({data.by_department?.restaurant.credit_orders ?? 0} bill(s))<br />
                     · delivery charges of{" "}
                     <strong style={{ color: "#1E293B" }}>{money(data.revenue.delivery_charges ?? 0)}</strong>
                     {payables && data.receivables?.cod_outstanding > 0 && (
                       <><br /><span style={{ color: "#B45309" }}>
                         Not counted yet: {money(data.receivables.cod_outstanding)} of cash on delivery still with riders.
+                      </span></>
+                    )}
+                    {data.receivables?.credit_outstanding > 0 && (
+                      <><br /><span style={{ color: "#B45309" }}>
+                        Not counted yet: {money(data.receivables.credit_outstanding)} of credit sales still unpaid
+                        ({data.receivables.credit_outstanding_orders} bill(s)) — see Credit Sales.
                       </span></>
                     )}
                   </div>

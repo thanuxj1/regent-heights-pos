@@ -98,6 +98,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
                 : item.type === 'commission' ? 'Agent Commission'
                 : item.type === 'waste' ? 'Waste Record'
                 : item.type === 'cod' ? 'Delivery COD Settlement'
+                : item.type === 'credit' ? 'Credit payment'
                 : 'Purchase Expense Ledger'}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">Reference: {item.txId}</p>
