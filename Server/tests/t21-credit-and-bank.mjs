@@ -146,4 +146,44 @@ await t("the other customer still owes, on their own", async () => {
   ok(res.data.by_customer.some((c) => c.customer === "ZZQA Ms Silva" && c.total === 300));
 });
 
+section("delivery paid by bank transfer or on credit");
+const delivery = (extra) => {
+  n += 1;
+  return api(cashier, "POST", "/orders/with-items", {
+    order: {
+      or_tax: 0, or_totalcost: 300, or_totalCostWtax: 400, or_status: "pending", or_type: "delivery",
+      u_id: A.cashier.u_id, b_id: A.b_id, client_ref: `${tag}-t21-${n}`, delivery_charge: 100, ...extra,
+    },
+    items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 300 }],
+  });
+};
+
+await t("a delivery on credit needs the customer's name", async () => {
+  status(await delivery({ payment_method: "credit" }), 400);
+});
+
+let creditDelivery;
+await t("a delivery on credit is owed, not revenue; a bank-transfer delivery is revenue at once", async () => {
+  const mid = await summary();
+  const c = await delivery({ payment_method: "credit", credit_customer: "ZZQA Mrs Fernando", credit_phone: "0712223334" });
+  status(c, 201);
+  creditDelivery = c.data.data;
+  eq(creditDelivery.credit_customer, "ZZQA Mrs Fernando");
+  const b = await delivery({ payment_method: "bank_transfer" });
+  status(b, 201);
+  eq(b.data.data.payment_method, "bank_transfer");
+  const s = await summary();
+  eq(+(s.revenue.restaurant - mid.revenue.restaurant).toFixed(2), 400, "only the bank-transfer delivery counts today");
+  eq(+(s.receivables.credit_outstanding - mid.receivables.credit_outstanding).toFixed(2), 400, "the credit delivery is owed");
+});
+
+await t("when the credit delivery is paid it counts as revenue", async () => {
+  const mid = await summary();
+  const res = await api(cashier, "POST", "/credit/settle", { order_ids: [creditDelivery.or_id], method: "cash" });
+  status(res, 201);
+  eq(Number(res.data.amount), 400, "the delivery charge is part of what is paid");
+  const s = await summary();
+  eq(+(s.revenue.restaurant - mid.revenue.restaurant).toFixed(2), 400);
+});
+
 await finish("t21-credit-and-bank.mjs");

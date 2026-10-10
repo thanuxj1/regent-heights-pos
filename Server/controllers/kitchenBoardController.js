@@ -76,7 +76,7 @@ export async function getKitchenBoard(req, res) {
       `SELECT o.or_id, o.or_type, o.or_status, o.or_date::text AS or_date, o.or_time, o.b_id,
               o.table_id, t.table_number, o.room_id, r.room_number,
               o.status_changed_at, o."or_totalCostWtax" AS total,
-              o.payment_method, o.delivery_partner, o.cod_settlement_id, o.delivery_charge,
+              o.payment_method, o.delivery_partner, o.cod_settlement_id, o.delivery_charge, o.credit_customer,
               o.kitchen_note, u.role_id AS placed_by_role,
               (o.u_id IS NOT DISTINCT FROM ${me}::int) AS mine,
               TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')) AS placed_by,

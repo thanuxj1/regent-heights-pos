@@ -80,6 +80,13 @@ const DISCOUNT_LIMIT_PCT = 0;
 // someone the house knows, paid later; it is recorded on Credit Sales.
 const TENDER_OF = { Cash: "cash", Card: "card", Bank: "bank_transfer", Credit: "credit", Room: "room" };
 const tenderOf = (label) => TENDER_OF[label] || String(label || "cash").toLowerCase();
+// How a delivery's customer pays: the rider's cash or card, a transfer, or credit.
+const DELIVERY_PAY = [["cod", "Cash on delivery"], ["card", "Card"], ["bank_transfer", "Bank transfer"], ["credit", "Credit"]];
+const DELIVERY_PAY_LABEL = Object.fromEntries(DELIVERY_PAY);
+/** What a saved order's tender says on a bill or a card. */
+const paidByLabel = (method) => ({
+  cod: "Cash on delivery", card: "Card", cash: "Cash", bank_transfer: "Bank transfer", credit: "Credit", room: "Room",
+}[method] || method || "");
 
 /** Roles that are their own approval. */
 const MANAGER_ROLES = [1, 2, 6];
@@ -135,6 +142,8 @@ const CashierPos = () => {
   // Who is taking the food on credit: their name goes on the bill and on Credit Sales.
   const [creditName, setCreditName] = useState("");
   const [creditPhone, setCreditPhone] = useState("");
+  // A credit sale at the till, or a delivery the customer pays for later.
+  const isCreditSale = () => (orderType === "delivery" ? deliveryPaymentMethod === "credit" : paymentMethod === "Credit");
   const creditFields = (method) => (tenderOf(method) === "credit"
     ? { credit_customer: creditName.trim(), credit_phone: creditPhone.trim() || null }
     : {});
@@ -335,7 +344,10 @@ const CashierPos = () => {
         tax,
         deliveryCharge: charge,
         total,
-        paymentMethod: ord.payment_method === "cod" ? "Cash on delivery" : (ord.payment_method || ""),
+        paymentMethod: paidByLabel(ord.payment_method),
+        credit: ord.payment_method === "credit"
+          ? { customer: ord.credit_customer || "", phone: ord.credit_phone || "" }
+          : null,
       });
     } catch (err) {
       setError(err?.response?.data?.message || err.message || "Could not print the bill");
@@ -714,6 +726,10 @@ const CashierPos = () => {
       setError(DELIVERY_CHARGE_PROMPT);
       return;
     }
+    if (orderType === "delivery" && deliveryPaymentMethod === "credit" && !creditName.trim()) {
+      setError("Write who is taking this delivery on credit. Their name goes on the bill and on Credit Sales.");
+      return;
+    }
     if (orderType === "delivery" && deliveryPaymentMethod === "cod" && !deliveryPartner) {
       setError("Choose who is delivering — the cash is owed back by them. Add your own riders under Delivery COD if they are not listed.");
       return;
@@ -761,7 +777,7 @@ const CashierPos = () => {
           service_fee: Number(serviceFee || 0),
           delivery_charge: deliveryChargeAmount,
           kitchen_note: kitchenNoteText(),
-          ...(kotPaymentMethod ? { payment_method: kotPaymentMethod } : {}),
+          ...(kotPaymentMethod ? { payment_method: kotPaymentMethod, ...creditFields(kotPaymentMethod) } : {}),
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         },
         items: cart.map((item) => ({
@@ -793,6 +809,8 @@ const CashierPos = () => {
       setEditingOrderTableId(null);
       // The next delivery asks again; a charge is never carried over silently.
       setDeliveryCharge(null);
+      setCreditName("");
+      setCreditPhone("");
     } catch (kotError) {
       setError(
         kotError?.response?.data?.error ||
@@ -920,7 +938,7 @@ const CashierPos = () => {
     // changes hands now, the food goes to the kitchen, and the charge waits on
     // the folio until they check out. The hotel endpoint does all three, and
     // refuses a room whose guest has already left.
-    if (paymentMethod === "Credit" && orderType !== "delivery" && !creditName.trim()) {
+    if (isCreditSale() && !creditName.trim()) {
       setError("Write who is taking this on credit. Their name goes on the bill and on Credit Sales.");
       return;
     }
@@ -1162,8 +1180,10 @@ const CashierPos = () => {
           cashierName: `${user?.u_fname || "Cashier"} ${user?.u_lname || ""}`.trim(),
           branchName,
           branchLabel: `${branchName.split(" ")[0] || branchName}\nBranch`,
-          paymentMethod: paymentMethod === "Bank" ? "Bank transfer" : paymentMethod,
-          credit: paymentMethod === "Credit" && orderType !== "delivery"
+          paymentMethod: isDelivery
+            ? DELIVERY_PAY_LABEL[deliveryPaymentMethod] || deliveryPaymentMethod
+            : paymentMethod === "Bank" ? "Bank transfer" : paymentMethod,
+          credit: isCreditSale()
             ? { customer: creditName.trim(), phone: creditPhone.trim() }
             : null,
           items: invoiceItems,
@@ -1316,6 +1336,33 @@ const CashierPos = () => {
   };
 
   const selectedProductCount = cart.reduce((sum, item) => sum + item.qty, 0);
+
+  // Who owes a credit sale, asked for in the same way at the till and for a delivery.
+  const renderCreditInputs = () => (
+    <div className="mt-2 space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/60 p-2.5">
+      <input
+        type="text"
+        value={creditName}
+        maxLength={120}
+        onChange={(e) => setCreditName(e.target.value)}
+        placeholder="Customer name (required)"
+        aria-label="Credit customer name"
+        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
+      />
+      <input
+        type="tel"
+        value={creditPhone}
+        maxLength={30}
+        onChange={(e) => setCreditPhone(e.target.value)}
+        placeholder="Phone (optional)"
+        aria-label="Credit customer phone"
+        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
+      />
+      <p className="text-[11px] leading-relaxed text-amber-900/80">
+        Paid later. Not in today's takings or the drawer; record the payment on Credit Sales.
+      </p>
+    </div>
+  );
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#F3F7FB] text-slate-900">
@@ -1853,9 +1900,9 @@ const CashierPos = () => {
                     ))}
                   </div>
 
-                  <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Collected by rider as</h3>
+                  <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Customer pays by</h3>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {[["cod", "Cash on delivery"], ["card", "Card"]].map(([value, text]) => (
+                    {DELIVERY_PAY.map(([value, text]) => (
                       <button
                         key={value}
                         type="button"
@@ -1876,6 +1923,12 @@ const CashierPos = () => {
                       Cash the partner collects and owes back — tracked on Delivery COD, not this drawer.
                     </p>
                   )}
+                  {deliveryPaymentMethod === "bank_transfer" && (
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                      The customer pays straight into the bank — counted as a sale today, not in this drawer.
+                    </p>
+                  )}
+                  {deliveryPaymentMethod === "credit" && renderCreditInputs()}
                 </div>
               ) : (
                 <div>
@@ -1914,31 +1967,7 @@ const CashierPos = () => {
                     ))}
                   </div>
 
-                  {paymentMethod === "Credit" && (
-                    <div className="mt-2 space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/60 p-2.5">
-                      <input
-                        type="text"
-                        value={creditName}
-                        maxLength={120}
-                        onChange={(e) => setCreditName(e.target.value)}
-                        placeholder="Customer name (required)"
-                        aria-label="Credit customer name"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
-                      />
-                      <input
-                        type="tel"
-                        value={creditPhone}
-                        maxLength={30}
-                        onChange={(e) => setCreditPhone(e.target.value)}
-                        placeholder="Phone (optional)"
-                        aria-label="Credit customer phone"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-400"
-                      />
-                      <p className="text-[11px] leading-relaxed text-amber-900/80">
-                        Paid later. Not in today's takings or the drawer; record the payment on Credit Sales.
-                      </p>
-                    </div>
-                  )}
+                  {paymentMethod === "Credit" && renderCreditInputs()}
 
                   {/* Charging to a room is not a way of paying — it is a way of
                       deferring payment onto the guest's folio, so the room has
@@ -2103,7 +2132,7 @@ const CashierPos = () => {
                   ? "Processing…"
                   : paymentMethod === "Room" && orderType !== "delivery"
                     ? (chargeRoom ? `Charge to Room ${chargeRoom.room_number}` : "Charge to room")
-                    : paymentMethod === "Credit" && orderType !== "delivery"
+                    : isCreditSale()
                       ? `Give on credit · LKR ${total.toFixed(2)}`
                       : `Checkout · LKR ${total.toFixed(2)}`}
               </button>
@@ -2450,7 +2479,11 @@ const CashierPos = () => {
                             </div>
                           ) : o.payment_method ? (
                             <div className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 text-xs font-semibold text-center">
-                              {o.payment_method === "cod" ? "Paid — rider handed over the cash" : "Paid by " + o.payment_method}
+                              {o.payment_method === "cod"
+                                ? "Paid — rider handed over the cash"
+                                : o.payment_method === "credit"
+                                  ? `On credit${o.credit_customer ? ` — ${o.credit_customer}` : ""} · paid later on Credit Sales`
+                                  : "Paid by " + paidByLabel(o.payment_method).toLowerCase()}
                             </div>
                           ) : null}
                           <div className="flex gap-2">
