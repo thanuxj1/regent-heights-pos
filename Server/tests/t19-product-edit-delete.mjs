@@ -2,7 +2,7 @@
 // list and the till read; deleting a product takes it off every menu (as the
 // delete page promises), and one that has already been sold is refused with a
 // reason instead of "refers to a record that no longer exists".
-import { ctx, api, t, eq, ok, status, section, finish } from "./lib.mjs";
+import { ctx, api, t, eq, ok, status, section, finish, BASE } from "./lib.mjs";
 
 const { A, stamp } = await ctx();
 const owner = A.owner.token;
@@ -87,6 +87,48 @@ await t("a product that has already been sold is refused with a reason, and noth
   status(await api(owner, "GET", `/products/${pro.data.pro_id}`), 200, "the product must still be there");
   const row = (await api(owner, "GET", `/branch_products?B_id=${A.b_id}`)).data.find((x) => x.Bpro_id === bp.data.Bpro_id);
   ok(row, "its menu row must still be there too (the delete is all or nothing)");
+});
+
+section("menu photos are links, not data, in the list");
+// A 1x1 PNG, standing in for a phone photo uploaded from the device.
+const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const PNG2 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+let photoBpro, photoPro, link;
+const photoRow = async () => (await api(owner, "GET", `/branch_products?B_id=${A.b_id}`)).data.find((x) => x.Bpro_id === photoBpro);
+
+await t("a menu item with an uploaded photo is listed with a link to it, not the photo itself", async () => {
+  const pro = await api(owner, "POST", "/products", { pro_name: "ZZQA Photo Dish", pro_qty: 5, pro_price: 300, cat_id: catId, com_id: A.com_id, pro_image: PNG });
+  status(pro, 201);
+  photoPro = pro.data.pro_id;
+  const bp = await api(owner, "POST", "/branch_products", {
+    B_id: A.b_id, pro_id: photoPro, pro_name: "ZZQA Photo Dish", pro_shortname: "Photo", pro_image: PNG,
+    pro_des: "photo", cat_id: catId, pro_price: 300, pro_quantity: 5,
+  });
+  status(bp, 201);
+  photoBpro = bp.data.Bpro_id;
+  link = (await photoRow()).pro_image;
+  ok(/^https?:\/\/.+\/api\/branch_products\/\d+\/image\?v=[0-9a-f]{12}$/.test(link), `expected a photo link, got ${String(link).slice(0, 60)}`);
+});
+
+await t("the link serves the photo as an image, without signing in, cacheable", async () => {
+  const res = await fetch(link.replace(/^https?:\/\/[^/]+\/api/, BASE));
+  eq(res.status, 200);
+  eq(res.headers.get("content-type"), "image/png");
+  ok(/max-age=31536000/.test(res.headers.get("cache-control") || ""), "a versioned link is cached");
+  const bytes = Buffer.from(await res.arrayBuffer());
+  eq(bytes.toString("base64"), PNG.split(",")[1]);
+});
+
+await t("a new photo gets a new link", async () => {
+  status(await api(owner, "PUT", `/products/${photoPro}`, { pro_image: PNG2 }), 200);
+  const next = (await photoRow()).pro_image;
+  ok(next !== link, "the version in the link should change with the photo");
+  link = next;
+});
+
+await t("sending a photo link back as the photo does not overwrite it", async () => {
+  status(await api(owner, "PUT", `/branch_products/${photoBpro}`, { pro_image: link }), 200);
+  eq((await photoRow()).pro_image, link, "the photo (and so its link) is unchanged");
 });
 
 await finish("t19-product-edit-delete.mjs");

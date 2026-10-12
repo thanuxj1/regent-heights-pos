@@ -30,6 +30,24 @@ function normalizeSpaced(body, apiKey, dbKey) {
   return body?.[apiKey] ?? body?.[dbKey];
 }
 
+// The photo a menu item shows: its own, or the product's when the branch has
+// not set one (blank, or the "N/A" placeholder rows are seeded with).
+const IMAGE_SQL = `(CASE
+  WHEN bp." pro_image" IS NULL OR TRIM(bp." pro_image") = '' OR UPPER(TRIM(bp." pro_image")) = 'N/A'
+  THEN p." pro_image"
+  ELSE bp." pro_image"
+END)`;
+const DATA_MARK = "data-md5:";
+
+/** A data-URL photo becomes a link to GET /:id/image; anything else is left as it is. */
+function imageLink(value, bproId, base) {
+  if (typeof value !== "string" || !value.startsWith(DATA_MARK)) return value;
+  return `${base}/api/branch_products/${bproId}/image?v=${value.slice(DATA_MARK.length, DATA_MARK.length + 12)}`;
+}
+
+/** A photo link handed back by a client is not a photo: never store it over the real one. */
+const isOwnImageLink = (v) => typeof v === "string" && /\/api\/branch_products\/\d+\/image/.test(v);
+
 function toResponseRow(row) {
   let stations = row.stations;
   if (typeof stations === "string") {
@@ -143,10 +161,15 @@ export async function getBranchProducts(req, res, next) {
         -- way low_stock/track_inventory/tax_group already do below — editing the
         -- product's image (branch-admin/ProductDetails.jsx) would otherwise never
         -- show up here, since that screen writes Product, not Branch_Product.
-        CASE
-          WHEN bp." pro_image" IS NULL OR TRIM(bp." pro_image") = '' OR UPPER(TRIM(bp." pro_image")) = 'N/A'
-          THEN p." pro_image"
-          ELSE bp." pro_image"
+        --
+        -- A photo uploaded from a device is stored as a data URL of 100 KB or
+        -- more. Sent inside this list, 26 of them made the till's menu over
+        -- 2 MB, too slow for a shop's connection (the till gave up: "503", no
+        -- products). The list now carries only a fingerprint of such a photo;
+        -- the photo itself is served, cacheably, by GET /:id/image.
+        CASE WHEN ${IMAGE_SQL} LIKE 'data:%'
+          THEN '${DATA_MARK}' || md5(${IMAGE_SQL})
+          ELSE ${IMAGE_SQL}
         END AS "pro_image",
         bp." pro_des" AS "pro_des",
         bp."pro_quantity",
@@ -193,7 +216,42 @@ export async function getBranchProducts(req, res, next) {
       Pragma: "no-cache",
       Expires: "0",
     });
-    res.json(await withAvailability(result.rows.map(toResponseRow)));
+    const base = `${req.protocol}://${req.get("host")}`;
+    const rows = result.rows.map((row) => ({ ...row, pro_image: imageLink(row.pro_image, row.Bpro_id, base) }));
+    res.json(await withAvailability(rows.map(toResponseRow)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/branch_products/:id/image — a menu item's photo, as an image. Public:
+// an <img> cannot send a sign-in token, and a dish photo is not a secret. The
+// link carries the photo's fingerprint (?v=), so it is cached for a year and a
+// new photo is simply a new link.
+export async function getBranchProductImage(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!isPositiveInt(id)) { res.status(404); throw new Error("Not found"); }
+    const { rows } = await pool.query(
+      `SELECT ${IMAGE_SQL} AS img
+         FROM "public"."Branch_Product" bp
+         LEFT JOIN "public"."Product" p ON bp."pro_id" = p."pro_id"
+        WHERE bp."Bpro_id" = $1`,
+      [Number(id)],
+    );
+    const img = rows[0]?.img;
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec(String(img || ""));
+    if (!m) {
+      if (/^https?:\/\//i.test(String(img || ""))) return res.redirect(302, img);
+      res.status(404); throw new Error("This item has no photo");
+    }
+    const body = Buffer.from(m[2], "base64");
+    res.set({
+      "Content-Type": m[1],
+      "Content-Length": body.length,
+      "Cache-Control": req.query.v ? "public, max-age=31536000, immutable" : "public, max-age=300",
+    });
+    res.end(body);
   } catch (err) {
     next(err);
   }
@@ -263,7 +321,8 @@ export async function createBranchProduct(req, res, next) {
   try {
     const pro_name = req.body?.pro_name;
     const pro_shortname = normalizeSpaced(req.body, "pro_shortname", " pro_shortname");
-    const pro_image = normalizeSpaced(req.body, "pro_image", " pro_image");
+    const rawImage = normalizeSpaced(req.body, "pro_image", " pro_image");
+    const pro_image = isOwnImageLink(rawImage) ? undefined : rawImage;
     const pro_des = normalizeSpaced(req.body, "pro_des", " pro_des");
     const pro_quantity = req.body?.pro_quantity;
     const pro_price = normalizeProPrice(req.body);
@@ -432,7 +491,8 @@ export async function updateBranchProduct(req, res, next) {
 
     const pro_name = req.body?.pro_name;
     const pro_shortname = normalizeSpaced(req.body, "pro_shortname", " pro_shortname");
-    const pro_image = normalizeSpaced(req.body, "pro_image", " pro_image");
+    const rawImage = normalizeSpaced(req.body, "pro_image", " pro_image");
+    const pro_image = isOwnImageLink(rawImage) ? undefined : rawImage;
     const pro_des = normalizeSpaced(req.body, "pro_des", " pro_des");
     const pro_quantity = req.body?.pro_quantity;
     const pro_price = normalizeProPrice(req.body);

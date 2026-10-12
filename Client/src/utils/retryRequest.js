@@ -10,6 +10,12 @@
  */
 export function isTransient(err) {
   if (!err) return false;
+  // The till's offline cache answers 503 {offline: true} when it could not reach
+  // the server, and a 502/503/504 from the web server means the app behind it
+  // did not answer (down, or restarting during a deploy). Neither is the server
+  // refusing the request, so they are retried and reported as a connection problem.
+  const status = err.response?.status;
+  if (status === 502 || status === 503 || status === 504) return true;
   if (err.response) return false;              // the server answered
   return (
     err.code === "ERR_NETWORK" ||

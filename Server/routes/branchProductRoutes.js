@@ -16,9 +16,13 @@ import {
   deleteBranchProduct,
   countBranchProduct,
   restockBranchProduct,
+  getBranchProductImage,
 } from "../controllers/branchProductController.js";
 
 const router = express.Router();
+
+// Declared before the sign-in rule: an <img> tag cannot send a token.
+router.get("/:id/image", getBranchProductImage);
 
 router.use(requireAuth);
 // A Waiter's own default, inert for Cashier/Kitchen/Admin — Cashier's own POS

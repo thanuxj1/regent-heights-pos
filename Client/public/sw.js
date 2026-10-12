@@ -23,7 +23,9 @@
  * old version while it has a connection.
  */
 
-const VERSION = "v1";
+// v2: the data cache was keyed on URLs carrying a "_ts" timestamp, so it was
+// never hit; bumping the version clears those useless copies.
+const VERSION = "v2";
 const SHELL = `rh-pos-shell-${VERSION}`;
 const ASSETS = `rh-pos-assets-${VERSION}`;
 const DATA = `rh-pos-data-${VERSION}`;
@@ -61,20 +63,39 @@ async function cacheFirst(request, cacheName) {
   return response;
 }
 
-/** Prefer fresh; fall back to the last good copy when the network cannot answer. */
-async function networkFirst(request, cacheName, timeoutMs = 4000) {
+/**
+ * The cache key for a data request: its URL without the "_ts" cache-buster the
+ * app adds to every call. Keyed on the full URL, no two requests ever matched,
+ * so the "last good copy" below could never be found.
+ */
+function cacheKey(request) {
+  const url = new URL(request.url);
+  url.searchParams.delete("_ts");
+  return url.toString();
+}
+
+/**
+ * Prefer fresh; fall back to the last good copy when the network is slow or out.
+ * A slow answer with no copy to fall back on is still waited for: giving up
+ * after a few seconds used to empty the till ("503", no products) whenever the
+ * connection was merely slow.
+ */
+async function networkFirst(request, cacheName, timeoutMs = 4000, key = request) {
   const cache = await caches.open(cacheName);
+  const network = fetch(request).then((response) => {
+    if (response.ok) cache.put(key, response.clone());
+    return response;
+  });
+  network.catch(() => {}); // a late failure after a saved copy was served is not an error
   try {
-    const response = await Promise.race([
-      fetch(request),
+    return await Promise.race([
+      network,
       new Promise((_, reject) => setTimeout(() => reject(new Error("slow")), timeoutMs)),
     ]);
-    if (response.ok) cache.put(request, response.clone());
-    return response;
   } catch {
-    const hit = await cache.match(request);
+    const hit = await cache.match(key);
     if (hit) return hit;
-    throw new Error("offline and nothing cached");
+    return network; // nothing saved: keep waiting; rejects only if truly offline
   }
 }
 
@@ -104,7 +125,7 @@ self.addEventListener("fetch", (event) => {
 
   if (CACHEABLE_DATA.some((re) => re.test(url.pathname))) {
     event.respondWith(
-      networkFirst(request, DATA).catch(
+      networkFirst(request, DATA, 4000, cacheKey(request)).catch(
         () => new Response(JSON.stringify({ offline: true, data: [] }), {
           status: 503, headers: { "Content-Type": "application/json" },
         }),
