@@ -130,7 +130,7 @@ const AddProduct = () => {
     try {
       // Downscaled here rather than stored as-is — a raw phone photo is
       // 3-5 MB, and this only ever renders as a small tile.
-      const dataUrl = await readImageFile(file, { maxWidth: 800 });
+      const dataUrl = await readImageFile(file, { maxWidth: 640, quality: 0.75 });
       setForm((prev) => ({ ...prev, pro_image: dataUrl }));
     } catch (err) {
       setError(err.message);

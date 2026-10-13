@@ -36,6 +36,7 @@ import customerRoutes from "./routes/customerRoutes.js";
 // Tables
 import tableRoutes from "./routes/tableRoutes.js";
 import { notFound, errorHandler } from "./middleware/errorHandler.js";
+import { compressJson, slimListImages, restoreImageLinks, getCachedImage } from "./utils/responseImages.js";
 import { scheduleActivityPrune } from "./utils/activityRetention.js";
 import { warmPool } from "./config/database.js";
 import tableAssignmentRoutes from "./routes/tableAssignmentRoutes.js";
@@ -114,6 +115,13 @@ if (process.env.TRUST_PROXY) {
 
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+// Keep every response light, whatever is stored: JSON is gzipped, a photo inside
+// a list leaves as a link, and a link sent back becomes the photo again.
+app.use(compressJson);
+app.use(slimListImages);
+app.use(restoreImageLinks);
+app.get("/api/images/:hash", getCachedImage);
 
 // ─────────────────────────────────────────────
 // HEALTH CHECK

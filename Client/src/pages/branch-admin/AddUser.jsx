@@ -209,7 +209,7 @@ const AddUser = () => {
 											const file = e.target.files?.[0];
 											e.target.value = "";
 											if (!file) return;
-											try { updateField("image", await readImageFile(file, { maxWidth: 512 })); }
+											try { updateField("image", await readImageFile(file, { maxWidth: 400, quality: 0.75 })); }
 											catch (err) { window.alert(err.message); }
 										}}
 									/>

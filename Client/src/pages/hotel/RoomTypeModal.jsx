@@ -301,7 +301,7 @@ export default function RoomTypeModal({ branchId, initial, types = [], onClose, 
     setUploading(true);
     const added = [];
     for (const f of files.slice(0, room)) {
-      try { added.push(await readImageFile(f)); } catch (ex) { setImgError(ex.message); }
+      try { added.push(await readImageFile(f, { maxWidth: 1200, quality: 0.75 })); } catch (ex) { setImgError(ex.message); }
     }
     if (files.length > room) setImgError(`Only ${MAX_PHOTOS} photos fit — the rest were skipped.`);
     if (added.length) setForm((f) => ({ ...f, images: [...f.images, ...added] }));

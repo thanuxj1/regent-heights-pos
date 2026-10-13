@@ -232,7 +232,7 @@ const ProductDetails = () => {
     e.target.value = "";
     if (!file) return;
     try {
-      const dataUrl = await readImageFile(file, { maxWidth: 800 });
+      const dataUrl = await readImageFile(file, { maxWidth: 640, quality: 0.75 });
       setForm(prev => ({ ...prev, pro_image: dataUrl }));
     } catch (err) {
       setError(err.message);
