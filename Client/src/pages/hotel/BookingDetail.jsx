@@ -15,7 +15,8 @@ import {
   modalWrap, modalBox, errorBox, money, dmy, ymd, initials, STATUS_STYLE,
 } from "./ui";
 import { printElement } from "../../utils/printElement";
-import { elementToPdf, elementToImage, saveFile, canShareFiles, shareFile, safeFilename } from "../../utils/documentFile";
+import { saveFile, canShareFiles, shareFile, safeFilename } from "../../utils/documentFile";
+import { confirmationPdf, confirmationImage, loadLogo } from "../../utils/confirmationDocument";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 
 const SOURCE_LABEL = {
@@ -825,10 +826,66 @@ function ConfirmationModal({ data, onClose }) {
       return u.toString();
     } catch { return data.whatsapp_url; }
   })();
+  // Exactly what the page above shows, as plain values for the PDF and the picture.
+  const fileModel = (logo) => ({
+    logo,
+    hotelName: (hotel.B_name || "Hotel").toUpperCase(),
+    hotelLines: [
+      hotel.B_address,
+      [hotel.B_email, hotel.B_conNo ? `Phone: ${hotel.B_conNo}` : null].filter(Boolean).join(" | "),
+    ].filter(Boolean),
+    ref: b.booking_ref,
+    bookingDate: dmy(b.created_at),
+    guestName: guestName || "Guest",
+    hotelShort: hotel.B_name || "us",
+    left: [
+      ["Guest Name", guestName],
+      ["Country / Region", b.guest_country],
+      ["Email", b.guest_email],
+      ["Arrival Time", b.arrival_time?.slice(0, 5)],
+      ["Special Request", b.special_requests],
+    ],
+    right: [
+      ["Check-In Date", dmy(b.check_in_date)],
+      ["Check-Out Date", dmy(b.check_out_date)],
+      ["No. of Nights", String(b.nights ?? "")],
+      ...(b.checked_in_at ? [["Check-In Time", fmtTime(b.checked_in_at)]] : inTime ? [["Check-In Time", inTime]] : []),
+      ...(b.checked_out_at ? [["Check-Out Time", fmtTime(b.checked_out_at)]] : outTime ? [["Check-Out Time", outTime]] : []),
+    ],
+    rooms: (b.rooms || []).map((r) => [
+      `${properCase(r.type_name)}${r.room_number ? ` (Room ${r.room_number})` : ""}`,
+      `${b.adults} Adult${b.adults === 1 ? "" : "s"}${b.children ? `, ${b.children} Child` : ""}`,
+      "1",
+      b.plan_name || "Room Only",
+      b.promotion || "None",
+      money(r.rate_per_night),
+    ]),
+    totalDue: money(Number(b.grand_total) - paid),
+    breakdown: [
+      { k: "Total Room Charges", v: money(b.room_charges) },
+      { k: `Room Charges Tax (${b.tax_pct}%)`, v: money(b.tax_amount) },
+      ...(Number(b.person_charges) > 0 ? [{ k: "Extra Guest Charges", v: money(b.person_charges) }] : []),
+      { k: "Inclusions Including Tax", v: money(b.meal_charges) },
+      { k: "Extra Charges", v: money(b.extra_charges) },
+      ...(Number(b.discount) > 0
+        ? [{ k: b.discount_pct != null ? `Discount (${Number(b.discount_pct)}%)` : "Discount", v: money(-Number(b.discount)), red: true }]
+        : []),
+      { k: "Grand Total", v: money(b.grand_total), strong: true },
+      { k: "Total Paid", v: money(paid) },
+      { k: "Amount Due at Check-In", v: money(Number(b.grand_total) - paid), strong: true, red: true },
+    ],
+    terms: [
+      inTime && outTime ? `Standard check-in time is ${inTime} and check-out time is ${outTime}.` : null,
+      cancelLine ? `Cancellation policy: ${cancelLine}` : null,
+      ...ownTerms,
+    ].filter(Boolean),
+  });
+
   const makeFile = async (kind, then) => {
     setMaking(kind); setFileNote("");
     try {
-      const blob = kind === "image" ? await elementToImage(docRef.current) : await elementToPdf(docRef.current);
+      const model = fileModel(await loadLogo(DOCUMENT_LOGO));
+      const blob = kind === "image" ? await confirmationImage(model) : confirmationPdf(model);
       await then(blob, `${fileBase}.${kind === "image" ? "png" : "pdf"}`);
     } catch {
       setFileNote("The file could not be made. Use Print → Save as PDF instead.");
