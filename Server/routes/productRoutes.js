@@ -11,6 +11,7 @@ import {
   createProduct,
   updateProduct,
   deleteProduct,
+  getProductImage,
 } from "../controllers/productController.js";
 
 const router = express.Router();
@@ -19,6 +20,9 @@ const router = express.Router();
 // Purchase Orders may read it. Creating or changing a product is the menu's job.
 const menu = requireBranchAdminOr(CAPABILITIES.PRODUCT_MENU);
 const readable = requireBranchAdminOrAny([CAPABILITIES.PRODUCT_MENU, CAPABILITIES.PURCHASE_ORDERS]);
+
+// Declared before the sign-in rule: an <img> tag cannot send a token.
+router.get("/:id/image", getProductImage);
 
 router.use(requireAuth);
 

@@ -46,7 +46,7 @@ function imageLink(value, bproId, base) {
 }
 
 /** A photo link handed back by a client is not a photo: never store it over the real one. */
-const isOwnImageLink = (v) => typeof v === "string" && /\/api\/branch_products\/\d+\/image/.test(v);
+const isOwnImageLink = (v) => typeof v === "string" && /\/api\/(branch_products|products)\/\d+\/image/.test(v);
 
 function toResponseRow(row) {
   let stations = row.stations;
@@ -322,7 +322,9 @@ export async function createBranchProduct(req, res, next) {
     const pro_name = req.body?.pro_name;
     const pro_shortname = normalizeSpaced(req.body, "pro_shortname", " pro_shortname");
     const rawImage = normalizeSpaced(req.body, "pro_image", " pro_image");
-    const pro_image = isOwnImageLink(rawImage) ? undefined : rawImage;
+    // A link to the product's photo means "the product's photo": stored as the
+    // placeholder, so the menu item shows the product's photo (and follows it).
+    const pro_image = isOwnImageLink(rawImage) ? "N/A" : rawImage;
     const pro_des = normalizeSpaced(req.body, "pro_des", " pro_des");
     const pro_quantity = req.body?.pro_quantity;
     const pro_price = normalizeProPrice(req.body);

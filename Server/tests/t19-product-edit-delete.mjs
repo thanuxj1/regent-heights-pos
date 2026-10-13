@@ -131,4 +131,35 @@ await t("sending a photo link back as the photo does not overwrite it", async ()
   eq((await photoRow()).pro_image, link, "the photo (and so its link) is unchanged");
 });
 
+section("product photos are links in the product list too");
+let masterLink;
+await t("the product list carries a link to the photo, which serves it without signing in", async () => {
+  const list = await api(owner, "GET", "/products");
+  status(list, 200);
+  const row = (Array.isArray(list.data) ? list.data : list.data.data).find((x) => x.pro_id === photoPro);
+  masterLink = row.pro_image;
+  ok(/\/api\/products\/\d+\/image\?v=[0-9a-f]{12}$/.test(masterLink), `expected a product photo link, got ${String(masterLink).slice(0, 60)}`);
+  const res = await fetch(masterLink.replace(/^https?:\/\/[^/]+\/api/, BASE));
+  eq(res.status, 200);
+  eq(res.headers.get("content-type"), "image/png");
+  eq(Buffer.from(await res.arrayBuffer()).toString("base64"), PNG2.split(",")[1]);
+  const one = await api(owner, "GET", `/products/${photoPro}`);
+  eq(one.data.pro_image, PNG2, "the single product (the edit page) still has the photo itself");
+});
+
+await t("adding a product to the menu with that link uses the product's photo", async () => {
+  const pro = await api(owner, "POST", "/products", { pro_name: "ZZQA Linked Photo", pro_qty: 5, pro_price: 300, cat_id: catId, com_id: A.com_id, pro_image: PNG });
+  status(pro, 201);
+  const list = await api(owner, "GET", "/products");
+  const link2 = (Array.isArray(list.data) ? list.data : list.data.data).find((x) => x.pro_id === pro.data.pro_id).pro_image;
+  const bp = await api(owner, "POST", "/branch_products", {
+    B_id: A.b_id, pro_id: pro.data.pro_id, pro_name: "ZZQA Linked Photo", pro_shortname: "Linked", pro_image: link2,
+    pro_des: "linked", cat_id: catId, pro_price: 300, pro_quantity: 5,
+  });
+  status(bp, 201, "a link to the product's photo is accepted");
+  eq(bp.data.pro_image, "N/A", "no copy of the link is stored on the menu item");
+  const row = (await api(owner, "GET", `/branch_products?B_id=${A.b_id}`)).data.find((x) => x.Bpro_id === bp.data.Bpro_id);
+  ok(/\/api\/branch_products\/\d+\/image\?v=/.test(row.pro_image), "the menu shows the product's photo");
+});
+
 await finish("t19-product-edit-delete.mjs");

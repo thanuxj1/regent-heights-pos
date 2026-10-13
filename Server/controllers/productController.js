@@ -50,6 +50,21 @@ const SELECT_COLS = `
   p."track_inventory"
 `;
 
+// The product list carries a fingerprint of an uploaded photo, never the photo:
+// 26 data-URL photos made it 2.2 MB, and pages loading it on a shop connection
+// timed out ("Failed to load products"). GET /:id/image serves the photo itself.
+const DATA_MARK = "data-md5:";
+const LIST_COLS = SELECT_COLS.replace(
+  `p." pro_image"     AS "pro_image"`,
+  `CASE WHEN p." pro_image" LIKE 'data:%' THEN '${DATA_MARK}' || md5(p." pro_image") ELSE p." pro_image" END AS "pro_image"`,
+);
+
+/** A data-URL photo becomes a link to GET /api/products/:id/image; anything else is left as it is. */
+function imageLink(value, proId, base) {
+  if (typeof value !== "string" || !value.startsWith(DATA_MARK)) return value;
+  return `${base}/api/products/${proId}/image?v=${value.slice(DATA_MARK.length, DATA_MARK.length + 12)}`;
+}
+
 const FROM_JOIN = `
   FROM "public"."Product" p
   LEFT JOIN "public"."category" c ON p."cat_id" = c."cat_id"
@@ -62,15 +77,42 @@ export async function getProducts(req, res, next) {
     let result;
     if (role_id === ROLES.SUPER_ADMIN) {
       result = await pool.query(
-        `SELECT ${SELECT_COLS} ${FROM_JOIN} ORDER BY p."pro_id"`
+        `SELECT ${LIST_COLS} ${FROM_JOIN} ORDER BY p."pro_id"`
       );
     } else {
       result = await pool.query(
-        `SELECT ${SELECT_COLS} ${FROM_JOIN} WHERE p."Com_id" = $1 ORDER BY p."pro_id"`,
+        `SELECT ${LIST_COLS} ${FROM_JOIN} WHERE p."Com_id" = $1 ORDER BY p."pro_id"`,
         [com_id]
       );
     }
-    res.json(result.rows);
+    const base = `${req.protocol}://${req.get("host")}`;
+    res.json(result.rows.map((row) => ({ ...row, pro_image: imageLink(row.pro_image, row.pro_id, base) })));
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/products/:id/image — a product's photo, as an image. Public: an <img>
+// cannot send a sign-in token, and a dish photo is not a secret. The link carries
+// the photo's fingerprint (?v=), so it is cached for a year.
+export async function getProductImage(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!isPositiveInt(id)) { res.status(404); throw new Error("Not found"); }
+    const { rows } = await pool.query(`SELECT " pro_image" AS img FROM "public"."Product" WHERE "pro_id" = $1`, [Number(id)]);
+    const img = String(rows[0]?.img || "");
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec(img);
+    if (!m) {
+      if (/^https?:\/\//i.test(img)) return res.redirect(302, img);
+      res.status(404); throw new Error("This product has no photo");
+    }
+    const body = Buffer.from(m[2], "base64");
+    res.set({
+      "Content-Type": m[1],
+      "Content-Length": body.length,
+      "Cache-Control": req.query.v ? "public, max-age=31536000, immutable" : "public, max-age=300",
+    });
+    res.end(body);
   } catch (err) {
     next(err);
   }
