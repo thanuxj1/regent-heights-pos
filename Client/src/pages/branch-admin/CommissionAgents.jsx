@@ -92,12 +92,15 @@ export default function CommissionAgents() {
 
   const handleAgentSubmit = async (e) => {
     e.preventDefault(); setError("");
-    if (String(agentForm.commission_rate).trim() === "" || !(Number(agentForm.commission_rate) >= 0) || Number(agentForm.commission_rate) > 100) {
-      setError("Enter the commission rate, between 0 and 100."); return;
+    // Optional: left blank, the agent earns no commission (0%).
+    const rateText = String(agentForm.commission_rate ?? "").trim();
+    const rate = rateText === "" ? 0 : Number(rateText);
+    if (!(rate >= 0) || rate > 100) {
+      setError("The commission rate has to be between 0 and 100, or left blank for none."); return;
     }
     setSubmitting(true);
     try {
-      const payload = { ...agentForm, b_id: branchId, commission_rate: Number(agentForm.commission_rate) };
+      const payload = { ...agentForm, b_id: branchId, commission_rate: rate };
       if (editingAgent) await updateAgent(editingAgent.agent_id, payload);
       else await createAgent(payload);
       setShowAgentModal(false);
@@ -341,11 +344,11 @@ export default function CommissionAgents() {
                 { key:"agent_name", label:"Full Name *", placeholder:"e.g. Thanuja Weerasekara", type:"text", required:true },
                 { key:"agent_phone", label:"Phone Number", placeholder:"+94 77 123 4567", type:"tel" },
                 { key:"agent_email", label:"Email", placeholder:"agent@example.com", type:"email" },
-                { key:"commission_rate", label:"Commission Rate (%)", placeholder:"10", type:"number" },
+                { key:"commission_rate", label:"Commission Rate % (optional)", placeholder:"Leave blank for no commission", type:"number" },
               ].map(f => (
                 <label key={f.key} style={{ fontSize:12, fontWeight:600, color:"#64748B" }}>{f.label}
                   <input type={f.type} placeholder={f.placeholder} value={agentForm[f.key]}
-                    required={f.required || f.key === "commission_rate"}
+                    required={!!f.required}
                     min={f.type === "number" ? 0 : undefined} max={f.type === "number" ? 100 : undefined}
                     step={f.type === "number" ? "0.01" : undefined}
                     onChange={e => setAgentForm(p => ({...p, [f.key]: e.target.value}))}
