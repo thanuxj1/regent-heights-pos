@@ -28,6 +28,7 @@ const BranchAdminEditUser = lazy(() => import('./pages/branch-admin/EditUser'));
 const CashierPos = lazy(() => import('./pages/cashier/CashierPos'));
 const InvoicePreview = lazy(() => import('./pages/cashier/InvoicePreview'));
 import ProtectedRoute from './components/ProtectedRoute';
+import ConnectionBanner from './components/ConnectionBanner';
 import { useAuth } from './context/AuthContext';
 
 // Mirrors the two capability keys (of the full backend catalog) that can
@@ -100,6 +101,8 @@ function RouteFallback() {
 
 function App() {
   return (
+    <>
+    <ConnectionBanner />
     <Suspense fallback={<RouteFallback />}>
     <Routes>
       <Route path="/" element={<Login />} />
@@ -691,6 +694,7 @@ function App() {
       
     </Routes>
     </Suspense>
+    </>
   );
 }
 

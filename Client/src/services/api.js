@@ -1,6 +1,8 @@
 import axios from "axios";
 
 import { API_URL } from "../config";
+import { isTransient } from "../utils/retryRequest";
+import { reportOk, reportWeak } from "./connection";
 
 const BASE_URL = API_URL;
 
@@ -19,9 +21,34 @@ if (existingToken) {
 
 // Global response interceptor — only clears token and redirects on 401 (expired/invalid token)
 // A 403 (permission denied) means the user IS authenticated — do NOT log them out
+//
+// A weak connection: a read that fails because the network dropped, timed out,
+// or the server could not be reached (502/503/504) is tried again by itself,
+// with a short pause, before any page sees an error. Writes are not retried
+// here — a sale that may have arrived must not be sent twice; the till queues
+// those itself (services/offline.js).
+const READ_RETRIES = 2;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
 api.interceptors.response.use(
-  (response) => response,
-  (error) => {
+  (response) => {
+    reportOk();
+    return response;
+  },
+  async (error) => {
+    const config = error.config;
+    const isRead = config && String(config.method || "get").toLowerCase() === "get";
+    if (isRead && isTransient(error) && (config.__retries || 0) < READ_RETRIES) {
+      config.__retries = (config.__retries || 0) + 1;
+      reportWeak();
+      await pause(1000 * config.__retries + Math.random() * 400);
+      return api(config);
+    }
+    if (isTransient(error)) {
+      reportWeak();
+      // "timeout of 20000ms exceeded" / "Network Error" mean nothing at a counter.
+      error.message = "Can't reach the server right now — check the internet connection. It will keep trying.";
+    }
     if (error.response?.status === 401) {
       console.warn("[AUTH] 401 — token expired or invalid. Clearing session and redirecting to login.");
       localStorage.removeItem("token");
