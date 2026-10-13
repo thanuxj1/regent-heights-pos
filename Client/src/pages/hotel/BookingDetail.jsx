@@ -15,6 +15,7 @@ import {
   modalWrap, modalBox, errorBox, money, dmy, ymd, initials, STATUS_STYLE,
 } from "./ui";
 import { printElement } from "../../utils/printElement";
+import { elementToPdf, elementToImage, saveFile, canShareFiles, shareFile, safeFilename } from "../../utils/documentFile";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 
 const SOURCE_LABEL = {
@@ -808,6 +809,47 @@ function ConfirmationModal({ data, onClose }) {
     day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit",
   });
 
+  // The confirmation as a file — a PDF or a picture of exactly this page — so the
+  // guest gets the voucher itself, not a text message.
+  const [making, setMaking] = useState("");
+  const [fileNote, setFileNote] = useState("");
+  const fileBase = safeFilename(`Booking confirmation ${b.booking_ref} - ${guestName || "Guest"}`);
+  const shareable = canShareFiles();
+  // The guest's chat with a short note; the PDF is attached by hand (WhatsApp Web
+  // cannot be handed a file by a web page).
+  const chatUrl = (() => {
+    if (!data.whatsapp_url) return null;
+    try {
+      const u = new URL(data.whatsapp_url);
+      u.searchParams.set("text", `Dear ${guestName || "Guest"}, please find your booking confirmation ${b.booking_ref} attached.`);
+      return u.toString();
+    } catch { return data.whatsapp_url; }
+  })();
+  const makeFile = async (kind, then) => {
+    setMaking(kind); setFileNote("");
+    try {
+      const blob = kind === "image" ? await elementToImage(docRef.current) : await elementToPdf(docRef.current);
+      await then(blob, `${fileBase}.${kind === "image" ? "png" : "pdf"}`);
+    } catch {
+      setFileNote("The file could not be made. Use Print → Save as PDF instead.");
+    } finally {
+      setMaking("");
+    }
+  };
+  const savePdf = () => makeFile("pdf", async (blob, name) => { saveFile(blob, name); setFileNote(`Saved "${name}" to Downloads.`); });
+  const saveImage = () => makeFile("image", async (blob, name) => { saveFile(blob, name); setFileNote(`Saved "${name}" to Downloads.`); });
+  const sharePdf = () => makeFile("pdf", async (blob, name) => {
+    await shareFile(blob, name, { title: `Booking confirmation ${b.booking_ref}` });
+  });
+  const sendOnWhatsApp = () => {
+    // Opened now, while the click still counts, so the browser does not block it.
+    if (chatUrl) window.open(chatUrl, "_blank", "noopener");
+    makeFile("pdf", async (blob, name) => {
+      saveFile(blob, name);
+      setFileNote(`"${name}" is in Downloads, and ${guestName || "the guest"}'s WhatsApp chat is open — drag the file into the chat (or use 📎) and send.`);
+    });
+  };
+
   const copy = async () => {
     try { await navigator.clipboard.writeText(data.whatsapp_text); setCopied(true); setTimeout(() => setCopied(false), 2000); }
     catch { /* clipboard blocked */ }
@@ -982,25 +1024,35 @@ function ConfirmationModal({ data, onClose }) {
         )}
 
         <div className="no-print" style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
-          <button onClick={copy} style={{ ...btn("ghost"), flex: 1 }}>{copied ? "✓ Copied" : "Copy Text"}</button>
+          <button onClick={savePdf} disabled={!!making} style={{ ...btn("ghost"), flex: 1 }}>
+            {making === "pdf" ? "Making PDF…" : "Save PDF"}
+          </button>
+          <button onClick={saveImage} disabled={!!making} style={{ ...btn("ghost"), flex: 1 }}>
+            {making === "image" ? "Making image…" : "Save image"}
+          </button>
           <button
             onClick={() => printElement(docRef.current, { title: `Confirmation ${b.booking_ref}` })}
             style={{ ...btn("ghost"), flex: 1 }}>Print</button>
-          <a
-            href={data.whatsapp_url || undefined}
-            target="_blank"
-            rel="noreferrer"
-            onClick={e => { if (!data.whatsapp_url) e.preventDefault(); }}
-            style={{
-              ...btn("success"), flex: 2, textAlign: "center", textDecoration: "none",
-              display: "inline-block", opacity: data.whatsapp_url ? 1 : 0.5,
-              cursor: data.whatsapp_url ? "pointer" : "not-allowed",
-            }}>
-            Send on WhatsApp
-          </a>
+          {shareable && (
+            <button onClick={sharePdf} disabled={!!making} style={{ ...btn("ghost"), flex: 1 }}>Share…</button>
+          )}
         </div>
+        <div className="no-print" style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+          <button onClick={copy} style={{ ...btn("ghost"), flex: 1 }}>{copied ? "✓ Copied" : "Copy text"}</button>
+          <button
+            onClick={sendOnWhatsApp}
+            disabled={!chatUrl || !!making}
+            style={{ ...btn("success"), flex: 2, opacity: chatUrl ? 1 : 0.5, cursor: chatUrl ? "pointer" : "not-allowed" }}>
+            Send PDF on WhatsApp
+          </button>
+        </div>
+        {fileNote && (
+          <div className="no-print" style={{ ...errorBox, background: "#ECFDF3", borderColor: "#ABEFC6", color: "#067647", marginTop: 10, marginBottom: 0 }}>
+            {fileNote}
+          </div>
+        )}
         <div className="no-print" style={{ fontSize: 11, color: "#94A3B8", marginTop: 10, textAlign: "center" }}>
-          Print gives the guest this voucher. WhatsApp sends the same details as a message.
+          Save PDF or Save image keeps this voucher as a file. Send PDF on WhatsApp opens the guest&apos;s chat and saves the PDF to attach.
         </div>
       </div>
     </div>
