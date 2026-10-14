@@ -83,6 +83,7 @@ export function kotHtml(order, items, meta = {}) {
         <div><b>Order</b> #${esc(order?.or_id ?? "-")}</div>
         <div><b>Type</b> ${esc(order?.or_type || "dine-in")}</div>
         ${order?.table ? `<div><b>Table</b> ${esc(order.table)}</div>` : ""}
+        ${order?.customer ? `<div><b>Customer</b> ${esc(order.customer)}</div>` : ""}
         <div><b>Time</b> ${esc(when)} &nbsp; ${esc(day)}</div>
         ${staffName ? `<div><b>By</b> ${esc(staffName)}</div>` : ""}
       </div>

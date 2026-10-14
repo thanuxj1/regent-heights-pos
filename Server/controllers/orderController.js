@@ -32,6 +32,9 @@ const VALID_TYPES = ["dine-in", "takeaway", "delivery"];
 // creditController.js). A credit sale must say who owes it.
 const TENDERS = ["cash", "card", "mobile_pay", "voucher", "room", "split", "cod", "bank_transfer", "credit"];
 
+/** An optional name or number for the bill, trimmed to fit; null when blank. */
+const optionalText = (v, max) => String(v ?? "").trim().slice(0, max) || null;
+
 /** Who owes a credit sale; null for any other tender. Throws a 400 when the name is missing. */
 function creditCustomer(tender, name, phone) {
   if (tender !== "credit") return { name: null, phone: null };
@@ -470,6 +473,8 @@ export const updateOrder = async (req, res) => {
       approval_pin,
       credit_customer,
       credit_phone,
+      customer_name,
+      customer_phone,
     } = req.body;
 
     // ── Required fields for full update ──
@@ -687,7 +692,9 @@ export const updateOrder = async (req, res) => {
          discount_approved_by = $16,
          delivery_charge    = $17,
          credit_customer    = CASE WHEN $11::text IS NULL THEN credit_customer WHEN $11::text = 'credit' THEN $18 ELSE NULL END,
-         credit_phone       = CASE WHEN $11::text IS NULL THEN credit_phone    WHEN $11::text = 'credit' THEN $19 ELSE NULL END
+         credit_phone       = CASE WHEN $11::text IS NULL THEN credit_phone    WHEN $11::text = 'credit' THEN $19 ELSE NULL END,
+         customer_name      = COALESCE($20, customer_name),
+         customer_phone     = COALESCE($21, customer_phone)
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -710,6 +717,8 @@ export const updateOrder = async (req, res) => {
         resolvedDeliveryCharge,
         credit.name,
         credit.phone,
+        optionalText(customer_name, 120),
+        optionalText(customer_phone, 30),
       ],
     );
 
@@ -1308,8 +1317,8 @@ export const createOrderWithItems = async (req, res) => {
           cust_id, u_id, b_id, table_id, client_ref,
           discount_pct, service_fee, discount_approved_by,
           payment_method, session_id, kitchen_note, delivery_partner,
-          delivery_charge, credit_customer, credit_phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+          delivery_charge, credit_customer, credit_phone, customer_name, customer_phone)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1323,6 +1332,8 @@ export const createOrderWithItems = async (req, res) => {
         deliveryCharge,
         credit.name,
         credit.phone,
+        optionalText(order.customer_name, 120),
+        optionalText(order.customer_phone, 30),
       ],
     );
     const created = rows[0];

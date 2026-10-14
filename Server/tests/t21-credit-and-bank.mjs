@@ -59,6 +59,13 @@ await t("a sale paid by bank transfer is stored as such and counted at once", as
   eq(+(s.revenue.restaurant - before.revenue.restaurant).toFixed(2), 300);
 });
 
+await t("the till can record the bank-transfer payment (Pay now on the bill)", async () => {
+  const res = await api(cashier, "POST", "/payments", {
+    pay_method: "bank_transfer", pay_status: "paid", pay_date: today, pay_amount: 300, or_id: bankOrder.or_id,
+  });
+  status(res, 201, "the Payment table must accept bank_transfer");
+});
+
 section("credit");
 await t("a credit sale without the customer's name is refused", async () => {
   const res = await sale({ payment_method: "credit" });
@@ -184,6 +191,22 @@ await t("when the credit delivery is paid it counts as revenue", async () => {
   eq(Number(res.data.amount), 400, "the delivery charge is part of what is paid");
   const s = await summary();
   eq(+(s.revenue.restaurant - mid.revenue.restaurant).toFixed(2), 400);
+});
+
+await t("a delivery can carry the customer's name and phone for the bill and the kitchen", async () => {
+  const res = await delivery({ payment_method: "bank_transfer", customer_name: "  ZZQA Nimal  ", customer_phone: "0777000111" });
+  status(res, 201);
+  eq(res.data.data.customer_name, "ZZQA Nimal", "trimmed");
+  eq(res.data.data.customer_phone, "0777000111");
+  const board = await api(cashier, "GET", "/orders/board");
+  status(board, 200);
+  const rows = Array.isArray(board.data) ? board.data : board.data.orders || board.data.data || [];
+  const row = rows.find((o) => o.or_id === res.data.data.or_id);
+  ok(row, "the delivery is on the kitchen board");
+  eq(row.customer_name, "ZZQA Nimal");
+  const blank = await delivery({ payment_method: "bank_transfer", customer_name: "   " });
+  status(blank, 201);
+  eq(blank.data.data.customer_name, null, "a blank name is stored as nothing");
 });
 
 await finish("t21-credit-and-bank.mjs");

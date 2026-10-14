@@ -142,6 +142,17 @@ export const printReceipt = (invoice) => {
           <span class="value">${invoice.cashierName}</span>
         </div>
 
+        ${invoice.customer?.name ? `
+        <div class="row">
+          <span class="label">Customer</span>
+          <span class="value">${escapeHtml(invoice.customer.name)}</span>
+        </div>` : ""}
+        ${invoice.customer?.phone ? `
+        <div class="row">
+          <span class="label">Phone</span>
+          <span class="value">${escapeHtml(invoice.customer.phone)}</span>
+        </div>` : ""}
+
         <div class="row">
           <span class="label">Date</span>
           <span class="value">${new Date().toLocaleString()}</span>

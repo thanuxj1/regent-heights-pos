@@ -148,8 +148,24 @@ const CashierPos = () => {
   // Who is taking the food on credit: their name goes on the bill and on Credit Sales.
   const [creditName, setCreditName] = useState("");
   const [creditPhone, setCreditPhone] = useState("");
+  // Who a delivery is for, optionally — on the bill and the kitchen ticket.
+  const [deliveryCustomer, setDeliveryCustomer] = useState("");
+  const [deliveryCustomerPhone, setDeliveryCustomerPhone] = useState("");
   // A credit sale at the till, or a delivery the customer pays for later.
   const isCreditSale = () => (orderType === "delivery" ? deliveryPaymentMethod === "credit" : paymentMethod === "Credit");
+  // A delivery's customer: on credit it is whoever owes it, otherwise the
+  // optional name and number typed for the bill.
+  const customerFields = () => {
+    if (orderType !== "delivery") return {};
+    const onCredit = deliveryPaymentMethod === "credit";
+    const name = (onCredit ? creditName : deliveryCustomer).trim();
+    const phone = (onCredit ? creditPhone : deliveryCustomerPhone).trim();
+    return { customer_name: name || null, customer_phone: phone || null };
+  };
+  const customerLabel = () => {
+    const c = customerFields();
+    return [c.customer_name, c.customer_phone].filter(Boolean).join(" · ");
+  };
   const creditFields = (method) => (tenderOf(method) === "credit"
     ? { credit_customer: creditName.trim(), credit_phone: creditPhone.trim() || null }
     : {});
@@ -351,6 +367,7 @@ const CashierPos = () => {
         deliveryCharge: charge,
         total,
         paymentMethod: paidByLabel(ord.payment_method),
+        customer: ord.customer_name ? { name: ord.customer_name, phone: ord.customer_phone } : null,
         credit: ord.payment_method === "credit"
           ? { customer: ord.credit_customer || "", phone: ord.credit_phone || "" }
           : null,
@@ -784,6 +801,7 @@ const CashierPos = () => {
           delivery_charge: deliveryChargeAmount,
           kitchen_note: kitchenNoteText(),
           ...(kotPaymentMethod ? { payment_method: kotPaymentMethod, ...creditFields(kotPaymentMethod) } : {}),
+          ...customerFields(),
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         },
         items: cart.map((item) => ({
@@ -797,7 +815,7 @@ const CashierPos = () => {
       if (!orderId) throw new Error("Order was created but no order id was returned");
 
       printKotAtTill(
-        { or_id: orderId, or_type: orderType, allergies, addons, notes },
+        { or_id: orderId, or_type: orderType, allergies, addons, notes, customer: customerLabel() },
         cart.map((i) => ({ name: i.pro_name, qty: i.qty })),
         {
           branchName,
@@ -816,6 +834,8 @@ const CashierPos = () => {
       // The next delivery asks again; a charge is never carried over silently.
       setDeliveryCharge(null);
       setCreditName("");
+      setDeliveryCustomer("");
+      setDeliveryCustomerPhone("");
       setCreditPhone("");
     } catch (kotError) {
       setError(
@@ -1082,7 +1102,7 @@ const CashierPos = () => {
           u_id: user.u_id,
           b_id: branchId,
           table_id: editingOrderTableId ?? null,
-          payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod),
+          payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod), ...customerFields(),
           delivery_partner: effectiveDeliveryPartner,
           // A waiter-placed ticket has never had a discount or service fee on
           // it — this settle step is the only chance to declare one, same as
@@ -1123,7 +1143,7 @@ const CashierPos = () => {
             // drawer cannot be counted at the end of the day: there is no way
             // to tell which takings were notes and which were card. For a
             // delivery order this is COD/card as paid to the rider, not the till.
-            payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod),
+            payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod), ...customerFields(),
             ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
           },
           items: cart.map((item) => ({
@@ -1179,6 +1199,8 @@ const CashierPos = () => {
       // And the next delivery has to choose its charge again.
       setDeliveryCharge(null);
       setCreditName("");
+      setDeliveryCustomer("");
+      setDeliveryCustomerPhone("");
       setCreditPhone("");
       navigate("/cashier/invoice-preview", {
         state: {
@@ -1191,6 +1213,9 @@ const CashierPos = () => {
             : paymentMethod === "Bank" ? "Bank transfer" : paymentMethod,
           credit: isCreditSale()
             ? { customer: creditName.trim(), phone: creditPhone.trim() }
+            : null,
+          customer: isDelivery && customerFields().customer_name
+            ? { name: customerFields().customer_name, phone: customerFields().customer_phone }
             : null,
           items: invoiceItems,
           subtotal: Number(subtotal.toFixed(2)),
@@ -1258,6 +1283,8 @@ const CashierPos = () => {
       orderType,
       deliveryPartner,
       deliveryPaymentMethod,
+      deliveryCustomer,
+      deliveryCustomerPhone,
       deliveryCharge,
       allergies,
       addons,
@@ -1308,6 +1335,8 @@ const CashierPos = () => {
         orderType,
         deliveryPartner,
         deliveryPaymentMethod,
+        deliveryCustomer,
+        deliveryCustomerPhone,
         allergies,
         addons,
         notes,
@@ -1322,6 +1351,8 @@ const CashierPos = () => {
     setOrderType(orderToResume.orderType);
     setDeliveryPartner(orderToResume.deliveryPartner || "pickme_food");
     setDeliveryPaymentMethod(orderToResume.deliveryPaymentMethod || "cod");
+    setDeliveryCustomer(orderToResume.deliveryCustomer || "");
+    setDeliveryCustomerPhone(orderToResume.deliveryCustomerPhone || "");
     setDeliveryCharge(orderToResume.deliveryCharge ?? null);
     setAllergies(orderToResume.allergies || "");
     setAddons(orderToResume.addons || "");
@@ -1882,6 +1913,35 @@ const CashierPos = () => {
                       </>
                     )}
                   </div>
+
+                  {/* On credit, the credit customer's name below is used instead. */}
+                  {deliveryPaymentMethod !== "credit" && (
+                    <>
+                      <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Customer <span className="normal-case tracking-normal text-slate-400">(optional)</span>
+                      </h3>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input
+                          type="text"
+                          value={deliveryCustomer}
+                          maxLength={120}
+                          onChange={(e) => setDeliveryCustomer(e.target.value)}
+                          placeholder="Name"
+                          aria-label="Delivery customer name"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-sky-300"
+                        />
+                        <input
+                          type="tel"
+                          value={deliveryCustomerPhone}
+                          maxLength={30}
+                          onChange={(e) => setDeliveryCustomerPhone(e.target.value)}
+                          placeholder="Phone"
+                          aria-label="Delivery customer phone"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-sky-300"
+                        />
+                      </div>
+                    </>
+                  )}
 
                   <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Delivery charge
@@ -2482,6 +2542,12 @@ const CashierPos = () => {
                         </div>
                       ) : o.or_type === "delivery" ? (
                         <div className="space-y-2">
+                          {(o.customer_name || o.customer_phone) && (
+                            <div className="text-xs text-slate-600">
+                              <span className="font-semibold text-slate-800">{o.customer_name || "Customer"}</span>
+                              {o.customer_phone ? ` · ${o.customer_phone}` : ""}
+                            </div>
+                          )}
                           {o.payment_method === "cod" && !o.cod_settlement_id ? (
                             <div className="rounded-lg bg-amber-100 border border-amber-300 text-amber-800 px-3 py-1.5 text-xs font-semibold text-center">
                               Cash on delivery — not received yet · LKR {Number(o.total || 0).toFixed(2)}
