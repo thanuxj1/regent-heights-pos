@@ -183,6 +183,8 @@ export async function cleanup() {
   await q(`DELETE FROM "GUEST" WHERE b_id = ANY($1)`, [bIds]);
   await q(`DELETE FROM "ROOM" WHERE b_id = ANY($1)`, [bIds]);
   await q(`DELETE FROM "ROOM_TYPE" WHERE b_id = ANY($1)`, [bIds]);
+  // A payment recorded against an order ("Pay now" on a bill) holds the order in place.
+  await q(`DELETE FROM "Payment" WHERE or_id IN (SELECT or_id FROM "ORDER" WHERE b_id = ANY($1))`, [bIds]);
   await q(`DELETE FROM "ORDER_ITEM" WHERE order_id IN (SELECT or_id FROM "ORDER" WHERE b_id = ANY($1))`, [bIds]);
   await q(`DELETE FROM "ORDER" WHERE b_id = ANY($1)`, [bIds]);
   await q(`DELETE FROM "Branch_Product" WHERE "B_id" = ANY($1)`, [bIds]);
