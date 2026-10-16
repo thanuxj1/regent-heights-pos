@@ -1,7 +1,7 @@
 import pool from "../config/database.js";
 import { emitSocketEvent, getBranchSocketRoom } from "../utils/socket.js";
 import { logActivity } from "../utils/activityLog.js";
-import { effectiveCheckout } from "../utils/occupancy.js";
+import { effectiveCheckout, occupancyEnd } from "../utils/occupancy.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { branchClause, writeBranchId, assertInScope, assertBookingInScope } from "../utils/scope.js";
 import {
@@ -28,10 +28,14 @@ function announce(b_id, payload) {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+// A day-use stay (in and out on the same date) is billed as one night — left
+// at 0 it priced the room at nothing. A check-out before check-in still comes
+// out negative and is refused by every caller's `< 1` check.
 function nightsBetween(inDate, outDate) {
   const a = new Date(inDate + "T00:00:00");
   const b = new Date(outDate + "T00:00:00");
-  return Math.round((b - a) / 86400000);
+  const n = Math.round((b - a) / 86400000);
+  return n === 0 ? 1 : n;
 }
 
 function num(v, d = 0) { const n = Number(v); return Number.isFinite(n) ? n : d; }
@@ -316,7 +320,7 @@ export async function getAvailability(req, res, next) {
          AND r.is_active = TRUE
          AND r.hk_status NOT IN ('out_of_order','maintenance')
        ORDER BY rt.type_name, r.room_number`,
-      [b_id, checkIn, checkOut, excludeId]
+      [b_id, checkIn, occupancyEnd(checkIn, checkOut), excludeId]
     );
 
     const nights = nightsBetween(checkIn, checkOut);
@@ -365,7 +369,7 @@ export async function getAvailability(req, res, next) {
           AND b.status IN ('tentative','confirmed','checked_in')
           AND ($4::int IS NULL OR b.booking_id <> $4::int)
           AND b.check_in_date < $3::date AND ${effCheckout} > $2::date`,
-      [b_id, checkIn, checkOut, excludeId]
+      [b_id, checkIn, occupancyEnd(checkIn, checkOut), excludeId]
     );
     const typeOnlyByType = {};
     typeOnlyRows.rows.forEach(r => { (typeOnlyByType[r.room_type_id] ||= []).push(r); });
@@ -1012,7 +1016,9 @@ export async function checkIn(req, res, next) {
           `This booking starts on ${nice(arrive)}, not today (${nice(today)}). If the guest has arrived early, `
           + `change the check-in date first: Edit Booking → Check-In, then check them in.`));
       }
-      if (leave <= today) {
+      // A day-use stay ends on the day it starts, so "ends today" is its normal
+      // case, not a stay that's already over.
+      if (leave < today || (leave === today && arrive !== leave)) {
         await client.query("ROLLBACK");
         res.status(409);
         return next(new Error(

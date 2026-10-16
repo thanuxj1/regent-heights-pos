@@ -22,7 +22,7 @@ A flat charge on a delivery order: **None, 50, 100, 150 or 200** (LKR).
 - `/reports/summary` also returns `revenue.delivery_charges` — the portion of restaurant
   revenue that was delivery charges. `revenue.total` is unchanged.
 - `/reports/transactions` rows carry `delivery_charge`; the ledger shows "incl. … delivery",
-  and the CSV exports gain an "Of which delivery charge" column.
+  and the CSV exports gain a "Delivery charge" column (part of the amount, not added on top).
 - A COD order's charge counts when the order is settled, like the rest of its total.
 
 ## Changing the amounts

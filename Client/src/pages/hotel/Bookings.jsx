@@ -759,15 +759,15 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 12, alignItems: "end" }}>
               <label style={label}>Check-In
                 <input type="date" value={checkIn} min={isEdit ? undefined : today()} disabled={inHouse}
-                  onChange={e => { setCheckIn(e.target.value); if (e.target.value >= checkOut) setCheckOut(ymd(addDays(new Date(e.target.value), 1))); }}
+                  onChange={e => { setCheckIn(e.target.value); if (e.target.value > checkOut) setCheckOut(ymd(addDays(new Date(e.target.value), 1))); }}
                   style={{ ...input, marginTop: 4 }} />
               </label>
               <label style={label}>Check-Out
-                <input type="date" value={checkOut} min={ymd(addDays(new Date(checkIn), 1))} disabled={inHouse}
+                <input type="date" value={checkOut} min={checkIn} disabled={inHouse}
                   onChange={e => setCheckOut(e.target.value)} style={{ ...input, marginTop: 4 }} />
               </label>
               <div style={{ padding: "9px 14px", background: "#EFF6FF", borderRadius: 8, fontWeight: 700, color: "#1565C0", fontSize: 13 }}>
-                {nights} night{nights === 1 ? "" : "s"}
+                {checkIn === checkOut ? "Day use · 1 night rate" : `${nights} night${nights === 1 ? "" : "s"}`}
               </div>
               <button type="button" onClick={doSearch} disabled={searching || inHouse} style={btn("primary")}>
                 {searching ? "Checking…" : "Refresh"}

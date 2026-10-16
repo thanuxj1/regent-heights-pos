@@ -9,7 +9,7 @@
 // committed booking. Rooms are locked in id order so two transactions holding
 // different rooms can never deadlock waiting for each other's.
 
-import { effectiveCheckout } from "./occupancy.js";
+import { effectiveCheckout, occupancyEnd } from "./occupancy.js";
 
 const ACTIVE = ["tentative", "confirmed", "checked_in"];
 
@@ -76,7 +76,7 @@ export async function roomClash(client, roomIds, checkIn, checkOut, ignoreBookin
        AND b.check_in_date < $4::date AND ${effectiveCheckout("b")} > $3::date
        AND ($5::int IS NULL OR b.booking_id <> $5::int)
      LIMIT 1`,
-    [ids, ACTIVE, checkIn, checkOut, ignoreBookingId ?? null]
+    [ids, ACTIVE, checkIn, occupancyEnd(checkIn, checkOut), ignoreBookingId ?? null]
   );
   return rows.length ? rows[0].room_number : null;
 }
@@ -119,7 +119,7 @@ export async function countFreeRoomsOfType(client, { b_id, room_type_id, checkIn
            AND (CASE WHEN b.status = 'checked_in' AND b.check_out_date = $3::date
                      THEN b.check_out_date ELSE ${effectiveCheckout("b")} END) > $3::date)
        AS n`,
-    [Number(b_id), Number(room_type_id), checkIn, checkOut, ignoreBookingId ?? null, ACTIVE]
+    [Number(b_id), Number(room_type_id), checkIn, occupancyEnd(checkIn, checkOut), ignoreBookingId ?? null, ACTIVE]
   );
   return rows[0].n;
 }

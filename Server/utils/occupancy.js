@@ -29,7 +29,22 @@
 export const effectiveCheckout = (alias = "b") =>
   `(CASE WHEN ${alias}.status = 'checked_in'
          THEN GREATEST(${alias}.check_out_date, CURRENT_DATE + 1)
-         ELSE ${alias}.check_out_date END)`;
+         ELSE GREATEST(${alias}.check_out_date, ${alias}.check_in_date + 1) END)`;
+// The ELSE branch's GREATEST only changes anything for a day-use stay (check-out
+// on the check-in date): its [in, out) range is empty, so without it the stay
+// overlapped nothing and its room could be sold to someone else for that day.
+
+/**
+ * The same rule for a requested date range (YYYY-MM-DD strings) before it is a
+ * booking: the exclusive end of the dates it occupies. A day-use request on the
+ * 17th occupies the 17th, so it is checked against [17th, 18th).
+ */
+export function occupancyEnd(checkIn, checkOut) {
+  if (checkOut > checkIn) return checkOut;
+  const d = new Date(`${checkIn}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 /** Statuses that hold a room against anyone else taking it. */
 export const HOLDING_STATUSES = ["tentative", "confirmed", "checked_in"];

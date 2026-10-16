@@ -132,13 +132,15 @@ export async function getSummary(req, res, next) {
         // Nights actually inside the range. A stay was counted whole if it began in
         // the range, so one that ran on past the end (or began before it) put the
         // wrong number of nights into occupancy, ADR and RevPAR.
+        // A day-use stay (out on its own check-in date) is one billed room-night,
+        // so its end is taken as the day after — GREATEST is a no-op otherwise.
         `SELECT COALESCE(SUM(
-                  GREATEST(0, LEAST(b.check_out_date, $3::date + 1) - GREATEST(b.check_in_date, $2::date))
+                  GREATEST(0, LEAST(GREATEST(b.check_out_date, b.check_in_date + 1), $3::date + 1) - GREATEST(b.check_in_date, $2::date))
                   * (SELECT COUNT(*) FROM "BOOKING_ROOM" br WHERE br.booking_id = b.booking_id)
                 ),0) AS sold
          FROM "BOOKING" b
          WHERE b.b_id = $1 AND b.status IN ('checked_in','checked_out')
-           AND b.check_in_date <= $3::date AND b.check_out_date > $2::date`,
+           AND b.check_in_date <= $3::date AND GREATEST(b.check_out_date, b.check_in_date + 1) > $2::date`,
         [b_id, from, to]
       ),
 
@@ -832,6 +834,10 @@ export async function getTransactions(req, res, next) {
                 -- The delivery charges inside the orders this settlement closed: the order itself is
                 -- not listed (its money is this row), so its charge is shown here.
                 (SELECT COALESCE(SUM(o.delivery_charge), 0) FROM "ORDER" o WHERE o.cod_settlement_id = s.settlement_id) AS delivery_charge,
+                -- Same reason: the order isn't a row of its own here, so its number
+                -- has to travel on this one, or the export has no reference to match
+                -- the rider's cash against.
+                (SELECT string_agg('#' || o.or_id, ', ' ORDER BY o.or_id) FROM "ORDER" o WHERE o.cod_settlement_id = s.settlement_id) AS order_refs,
                 NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "DELIVERY_COD_SETTLEMENT" s
          LEFT JOIN "User" u ON u.u_id = s.created_by
@@ -842,7 +848,8 @@ export async function getTransactions(req, res, next) {
       );
       r.rows.forEach(x => out.push({
         at: x.at, type: x.kind === "credit" ? "Credit payment" : "Delivery COD Settlement", direction: "in",
-        amount: num(x.amount), method: x.method, reference: x.note || "",
+        amount: num(x.amount), method: x.method,
+        reference: [x.order_refs, x.note].filter(Boolean).join(" — "),
         party: x.kind === "credit" ? x.customer_name : x.delivery_partner,
         handled_by: x.handled_by || null,
         settlement_id: x.settlement_id,

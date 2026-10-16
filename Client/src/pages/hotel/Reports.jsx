@@ -64,7 +64,7 @@ export default function Reports() {
 
   const exportCsv = () => {
     if (!ledger?.transactions?.length) return;
-    const head = ["Date", "Time", "Type", "Direction", "Amount", "Of which delivery charge", "Method", "Reference", "Party", "Handled by"];
+    const head = ["Date", "Time", "Type", "Direction", "Amount", "Delivery charge", "Method", "Reference", "Party", "Handled by"];
     const clock = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? "" : d.toTimeString().slice(0, 5); };
     const rows = ledger.transactions.map(t => [
       dateCell(dayKey(t.at)), clock(t.at), t.type, t.direction,
@@ -102,7 +102,7 @@ export default function Reports() {
   const exportRevenueCsv = async () => {
     const all = (await fullLedger()).filter(t => /^(Hotel payment|Restaurant|Delivery COD|Credit payment)/.test(t.type))
       .map(t => ({ ...t, signed: t.direction === "out" ? -t.amount : t.amount }));
-    const head = ["Date", "Time", "Source", "Amount (refunds negative)", "Of which delivery charge", "Payment method", "Reference", "Customer / guest", "Handled by"];
+    const head = ["Date", "Time", "Source", "Amount (refunds negative)", "Delivery charge", "Payment method", "Reference", "Customer / guest", "Handled by"];
     const rows = all.map(t => [dateCell(dayKey(t.at)), clockOf(t.at), t.type, t.signed,
       t.delivery_charge > 0 ? t.delivery_charge : "", methodOf(t.method), t.reference || "", t.party || "", t.handled_by || ""]);
     rows.push([], ["TOTAL REVENUE", "", "", all.reduce((s, t) => s + t.signed, 0)]);

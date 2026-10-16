@@ -26,8 +26,12 @@ export const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() 
 export const dmy = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—");
 export const dm  = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "—");
 
-export const nightsBetween = (a, b) =>
-  Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+// Mirrors the server: a day-use stay (out on the day it came in) is billed as
+// one night. A check-out before check-in stays negative and is refused.
+export const nightsBetween = (a, b) => {
+  const n = Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+  return n === 0 ? 1 : n;
+};
 
 export const initials = (name) =>
   (name || "?").split(" ").filter(Boolean).map(w => w[0]).join("").toUpperCase().slice(0, 2);

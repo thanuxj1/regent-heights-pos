@@ -79,7 +79,10 @@ export default function Calendar() {
     const map = {};
     bookings.forEach(b => {
       const ci = String(b.check_in_date).slice(0, 10);
-      const co = String(b.check_out_date).slice(0, 10);
+      const rawCo = String(b.check_out_date).slice(0, 10);
+      // A day-use stay (out the day it came in) still fills its own day's cell —
+      // left as-is it was a zero-width bar and vanished from the chart.
+      const co = rawCo === ci ? ymd(addDays(new Date(ci + "T00:00:00"), 1)) : rawCo;
       (b.rooms || []).forEach(br => {
         if (!br.room_id) return;
         const startIdx = days.indexOf(ci);
