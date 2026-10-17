@@ -200,6 +200,12 @@ export const updateOrderStatus = async (orderId, status) => {
   return response.data?.data;
 };
 
+/** An Administrator deletes an order: always needs an approval PIN and a reason. */
+export const deleteOrderWithPin = async (orderId, { pin, reason }) => {
+  const response = await api.post(`/orders/${orderId}/delete`, { pin, reason });
+  return response.data?.data;
+};
+
 export const getProductById = async (productId) => {
   const response = await api.get(`/products/${productId}`);
   return response.data;

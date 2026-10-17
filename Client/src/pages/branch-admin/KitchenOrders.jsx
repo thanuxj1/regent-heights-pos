@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { FaSync, FaSearch } from "react-icons/fa";
+import { FaSync, FaSearch, FaTrashAlt } from "react-icons/fa";
 import Header from "../../components/branch-admin/Header";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
-import { getOrders, getOrderItems, getBranchProducts } from "../../services/api";
+import { getOrders, getOrderItems, getBranchProducts, deleteOrderWithPin } from "../../services/api";
 import { connectSocket } from "../../services/socket";
+import { dayKey } from "../../utils/dates";
 
 const STATUS_BADGE = {
   pending:   "bg-yellow-100 text-yellow-700 border-yellow-200",
@@ -25,6 +26,28 @@ export default function KitchenOrders() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  // Administrators only; the server checks again and always asks for a PIN.
+  const isAdministrator = [1, 2, 6].includes(Number(user?.role_id));
+  const [deleting, setDeleting] = useState(null); // { order, reason, pin, busy, error }
+
+  const confirmDelete = async (e) => {
+    e.preventDefault();
+    if (!deleting) return;
+    const reason = deleting.reason.trim();
+    if (reason.length < 3) { setDeleting({ ...deleting, error: "Write why this order is being deleted." }); return; }
+    if (!/^\d{4,8}$/.test(deleting.pin)) { setDeleting({ ...deleting, error: "Enter the PIN (4 to 8 digits)." }); return; }
+    setDeleting({ ...deleting, busy: true, error: "" });
+    try {
+      await deleteOrderWithPin(deleting.order.or_id, { pin: deleting.pin, reason });
+      setDeleting(null);
+      await loadData(true);
+    } catch (err) {
+      setDeleting((d) => d && {
+        ...d, busy: false, pin: "",
+        error: err?.response?.data?.error || err?.response?.data?.message || "Could not delete the order",
+      });
+    }
+  };
 
   const loadData = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -164,7 +187,7 @@ export default function KitchenOrders() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
-                    {["Order ID", "Type", "Table", "Time", "Status", "Kitchen Items"].map((h) => (
+                    {["Order ID", "Type", "Table", "Time", "Status", "Kitchen Items", "Total", ...(isAdministrator ? [""] : [])].map((h) => (
                       <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontWeight: 600, color: "#64748B", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
                     ))}
                   </tr>
@@ -186,6 +209,9 @@ export default function KitchenOrders() {
                         </td>
                         <td style={{ padding: "14px 16px", color: "#475569" }}>
                           {order.or_time?.slice(0, 5) || "—"}
+                          {order.or_date && (
+                            <div style={{ fontSize: 11, color: "#94A3B8" }}>{dayKey(order.or_date)}</div>
+                          )}
                         </td>
                         <td style={{ padding: "14px 16px" }}>
                           <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, border: "1px solid", textTransform: "capitalize" }} className={badge}>
@@ -214,6 +240,19 @@ export default function KitchenOrders() {
                             )}
                           </div>
                         </td>
+                        <td style={{ padding: "14px 16px", color: "#1E293B", fontWeight: 600, whiteSpace: "nowrap" }}>
+                          LKR {Number(order.or_totalCostWtax || 0).toFixed(2)}
+                        </td>
+                        {isAdministrator && (
+                          <td style={{ padding: "14px 16px", textAlign: "right" }}>
+                            <button
+                              onClick={() => setDeleting({ order, items, reason: "", pin: "", busy: false, error: "" })}
+                              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "#fff", color: "#B91C1C", border: "1px solid #FECACA", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                            >
+                              <FaTrashAlt size={11} /> Delete
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -223,6 +262,52 @@ export default function KitchenOrders() {
           )}
         </main>
       </div>
+
+      {deleting && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <form onSubmit={confirmDelete} style={{ width: "100%", maxWidth: 420, background: "#fff", borderRadius: 16, padding: 24, boxShadow: "0 20px 50px rgba(15,23,42,0.25)" }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1E293B" }}>
+              Delete order #{deleting.order.or_id}?
+            </h2>
+            <p style={{ margin: "6px 0 14px", fontSize: 13, color: "#64748B", lineHeight: 1.5 }}>
+              LKR {Number(deleting.order.or_totalCostWtax || 0).toFixed(2)} · {deleting.order.or_type}
+              {deleting.order.or_date ? ` · ${dayKey(deleting.order.or_date)} ${deleting.order.or_time?.slice(0, 5) || ""}` : ""}
+              <br />
+              {deleting.items.map((i) => `${i.pro_quantity ?? 1}x ${i.product?.pro_name || "Item"}`).join(", ")}
+            </p>
+            <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 10px", marginBottom: 14 }}>
+              It comes off every report and total, and its stock goes back. Your name, the reason and whose PIN
+              allowed it go in the Activity Log.
+            </div>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Reason</label>
+            <input
+              autoFocus value={deleting.reason} maxLength={200}
+              onChange={(e) => setDeleting({ ...deleting, reason: e.target.value })}
+              placeholder="e.g. placed by mistake"
+              style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #E2E8F0", borderRadius: 10, fontSize: 14, marginBottom: 12 }}
+            />
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>PIN</label>
+            <input
+              type="password" inputMode="numeric" autoComplete="off" value={deleting.pin}
+              onChange={(e) => setDeleting({ ...deleting, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })}
+              style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #E2E8F0", borderRadius: 10, fontSize: 14, letterSpacing: 4 }}
+            />
+            {deleting.error && (
+              <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: "#B91C1C" }}>{deleting.error}</div>
+            )}
+            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+              <button type="button" onClick={() => setDeleting(null)} disabled={deleting.busy}
+                style={{ flex: 1, padding: "10px 0", background: "#fff", border: "1px solid #CBD5E1", borderRadius: 10, fontSize: 14, fontWeight: 600, color: "#475569", cursor: "pointer" }}>
+                Cancel
+              </button>
+              <button type="submit" disabled={deleting.busy}
+                style={{ flex: 1, padding: "10px 0", background: "#DC2626", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, color: "#fff", cursor: "pointer", opacity: deleting.busy ? 0.6 : 1 }}>
+                {deleting.busy ? "Deleting…" : "Delete order"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

@@ -13,7 +13,7 @@ import {
 import { branchClause, writeBranchId } from "../utils/scope.js";
 import { takeStock, returnStock, isStockProblem } from "../utils/inventory.js";
 import { logActivity } from "../utils/activityLog.js";
-import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
+import { requireApproval, findApprover, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
 import { hasKitchenScreen } from "../utils/kitchenScreen.js";
@@ -1507,6 +1507,153 @@ export const voidOrder = async (req, res) => {
     await client.query("ROLLBACK").catch(() => {});
     console.error("[orders] void failed:", err);
     return res.status(500).json({ success: false, error: "Could not void that order" });
+  } finally {
+    client.release();
+  }
+};
+
+// Wrong PINs per user: a four-digit PIN must not be guessable by trying them
+// all from a signed-in screen.
+const PIN_TRIES = 5;
+const PIN_LOCK_MS = 15 * 60 * 1000;
+const pinMisses = new Map(); // u_id -> { n, until }
+
+/**
+ * POST /api/orders/:id/delete — an Administrator takes an order off the books.
+ *
+ * For the owner's own corrections (a sale rung up by mistake, twice, or for the
+ * wrong day) without calling support. Unlike a void, the Administrator's login
+ * is not enough: an approval PIN is always asked for, because the till itself
+ * is signed in as an Administrator.
+ *
+ * The order leaves every report, list and total and its stock goes back, but
+ * the row is kept as cancelled — the Activity Log names who deleted it, whose
+ * PIN allowed it, why, and what was on it.
+ */
+export const deleteOrderWithPin = async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ success: false, error: "Invalid order ID" });
+  }
+  const reason = String(req.body?.reason ?? "").trim();
+  if (reason.length < 3) {
+    return res.status(400).json({ success: false, error: "Say why this order is being deleted — it goes in the Activity Log." });
+  }
+  if (reason.length > 200) {
+    return res.status(400).json({ success: false, error: "That reason is too long (200 characters)." });
+  }
+
+  const me = Number(req.user?.u_id);
+  const miss = pinMisses.get(me);
+  if (miss && miss.until > Date.now()) {
+    return res.status(429).json({
+      success: false,
+      error: `Too many wrong PINs. Try again in ${Math.ceil((miss.until - Date.now()) / 60000)} minutes.`,
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const cur = await client.query(
+      `SELECT o.or_id, o.b_id, o.or_status, o.or_type, o.payment_method, o.folio_id,
+              o.cod_settlement_id, o."or_totalCostWtax" AS total, o.or_date::text AS or_date, o.or_time,
+              TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')) AS placed_by
+         FROM "ORDER" o LEFT JOIN "User" u ON u.u_id = o.u_id
+        WHERE o.or_id = $1 FOR NO KEY UPDATE OF o`,
+      [id]
+    );
+    const order = cur.rows[0];
+    const scope = branchClause(req, "b_id", []);
+    if (!order || (scope && Number(order.b_id) !== Number(req.user?.b_id))) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, error: "Order not found" });
+    }
+    if (order.or_status === "cancelled") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ success: false, error: "That order is already deleted." });
+    }
+    if (order.folio_id) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        success: false,
+        error: "This order is on a guest's room bill. Take it off the bill from the booking's folio instead.",
+      });
+    }
+
+    const approver = await findApprover(req.body?.pin, order.b_id);
+    if (!approver) {
+      await client.query("ROLLBACK");
+      // Misses since the last lock (an expired lock starts the count again).
+      const n = (miss && !miss.until ? miss.n : 0) + 1;
+      pinMisses.set(me, { n: n >= PIN_TRIES ? 0 : n, until: n >= PIN_TRIES ? Date.now() + PIN_LOCK_MS : 0 });
+      return res.status(403).json({
+        success: false,
+        error: req.body?.pin ? "That PIN was not recognised." : "Enter the delete PIN.",
+      });
+    }
+    pinMisses.delete(me);
+
+    // Money already handed over for it (a rider's COD cash, a credit customer's
+    // payment). A settlement for this order alone goes with it; one that also
+    // paid for other orders cannot be split here.
+    let removedSettlement = null;
+    if (order.cod_settlement_id) {
+      const covers = await client.query(
+        `SELECT or_id FROM "ORDER" WHERE cod_settlement_id = $1 AND or_id <> $2`,
+        [order.cod_settlement_id, id]);
+      if (covers.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          success: false,
+          error: `The money for this order was recorded in one payment together with order${covers.rows.length > 1 ? "s" : ""} `
+               + `${covers.rows.map((r) => "#" + r.or_id).join(", ")}, so it cannot be deleted on its own.`,
+        });
+      }
+      removedSettlement = (await client.query(
+        `SELECT settlement_id, amount, method, kind, delivery_partner FROM "DELIVERY_COD_SETTLEMENT" WHERE settlement_id = $1`,
+        [order.cod_settlement_id])).rows[0] ?? null;
+      await client.query(`UPDATE "ORDER" SET cod_settlement_id = NULL WHERE or_id = $1`, [id]);
+      await client.query(`DELETE FROM "DELIVERY_COD_SETTLEMENT" WHERE settlement_id = $1`, [order.cod_settlement_id]);
+    }
+
+    const items = (await client.query(
+      `SELECT COALESCE(bp.pro_name, 'Item') AS name, i.pro_quantity AS qty
+         FROM "ORDER_ITEM" i LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = i."Bpro_id"
+        WHERE i.order_id = $1 ORDER BY i."orderItem_id"`, [id])).rows;
+    await returnStock(client, { order_id: id, u_id: req.user?.u_id ?? null });
+
+    const { rows } = await client.query(
+      `UPDATE "ORDER"
+          SET or_status = 'cancelled', void_reason = $2, voided_by = $3, voided_at = NOW(), approved_by = $4,
+              status_changed_at = NOW()
+        WHERE or_id = $1 RETURNING *`,
+      [id, `Deleted: ${reason}`, req.user?.u_id ?? null, approver.u_id]
+    );
+    await client.query("COMMIT");
+
+    emitSocketEvent("order:updated", rows[0], { room: getKitchenSocketRoom(rows[0].b_id) });
+    emitOrderEvent("order:updated", rows[0]);
+
+    const value = Number(order.total ?? 0);
+    const what = items.map((i) => `${Number(i.qty)}x ${i.name}`).join(", ");
+    logActivity(req, {
+      action: "delete", entity: "order", entity_id: id, b_id: order.b_id,
+      summary: `Deleted order #${id} (${order.or_type}, LKR ${value.toFixed(2)}${what ? ` — ${what}` : ""}) — ${reason}. `
+             + `PIN: ${approver.name || "manager"}`
+             + (removedSettlement ? `; its payment record #${removedSettlement.settlement_id} (LKR ${Number(removedSettlement.amount).toFixed(2)}) removed` : ""),
+      details: {
+        value, reason, items, payment_method: order.payment_method, previous_status: order.or_status,
+        order_date: order.or_date, order_time: order.or_time, placed_by: order.placed_by,
+        approved_by: approver.u_id, approver: approver.name, removed_settlement: removedSettlement,
+      },
+    });
+
+    return res.json({ success: true, data: rows[0] });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("[orders] delete failed:", err);
+    return res.status(500).json({ success: false, error: "Could not delete that order" });
   } finally {
     client.release();
   }

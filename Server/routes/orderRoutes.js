@@ -8,6 +8,7 @@ import {
   updateOrderStatus,
   deleteOrder,
   voidOrder,
+  deleteOrderWithPin,
   createOrderWithItems,
 } from "../controllers/orderController.js";
 import { getKitchenBoard } from "../controllers/kitchenBoardController.js";
@@ -117,6 +118,8 @@ router.patch("/:id", requireAuth, canEditOrder, patchOrder);
 
 // DELETE /orders/:id
 router.post("/:id/void", requireAuth, canVoidOrder, posTerminal, waiterOrders, voidOrder);
+// The Administrator's own correction: always needs an approval PIN, and is logged.
+router.post("/:id/delete", requireAuth, canDeleteOrder, deleteOrderWithPin);
 router.delete("/:id", requireAuth, canDeleteOrder, deleteOrder);
 
 export default router;
