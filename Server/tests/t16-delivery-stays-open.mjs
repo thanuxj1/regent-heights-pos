@@ -84,8 +84,26 @@ await t("a delivery paid by card at the door is not kept open", async () => {
 });
 
 await t("a paid order nobody in the kitchen touched does not linger on the till's list", async () => {
-  const id = await sell("paidwait", { delivery_partner: partner, payment_method: "card" });
-  ok(!(await onTill(id)), "paid and still Waiting: nothing for the till to do with it");
+  const res = await api(cashier, "POST", "/orders/with-items", {
+    order: { or_tax: 0, or_totalcost: 500, or_totalCostWtax: 500, or_status: "pending", or_type: "takeaway",
+      u_id: A.cashier.u_id, b_id: A.b_id, payment_method: "card", client_ref: `${stamp.toLowerCase()}-so-paidwait` },
+    items: [{ Bpro_id: bproId, pro_quantity: 1, unit_price: 500 }],
+  });
+  status(res, 201);
+  ok(!(await onTill(res.data.data.or_id)), "paid and still Waiting: nothing for the till to do with it");
+});
+
+await t("a delivery on credit (a PickMe order) is on the till's list as soon as it is sent, so its bill can be printed", async () => {
+  const id = await sell("pickme", { delivery_partner: partner, payment_method: "credit", credit_customer: "Pickme" });
+  const o = await onTill(id);
+  ok(o, "a fresh delivery must be listed even though it is not money to collect");
+  eq(o.payment_method, "credit", "payment method");
+});
+
+await t("a paid delivery still Waiting after hours does drop off", async () => {
+  const id = await sell("oldwait", { delivery_partner: partner, payment_method: "card" });
+  await pool.query(`UPDATE "ORDER" SET or_date = (NOW() - INTERVAL '5 hours')::date, or_time = (NOW() - INTERVAL '5 hours')::time WHERE or_id = $1`, [id]);
+  ok(!(await onTill(id)), "past the 4-hour window, it no longer clutters the list");
 });
 
 await t("an unpaid order stays until it is paid", async () => {

@@ -46,7 +46,11 @@ export async function getKitchenBoard(req, res) {
     // is nothing to act on: it is not money to collect, and a place with no kitchen screen
     // never moves anything out of "Waiting", so these would pile up. Unpaid orders and
     // cash-on-delivery still to come in (below) stay however long that takes.
-    const tillAtThePass = `((o.or_status = 'preparing'
+    // A delivery is the exception: its bill goes out with the rider (or is the
+    // only reference a PickMe order has), so the till keeps it while it is fresh
+    // even when it is on credit or paid and the kitchen has not touched it.
+    const tillAtThePass = `(((o.or_status = 'preparing'
+              OR (o.or_status = 'pending' AND o.or_type = 'delivery'))
             AND (o.or_date + o.or_time) > NOW() - make_interval(hours => $2::int))
         OR (o.or_status = 'completed'
             AND o.status_changed_at > NOW() - make_interval(mins => $1::int)))`;
