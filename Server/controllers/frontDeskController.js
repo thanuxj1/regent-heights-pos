@@ -7,6 +7,7 @@ import {
   emitSocketEvent, emitOrderEvent, getKitchenSocketRoom,
 } from "../utils/socket.js";
 import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
+import { hasKitchenScreen } from "../utils/kitchenScreen.js";
 
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 // The hotel's day, not GMT's. See utils/hotelTime.js.
@@ -353,14 +354,17 @@ export async function createRoomServiceOrder(req, res, next) {
     const tax      = +(subtotal * taxPct / 100).toFixed(2);
     const total    = +(subtotal + tax).toFixed(2);
 
+    // On the guest's bill, so it is paid for: with no kitchen screen to move it
+    // along, it is finished now (utils/kitchenScreen.js).
+    const done = !(await hasKitchenScreen(client, b_id));
     const ord = await client.query(
       `INSERT INTO "ORDER"
          (or_tax, or_totalcost, "or_totalCostWtax", or_status, or_type,
-          u_id, b_id, room_id, folio_id, discount_pct, discount_approved_by)
-       VALUES ($1,$2,$3,'pending','room_service',$4,$5,$6,$7,$8,$9)
+          u_id, b_id, room_id, folio_id, discount_pct, discount_approved_by, status_changed_at)
+       VALUES ($1,$2,$3,$10,'room_service',$4,$5,$6,$7,$8,$9,$11)
        RETURNING *`,
       [tax, subtotal, total, req.user?.u_id || null, b_id, Number(room_id), folio_id,
-       discountPct, discountApprover]
+       discountPct, discountApprover, done ? "completed" : "pending", done ? new Date() : null]
     );
     const order = ord.rows[0];
 
@@ -494,11 +498,15 @@ export async function chargeOrderToRoom(req, res, next) {
     const tax = +(subtotal * num(req.body?.tax_pct, 0) / 100).toFixed(2);
     const total = +(subtotal + tax).toFixed(2);
 
+    // Now on the guest's bill. With no kitchen screen, that finishes it.
+    const done = !(await hasKitchenScreen(client, o.b_id));
     await client.query(
       `UPDATE "ORDER" SET or_type = 'room_service', room_id = $2, folio_id = $3,
-              or_tax = $4, or_totalcost = $5, "or_totalCostWtax" = $6
+              or_tax = $4, or_totalcost = $5, "or_totalCostWtax" = $6,
+              or_status = CASE WHEN $7::boolean THEN 'completed' ELSE or_status END,
+              status_changed_at = CASE WHEN $7::boolean THEN NOW() ELSE status_changed_at END
         WHERE or_id = $1`,
-      [order_id, room_id, folio_id, tax, subtotal, total]);
+      [order_id, room_id, folio_id, tax, subtotal, total, done]);
     if (total > 0) {
       await client.query(
         `INSERT INTO "FOLIO_ITEM"

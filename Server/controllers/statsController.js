@@ -1,5 +1,6 @@
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
+import { soldOrder } from "../utils/sales.js";
 
 // A Branch Admin sees only their own branch's figures; an Admin (company-wide,
 // no branch of its own) sees every branch of their own company; only a Super
@@ -34,8 +35,7 @@ export async function getOverview(req, res, next) {
     const rev = await pool.query(
       `SELECT COALESCE(SUM(o."or_totalCostWtax"),0)::numeric(12,2) AS total_revenue
          FROM "ORDER" o JOIN "Branch" br ON br."B_id" = o.b_id
-        WHERE o.or_status = 'completed'
-          AND NOT (o.payment_method = 'credit' AND o.cod_settlement_id IS NULL)
+        WHERE ${soldOrder("o")}
           ${cond ? `AND ${cond}` : ""}`,
       params,
     );
@@ -69,9 +69,8 @@ export async function getBranchStats(req, res, next) {
          SELECT b_id,
                 SUM("or_totalCostWtax") AS income,
                 COUNT(or_id)            AS orders
-           FROM "ORDER"
-          WHERE or_status = 'completed'
-            AND NOT (payment_method = 'credit' AND cod_settlement_id IS NULL)
+           FROM "ORDER" o
+          WHERE ${soldOrder("o")}
           GROUP BY b_id
        ) ord ON ord.b_id = b."B_id"
        LEFT JOIN (

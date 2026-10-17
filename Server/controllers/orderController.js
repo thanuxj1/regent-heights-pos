@@ -16,6 +16,8 @@ import { logActivity } from "../utils/activityLog.js";
 import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
+import { hasKitchenScreen } from "../utils/kitchenScreen.js";
+import { soldOrder } from "../utils/sales.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -152,11 +154,12 @@ export const getAllOrders = async (req, res) => {
   try {
     const { status, type, b_id, cust_id, u_id, date } = req.query;
 
-    // Validate filter values if provided
-    if (status && !VALID_STATUSES.includes(status)) {
+    // Validate filter values if provided. "sold" is not a kitchen status: it is
+    // every order counted as takings, whatever the kitchen did (utils/sales.js).
+    if (status && status !== "sold" && !VALID_STATUSES.includes(status)) {
       return res.status(400).json({
         success: false,
-        error: `Invalid status filter. Use: ${VALID_STATUSES.join(" | ")}`,
+        error: `Invalid status filter. Use: ${[...VALID_STATUSES, "sold"].join(" | ")}`,
       });
     }
     if (type && !VALID_TYPES.includes(type)) {
@@ -176,7 +179,9 @@ export const getAllOrders = async (req, res) => {
     let i = 1;
 
     // Qualified with o. because the query joins "User" to pick up the staff name.
-    if (status) {
+    if (status === "sold") {
+      conditions.push(soldOrder("o"));
+    } else if (status) {
       conditions.push(`o.or_status = $${i++}`);
       values.push(status);
     }
@@ -1307,6 +1312,11 @@ export const createOrderWithItems = async (req, res) => {
       ? order.delivery_partner
       : null;
 
+  // Where no one works a kitchen screen, a sale that is paid for is finished
+  // now — nobody will ever move it on from "pending". See utils/kitchenScreen.js.
+  let status = order.or_status ?? "pending";
+  if (tender && status === "pending" && !(await hasKitchenScreen(pool, b_id))) status = "completed";
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1317,12 +1327,13 @@ export const createOrderWithItems = async (req, res) => {
           cust_id, u_id, b_id, table_id, client_ref,
           discount_pct, service_fee, discount_approved_by,
           payment_method, session_id, kitchen_note, delivery_partner,
-          delivery_charge, credit_customer, credit_phone, customer_name, customer_phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+          delivery_charge, credit_customer, credit_phone, customer_name, customer_phone,
+          status_changed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
-        parseFloat(order.or_totalCostWtax), order.or_status ?? "pending",
+        parseFloat(order.or_totalCostWtax), status,
         order.or_type, order.cust_id ?? null, order.u_id, b_id,
         order.table_id ?? null, clientRef,
         discountPct, serviceFee, discountApprover,
@@ -1334,6 +1345,7 @@ export const createOrderWithItems = async (req, res) => {
         credit.phone,
         optionalText(order.customer_name, 120),
         optionalText(order.customer_phone, 30),
+        status === "completed" ? new Date() : null,
       ],
     );
     const created = rows[0];

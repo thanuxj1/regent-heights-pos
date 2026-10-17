@@ -49,11 +49,19 @@ export async function getKitchenBoard(req, res) {
     // A delivery is the exception: its bill goes out with the rider (or is the
     // only reference a PickMe order has), so the till keeps it while it is fresh
     // even when it is on credit or paid and the kitchen has not touched it.
-    const tillAtThePass = `(((o.or_status = 'preparing'
+    //
+    // Where no one works a kitchen screen (Branch.kitchen_screen off), a paid
+    // order is finished the moment it is rung up, so "Ready in the last half
+    // hour" would only be every sale just taken. There the till keeps its
+    // fresh deliveries, whatever their status, and the money still to collect.
+    const tillAtThePass = `((br.kitchen_screen AND (
+          ((o.or_status = 'preparing'
               OR (o.or_status = 'pending' AND o.or_type = 'delivery'))
             AND (o.or_date + o.or_time) > NOW() - make_interval(hours => $2::int))
-        OR (o.or_status = 'completed'
-            AND o.status_changed_at > NOW() - make_interval(mins => $1::int)))`;
+          OR (o.or_status = 'completed'
+            AND o.status_changed_at > NOW() - make_interval(mins => $1::int))))
+        OR (NOT br.kitchen_screen AND o.or_type = 'delivery' AND o.or_status <> 'cancelled'
+            AND (o.or_date + o.or_time) > NOW() - make_interval(hours => $2::int)))`;
     const unpaid = `((o.payment_method IS NULL AND o.or_status <> 'cancelled'
         AND o.or_type <> 'room_service' AND o.or_date >= CURRENT_DATE - 7)
         OR (o.payment_method = 'cod' AND o.cod_settlement_id IS NULL AND o.or_status <> 'cancelled'))`;
@@ -93,6 +101,7 @@ export async function getKitchenBoard(req, res) {
                   LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = i."Bpro_id"
                  WHERE i.order_id = o.or_id), '[]'::json) AS items
          FROM "ORDER" o
+         JOIN "Branch" br ON br."B_id" = o.b_id
          LEFT JOIN "TABLES" t ON t.table_id = o.table_id
          LEFT JOIN "ROOM"   r ON r.room_id  = o.room_id
          LEFT JOIN "User"   u ON u.u_id     = o.u_id

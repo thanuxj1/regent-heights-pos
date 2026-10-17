@@ -74,7 +74,8 @@ const SalesRevenue = () => {
 			setIsLoading(true);
 			setError("");
 
-			const params = { status: "completed" };
+			// Every sale whose money is in, not only what the kitchen marked done.
+			const params = { status: "sold" };
 			if (user?.b_id) {
 				params.b_id = user.b_id;
 			}

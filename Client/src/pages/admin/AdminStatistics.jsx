@@ -11,6 +11,13 @@ import PeakHoursChart from "../../components/admin/PeakHoursChart";
 import BusyDaysChart from "../../components/admin/BusyDaysChart";
 import BranchComparisonTable from "../../components/admin/BranchComparisonTable";
 
+// Counted as takings the way Reports counts them (Server/utils/sales.js), not by
+// whether the kitchen marked it completed — a kitchen that cooks from the
+// printed KOT never marks anything.
+const isSold = (o) =>
+  o.or_status !== "cancelled" && !o.folio_id &&
+  !((o.payment_method === "credit" || (o.or_type === "delivery" && o.payment_method === "cod")) && !o.cod_settlement_id);
+
 export default function AdminStatistics() {
   const [overview, setOverview] = useState({});
   const [branches, setBranches] = useState([]);
@@ -97,7 +104,7 @@ export default function AdminStatistics() {
         const salesSeries = dates.map((date) => {
           const ordersOnDay = filtered.filter((o) => {
             const od = o.or_date ? dayKey(o.or_date) : "";
-            return od === date && o.or_status === "completed";
+            return od === date && isSold(o);
           });
           const revenue = ordersOnDay.reduce((s, o) => s + Number(o.or_totalCostWtax || 0), 0);
           return { date, revenue: revenue, orders: ordersOnDay.length };
@@ -147,8 +154,8 @@ export default function AdminStatistics() {
           return { trend: diff >= 0 ? "up" : "down", val: Math.abs(diff) };
         };
 
-        const curRevenue = filtered.filter(o => o.or_status === "completed").reduce((s, o) => s + Number(o.or_totalCostWtax || 0), 0);
-        const prevRevenue = prevFiltered.filter(o => o.or_status === "completed").reduce((s, o) => s + Number(o.or_totalCostWtax || 0), 0);
+        const curRevenue = filtered.filter(isSold).reduce((s, o) => s + Number(o.or_totalCostWtax || 0), 0);
+        const prevRevenue = prevFiltered.filter(isSold).reduce((s, o) => s + Number(o.or_totalCostWtax || 0), 0);
         const curOrders = filtered.length;
         const prevOrders = prevFiltered.length;
         const curDineIn = filtered.filter(o => o.or_type?.toLowerCase() === "dine-in").length;

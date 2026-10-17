@@ -36,7 +36,8 @@ export default function Transactions() {
     const load = async () => {
       setLoading(true);
       try {
-        const orderParams = { status: "completed" };
+        // Every sale whose money is in, not only what the kitchen marked done.
+        const orderParams = { status: "sold" };
 
         // numeric branch filter (null = no branch filter)
         const branchFilter =

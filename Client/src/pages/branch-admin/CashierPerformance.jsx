@@ -45,6 +45,7 @@ const getDateKey = (date) => dayKey(date);
 
 // How long an order took from being placed to being completed, in minutes.
 const minutesToComplete = (order) => {
+	if (order?.or_status !== "completed") return null;
 	if (!order?.status_changed_at || !order?.or_time || !order?.or_date) return null;
 	const start = new Date(`${dayKey(order.or_date)}T${String(order.or_time).slice(0, 8)}`);
 	const minutes = (new Date(order.status_changed_at) - start) / 60000;
@@ -69,7 +70,8 @@ const CashierPerformance = () => {
 			setIsLoading(true);
 			setError("");
 
-			const params = { status: "completed" };
+			// Every sale whose money is in, not only what the kitchen marked done.
+			const params = { status: "sold" };
 			if (user?.b_id) {
 				params.b_id = user.b_id;
 			}
