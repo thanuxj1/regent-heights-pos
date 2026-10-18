@@ -101,17 +101,24 @@ export default function KitchenOrders() {
     products.reduce((acc, p) => { acc[p.Bpro_id] = p; return acc; }, {}),
   [products]);
 
+  // "all": every order, drinks and resale items too (a Pepsi-only sale has no
+  // kitchen item and was not listed, so it could not be deleted from here).
+  // "kitchen": only what goes to the kitchen, as this page used to show.
+  const [view, setView] = useState("all");
+
   const itemsByOrder = useMemo(() => {
     return orderItems.reduce((acc, item) => {
       const product = productMap[item.Bpro_id];
       const stations = product?.stations || {};
-      if (stations.Kitchen === false) return acc;
-      if (stations.Bar === true && stations.Kitchen !== true) return acc;
+      if (view === "kitchen") {
+        if (stations.Kitchen === false) return acc;
+        if (stations.Bar === true && stations.Kitchen !== true) return acc;
+      }
       if (!acc[item.order_id]) acc[item.order_id] = [];
       acc[item.order_id].push({ ...item, product });
       return acc;
     }, {});
-  }, [orderItems, productMap]);
+  }, [orderItems, productMap, view]);
 
   const kitchenOrders = useMemo(() => {
     return orders.filter((o) => {
@@ -151,13 +158,25 @@ export default function KitchenOrders() {
               <div key={c.key} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 12, padding: "16px 20px" }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>{c.label}</div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: c.accent, margin: "6px 0" }}>{counts[c.key]}</div>
-                <div style={{ fontSize: 12, color: "#94A3B8" }}>kitchen orders</div>
+                <div style={{ fontSize: 12, color: "#94A3B8" }}>{view === "kitchen" ? "kitchen orders" : "orders"}</div>
               </div>
             ))}
           </div>
 
           {/* Filters */}
           <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ display: "flex", background: "#fff", border: "1px solid #E2E8F0", borderRadius: 10, padding: 3 }}>
+              {[{ key: "all", label: "All orders" }, { key: "kitchen", label: "Kitchen only" }].map((v) => (
+                <button
+                  key={v.key}
+                  onClick={() => setView(v.key)}
+                  style={{ padding: "6px 14px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                           background: view === v.key ? "#1565C0" : "transparent", color: view === v.key ? "#fff" : "#475569" }}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
             <div style={{ position: "relative", flex: "1 1 220px" }}>
               <FaSearch style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#94A3B8", fontSize: 13 }} />
               <input
@@ -187,15 +206,15 @@ export default function KitchenOrders() {
 
           {/* Table */}
           {loading ? (
-            <div style={{ textAlign: "center", padding: "48px 0", color: "#94A3B8" }}>Loading kitchen orders...</div>
+            <div style={{ textAlign: "center", padding: "48px 0", color: "#94A3B8" }}>Loading orders...</div>
           ) : kitchenOrders.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "48px 0", color: "#94A3B8" }}>No kitchen orders found.</div>
+            <div style={{ textAlign: "center", padding: "48px 0", color: "#94A3B8" }}>{view === "kitchen" ? "No kitchen orders found." : "No orders found."}</div>
           ) : (
             <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E2E8F0", overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
-                    {["Order ID", "Type", "Table", "Time", "Status", "Kitchen Items", "Total", ...(isAdministrator ? [""] : [])].map((h) => (
+                    {["Order ID", "Type", "Table", "Time", "Status", view === "kitchen" ? "Kitchen Items" : "Items", "Total", ...(isAdministrator ? [""] : [])].map((h) => (
                       <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontWeight: 600, color: "#64748B", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
                     ))}
                   </tr>
