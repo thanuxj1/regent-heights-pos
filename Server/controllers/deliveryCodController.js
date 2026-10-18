@@ -137,7 +137,7 @@ export async function createCodSettlement(req, res, next) {
     const scopedParams = [ids];
     const scope = branchClause(req, "b_id", scopedParams);
     const orders = await client.query(
-      `SELECT or_id, delivery_partner, payment_method, cod_settlement_id
+      `SELECT or_id, delivery_partner, payment_method, cod_settlement_id, or_status
          FROM "ORDER"
         WHERE or_id = ANY($1::int[]) ${scope ? `AND ${scope}` : ""}
         FOR UPDATE`,
@@ -147,6 +147,13 @@ export async function createCodSettlement(req, res, next) {
     if (orders.rows.length !== ids.length) {
       res.status(404);
       throw new Error("One or more orders were not found");
+    }
+    // A deleted (cancelled) order is owed nothing: taking cash against it would
+    // put it back into the takings it was removed from.
+    const gone = orders.rows.find((o) => o.or_status === "cancelled");
+    if (gone) {
+      res.status(409);
+      throw new Error(`Order #${gone.or_id} was deleted, so there is no cash to collect for it.`);
     }
     const bad = orders.rows.find(
       (o) => o.delivery_partner !== delivery_partner || o.payment_method !== "cod" || o.cod_settlement_id != null,

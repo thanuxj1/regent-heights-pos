@@ -20,7 +20,8 @@ function OrderSummaryChart() {
     (async () => {
       setLoading(true);
       try {
-        const orders = await getOrders();
+        // A deleted (cancelled) order is not one of the business's orders.
+        const orders = (await getOrders()).filter((o) => o.or_status !== "cancelled");
         if (!mounted) return;
         const completed = orders.filter((o) => o.or_status === "completed").length;
         const pending = orders.filter((o) => o.or_status === "pending").length;

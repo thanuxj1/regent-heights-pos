@@ -92,6 +92,8 @@ export default function AdminStatistics() {
         };
 
         const applyBaseFilters = (o) => {
+          // A deleted order is in no count, chart or busy-hours figure.
+          if (o.or_status === "cancelled") return false;
           if (currentComId && !allowedBranchIds.includes(String(o.b_id))) return false;
           if (filters.b_id !== "all" && String(o.b_id) !== String(filters.b_id)) return false;
           return true;

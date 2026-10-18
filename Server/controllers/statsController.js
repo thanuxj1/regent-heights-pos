@@ -42,7 +42,9 @@ export async function getOverview(req, res, next) {
     const totalRevenue = Number(rev.rows[0]?.total_revenue ?? 0);
 
     const to = await pool.query(
-      `SELECT COUNT(*)::int AS total_orders FROM "ORDER" o JOIN "Branch" br ON br."B_id" = o.b_id ${cond ? `WHERE ${cond}` : ""}`,
+      // A deleted (cancelled) order is not an order the business took.
+      `SELECT COUNT(*)::int AS total_orders FROM "ORDER" o JOIN "Branch" br ON br."B_id" = o.b_id
+        WHERE o.or_status <> 'cancelled' ${cond ? `AND ${cond}` : ""}`,
       params,
     );
     const totalOrders = to.rows[0]?.total_orders ?? 0;

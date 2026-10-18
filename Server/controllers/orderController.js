@@ -1617,6 +1617,14 @@ export const deleteOrderWithPin = async (req, res) => {
       await client.query(`DELETE FROM "DELIVERY_COD_SETTLEMENT" WHERE settlement_id = $1`, [order.cod_settlement_id]);
     }
 
+    // A commission recorded against it is owed for nothing now. One already
+    // paid out stays (that money has gone); the log says so.
+    const commissions = (await client.query(
+      `DELETE FROM "COMMISSION_RECORD" WHERE order_id = $1 AND status = 'pending'
+       RETURNING record_id, agent_id, commission_amount`, [id])).rows;
+    const paidCommissions = (await client.query(
+      `SELECT record_id, commission_amount FROM "COMMISSION_RECORD" WHERE order_id = $1`, [id])).rows;
+
     const items = (await client.query(
       `SELECT COALESCE(bp.pro_name, 'Item') AS name, i.pro_quantity AS qty
          FROM "ORDER_ITEM" i LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = i."Bpro_id"
@@ -1641,11 +1649,14 @@ export const deleteOrderWithPin = async (req, res) => {
       action: "delete", entity: "order", entity_id: id, b_id: order.b_id,
       summary: `Deleted order #${id} (${order.or_type}, LKR ${value.toFixed(2)}${what ? ` — ${what}` : ""}) — ${reason}. `
              + `PIN: ${approver.name || "manager"}`
-             + (removedSettlement ? `; its payment record #${removedSettlement.settlement_id} (LKR ${Number(removedSettlement.amount).toFixed(2)}) removed` : ""),
+             + (removedSettlement ? `; its payment record #${removedSettlement.settlement_id} (LKR ${Number(removedSettlement.amount).toFixed(2)}) removed` : "")
+             + (commissions.length ? `; unpaid commission of LKR ${commissions.reduce((s, c) => s + Number(c.commission_amount), 0).toFixed(2)} removed` : "")
+             + (paidCommissions.length ? `; a commission already paid for it (LKR ${paidCommissions.reduce((s, c) => s + Number(c.commission_amount), 0).toFixed(2)}) was left as it is` : ""),
       details: {
         value, reason, items, payment_method: order.payment_method, previous_status: order.or_status,
         order_date: order.or_date, order_time: order.or_time, placed_by: order.placed_by,
         approved_by: approver.u_id, approver: approver.name, removed_settlement: removedSettlement,
+        removed_commissions: commissions, paid_commissions_kept: paidCommissions,
       },
     });
 

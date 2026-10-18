@@ -5,6 +5,7 @@
 //  • money already handed over for it alone goes with it; a payment shared with
 //    other orders is refused rather than split.
 import { ctx, api, t, eq, ok, status, section, finish, pool } from "./lib.mjs";
+import { hotelToday } from "../utils/hotelTime.js";
 
 const { A, stamp } = await ctx();
 const owner = A.owner.token;
@@ -105,6 +106,60 @@ await t("a COD order paid together with another is refused, not split", async ()
   const res = await del(owner, x, { pin: PIN, reason: "never delivered" });
   eq(res.status, 409, "shared payment");
   ok(String(res.data.error).includes(`#${y}`), `names the other order: ${res.data.error}`);
+});
+
+section("gone from everywhere it showed");
+const today = hotelToday();
+const snapshot = async () => {
+  const sum = await api(owner, "GET", `/reports/summary?from=${today}&to=${today}`);
+  const prod = await api(owner, "GET", `/reports/products?from=${today}&to=${today}`);
+  const ov = await api(owner, "GET", "/stats/overview");
+  const ledger = await api(owner, "GET", `/reports/transactions?b_id=${A.b_id}&kind=all&from=${today}&to=${today}`);
+  const stock = await pool.query(`SELECT pro_quantity FROM "Branch_Product" WHERE "Bpro_id" = $1`, [bproId]);
+  [sum, prod, ov, ledger].forEach((r) => status(r, 200));
+  return {
+    revenue: Number(sum.data.revenue.restaurant),
+    units: Number(prod.data.products.find((p) => p.name === "ZZQA Del Dish")?.units ?? 0),
+    orders: Number(ov.data.totalOrders),
+    ledgerIds: ledger.data.transactions.map((r) => Number(r.or_id)).filter(Boolean),
+    stock: Number(stock.rows[0].pro_quantity),
+  };
+};
+let before, sale;
+await t("a sale shows in the revenue report, item sales, order count, ledger and stock", async () => {
+  before = await snapshot();
+  sale = await sell("everywhere");
+  const now = await snapshot();
+  eq(+(now.revenue - before.revenue).toFixed(2), 500, "revenue report");
+  eq(now.units - before.units, 1, "item sales");
+  eq(now.orders - before.orders, 1, "dashboard order count");
+  ok(now.ledgerIds.includes(Number(sale)), "transactions ledger");
+  eq(before.stock - now.stock, 1, "stock taken");
+});
+await t("deleting it takes it back out of every one of them", async () => {
+  status(await del(owner, sale, { pin: PIN, reason: "wrong day" }), 200);
+  const now = await snapshot();
+  eq(now.revenue, before.revenue, "revenue report");
+  eq(now.units, before.units, "item sales");
+  eq(now.orders, before.orders, "dashboard order count");
+  ok(!now.ledgerIds.includes(Number(sale)), "transactions ledger");
+  eq(now.stock, before.stock, "stock put back");
+});
+await t("a deleted credit sale is no longer owed on Credit Sales", async () => {
+  const id = await sell("credit-owed", { payment_method: "credit", credit_customer: "ZZQA Owes" });
+  const owed = async () => (await api(owner, "GET", "/credit/outstanding")).data.orders.some((o) => Number(o.or_id) === Number(id));
+  ok(await owed(), "listed before");
+  status(await del(owner, id, { pin: PIN, reason: "placed by mistake" }), 200);
+  ok(!(await owed()), "still listed as owed");
+});
+await t("a deleted COD order is no longer outstanding, and cash cannot be taken for it", async () => {
+  const id = await sell("cod-owed", { or_type: "delivery", payment_method: "cod", delivery_partner: partner });
+  const out = async () => (await api(owner, "GET", "/delivery-cod/outstanding")).data.orders.some((o) => Number(o.or_id) === Number(id));
+  ok(await out(), "listed before");
+  status(await del(owner, id, { pin: PIN, reason: "never went out" }), 200);
+  ok(!(await out()), "still outstanding");
+  const s = await api(owner, "POST", "/delivery-cod/settle", { delivery_partner: partner, amount: 500, method: "cash", order_ids: [id] });
+  eq(s.status, 409, "settling a deleted order");
 });
 
 // Every test file shares tenant A; later files expect no PIN set.
