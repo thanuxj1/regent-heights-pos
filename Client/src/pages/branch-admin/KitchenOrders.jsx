@@ -3,7 +3,7 @@ import { FaSync, FaSearch, FaTrashAlt } from "react-icons/fa";
 import Header from "../../components/branch-admin/Header";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
-import { getOrders, getOrderItems, getBranchProducts, deleteOrderWithPin } from "../../services/api";
+import { getOrders, getOrderItems, getBranchProducts, deleteOrderWithPin, getDiscountApproval } from "../../services/api";
 import { connectSocket } from "../../services/socket";
 import { dayKey } from "../../utils/dates";
 
@@ -29,13 +29,21 @@ export default function KitchenOrders() {
   // Administrators only; the server checks again and always asks for a PIN.
   const isAdministrator = [1, 2, 6].includes(Number(user?.role_id));
   const [deleting, setDeleting] = useState(null); // { order, reason, pin, busy, error }
+  // Is an approval PIN set at the property? Until one is, the reason is enough.
+  const [pinNeeded, setPinNeeded] = useState(true);
+
+  const openDelete = async (order, items) => {
+    setDeleting({ order, items, reason: "", pin: "", busy: false, error: "" });
+    try { setPinNeeded(Boolean((await getDiscountApproval())?.pin_needed)); }
+    catch { setPinNeeded(true); }
+  };
 
   const confirmDelete = async (e) => {
     e.preventDefault();
     if (!deleting) return;
     const reason = deleting.reason.trim();
     if (reason.length < 3) { setDeleting({ ...deleting, error: "Write why this order is being deleted." }); return; }
-    if (!/^\d{4,8}$/.test(deleting.pin)) { setDeleting({ ...deleting, error: "Enter the PIN (4 to 8 digits)." }); return; }
+    if (pinNeeded && !/^\d{4,8}$/.test(deleting.pin)) { setDeleting({ ...deleting, error: "Enter the PIN (4 to 8 digits)." }); return; }
     setDeleting({ ...deleting, busy: true, error: "" });
     try {
       await deleteOrderWithPin(deleting.order.or_id, { pin: deleting.pin, reason });
@@ -246,7 +254,7 @@ export default function KitchenOrders() {
                         {isAdministrator && (
                           <td style={{ padding: "14px 16px", textAlign: "right" }}>
                             <button
-                              onClick={() => setDeleting({ order, items, reason: "", pin: "", busy: false, error: "" })}
+                              onClick={() => openDelete(order, items)}
                               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "#fff", color: "#B91C1C", border: "1px solid #FECACA", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
                             >
                               <FaTrashAlt size={11} /> Delete
@@ -276,8 +284,8 @@ export default function KitchenOrders() {
               {deleting.items.map((i) => `${i.pro_quantity ?? 1}x ${i.product?.pro_name || "Item"}`).join(", ")}
             </p>
             <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 10px", marginBottom: 14 }}>
-              It comes off every report and total, and its stock goes back. Your name, the reason and whose PIN
-              allowed it go in the Activity Log.
+              It comes off every report and total, and its stock goes back. Your name and the reason
+              {pinNeeded ? ", and whose PIN allowed it," : ""} go in the Activity Log.
             </div>
             <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>Reason</label>
             <input
@@ -286,12 +294,16 @@ export default function KitchenOrders() {
               placeholder="e.g. placed by mistake"
               style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #E2E8F0", borderRadius: 10, fontSize: 14, marginBottom: 12 }}
             />
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>PIN</label>
-            <input
-              type="password" inputMode="numeric" autoComplete="off" value={deleting.pin}
-              onChange={(e) => setDeleting({ ...deleting, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })}
-              style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #E2E8F0", borderRadius: 10, fontSize: 14, letterSpacing: 4 }}
-            />
+            {pinNeeded && (
+              <>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>PIN</label>
+                <input
+                  type="password" inputMode="numeric" autoComplete="off" value={deleting.pin}
+                  onChange={(e) => setDeleting({ ...deleting, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })}
+                  style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #E2E8F0", borderRadius: 10, fontSize: 14, letterSpacing: 4 }}
+                />
+              </>
+            )}
             {deleting.error && (
               <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: "#B91C1C" }}>{deleting.error}</div>
             )}

@@ -16,18 +16,28 @@ const ACTION = {
   check_out: { label: "Checked out", bg: "#E9D5FF", fg: "#6B21A8", icon: "⇤" },
   // Money leaving the till and money coming in — the two an owner looks for first.
   void:      { label: "Voided sale", bg: "#FEE2E2", fg: "#B91C1C", icon: "⊘" },
+  cancel:    { label: "Cancelled",   bg: "#FEE2E2", fg: "#B91C1C", icon: "⊘" },
   payment:   { label: "Payment",     bg: "#D1FAE5", fg: "#065F46", icon: "₨" },
 };
 
+// Every kind of record the server logs (logActivity's entity), so each can be
+// filtered on. Shown in the dropdown sorted by name.
 const ENTITY_LABEL = {
   auth: "Account", booking: "Booking", room: "Room", room_type: "Room Type",
   expense: "Expense", product: "Product", order: "Order", user: "Staff", guest: "Guest",
   payment: "Payment", folio_item: "Room Bill", category: "Menu Category",
   commission_agent: "Agent", policy: "Policy",
   hotel_profile: "Property", login_location: "Sign-in Location",
+  meal_plan: "Meal Plan", raw_material: "Ingredient",
+  supplier_payment: "Supplier Payment",
+  delivery_cod_settlement: "Delivery COD Payment", credit_settlement: "Credit Sale Payment",
+  cash_session: "Cash Drawer Shift", cash_drawer: "Cash Drawer",
+  user_capabilities: "Staff Access", user_default_permissions: "Staff Permissions",
+  company: "Company",
 };
+const ENTITY_OPTIONS = Object.entries(ENTITY_LABEL).sort((a, b) => a[1].localeCompare(b[1]));
 
-const ROLE = { 1: "Branch Admin", 2: "Admin", 3: "Cashier", 6: "Super Admin", 8: "Waiter", 9: "Kitchen" };
+const ROLE = { 1: "Administrator", 2: "Admin", 3: "Cashier", 6: "Super Admin", 8: "Waiter", 9: "Kitchen" };
 
 /** "3 minutes ago" — the feed reads better than raw timestamps. */
 function ago(iso) {
@@ -162,7 +172,7 @@ export default function ActivityLog() {
         </select>
         <select value={entity} onChange={(e) => setEntity(e.target.value)} style={{ ...input, width: 150 }}>
           <option value="">Everything</option>
-          {Object.entries(ENTITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {ENTITY_OPTIONS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ ...input, width: 145 }} />
         <span style={{ color: "#94A3B8" }}>→</span>

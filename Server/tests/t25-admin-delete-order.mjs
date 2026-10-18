@@ -42,10 +42,29 @@ await t("a menu item, a rider, and the owner's approval PIN", async () => {
   const p = await api(owner, "POST", "/delivery-partners", { name: `${stamp} Del Rider` });
   status(p, 201);
   partner = p.data.key;
+});
+
+section("before any PIN is set");
+await t("an Administrator deletes with only a reason, and the log says no PIN was set", async () => {
+  const nopin = await sell("nopin");
+  eq((await del(owner, nopin, {})).status, 400, "a reason is still required");
+  status(await del(owner, nopin, { reason: "rung up twice" }), 200);
+  const { rows } = await pool.query(
+    `SELECT u_id, summary FROM "ACTIVITY_LOG" WHERE entity = 'order' AND entity_id = $1 AND action = 'delete'`,
+    [String(nopin)]);
+  eq(rows.length, 1, "logged");
+  eq(Number(rows[0].u_id), Number(A.owner.u_id), "who did it");
+  ok(rows[0].summary.includes("rung up twice") && rows[0].summary.includes("No PIN set"), rows[0].summary);
+});
+await t("a cashier still cannot delete", async () => {
+  const id2 = await sell("nopin-cashier");
+  ok((await del(cashier, id2, { reason: "placed by mistake" })).status === 403, "cashier refused");
+});
+await t("the owner sets an approval PIN", async () => {
   status(await api(owner, "PUT", "/security/approval-pin", { pin: PIN }), 200);
 });
 
-section("who may delete");
+section("who may delete, once a PIN is set");
 let id;
 await t("a cashier cannot delete an order, even with the PIN", async () => {
   id = await sell("a");

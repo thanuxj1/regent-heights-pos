@@ -13,7 +13,7 @@ import {
 import { branchClause, writeBranchId } from "../utils/scope.js";
 import { takeStock, returnStock, isStockProblem } from "../utils/inventory.js";
 import { logActivity } from "../utils/activityLog.js";
-import { requireApproval, findApprover, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
+import { requireApproval, findApprover, approverExists, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
 import { hasKitchenScreen } from "../utils/kitchenScreen.js";
@@ -1523,8 +1523,9 @@ const pinMisses = new Map(); // u_id -> { n, until }
  *
  * For the owner's own corrections (a sale rung up by mistake, twice, or for the
  * wrong day) without calling support. Unlike a void, the Administrator's login
- * is not enough: an approval PIN is always asked for, because the till itself
- * is signed in as an Administrator.
+ * is not enough once the owner has set an approval PIN: it is asked for every
+ * time, because the till itself is signed in as an Administrator. With no PIN
+ * set at the property, the reason alone is enough.
  *
  * The order leaves every report, list and total and its stock goes back, but
  * the row is kept as cancelled — the Activity Log names who deleted it, whose
@@ -1581,7 +1582,12 @@ export const deleteOrderWithPin = async (req, res) => {
       });
     }
 
-    const approver = await findApprover(req.body?.pin, order.b_id);
+    // Until the owner sets an approval PIN, an Administrator deletes without
+    // one; once any PIN is set at the property, it is always asked for.
+    const pinSet = await approverExists(order.b_id);
+    const approver = pinSet
+      ? await findApprover(req.body?.pin, order.b_id)
+      : { u_id: null, name: null };
     if (!approver) {
       await client.query("ROLLBACK");
       // Misses since the last lock (an expired lock starts the count again).
@@ -1648,7 +1654,7 @@ export const deleteOrderWithPin = async (req, res) => {
     logActivity(req, {
       action: "delete", entity: "order", entity_id: id, b_id: order.b_id,
       summary: `Deleted order #${id} (${order.or_type}, LKR ${value.toFixed(2)}${what ? ` — ${what}` : ""}) — ${reason}. `
-             + `PIN: ${approver.name || "manager"}`
+             + (pinSet ? `PIN: ${approver.name || "manager"}` : "No PIN set at the property")
              + (removedSettlement ? `; its payment record #${removedSettlement.settlement_id} (LKR ${Number(removedSettlement.amount).toFixed(2)}) removed` : "")
              + (commissions.length ? `; unpaid commission of LKR ${commissions.reduce((s, c) => s + Number(c.commission_amount), 0).toFixed(2)} removed` : "")
              + (paidCommissions.length ? `; a commission already paid for it (LKR ${paidCommissions.reduce((s, c) => s + Number(c.commission_amount), 0).toFixed(2)}) was left as it is` : ""),
