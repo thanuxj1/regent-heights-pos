@@ -99,6 +99,43 @@ export async function requireApproval(req, { pin, b_id, what, openWithoutPin = f
   return { ok: true, approver };
 }
 
+// Wrong delete PINs per user: a four-digit PIN must not be guessable by trying
+// them all from a signed-in screen.
+const PIN_TRIES = 5;
+const PIN_LOCK_MS = 15 * 60 * 1000;
+const pinMisses = new Map(); // u_id -> { n, until }
+
+/**
+ * May this Administrator delete something (an order, a booking) at this
+ * property? Until the owner sets an approval PIN the reason alone is enough;
+ * once any PIN is set it is asked for every time, because the till itself is
+ * signed in as an Administrator.
+ *
+ * @returns {Promise<{ok:true, pinSet:boolean, approver:{u_id:number|null,name:string|null}}
+ *                  | {ok:false, status:number, message:string}>}
+ */
+export async function checkDeletePin(req, b_id) {
+  const me = Number(req.user?.u_id);
+  const miss = pinMisses.get(me);
+  if (miss && miss.until > Date.now()) {
+    return { ok: false, status: 429,
+      message: `Too many wrong PINs. Try again in ${Math.ceil((miss.until - Date.now()) / 60000)} minutes.` };
+  }
+  const pinSet = await approverExists(b_id);
+  if (!pinSet) return { ok: true, pinSet, approver: { u_id: null, name: null } };
+
+  const approver = await findApprover(req.body?.pin, b_id);
+  if (!approver) {
+    // Misses since the last lock (an expired lock starts the count again).
+    const n = (miss && !miss.until ? miss.n : 0) + 1;
+    pinMisses.set(me, { n: n >= PIN_TRIES ? 0 : n, until: n >= PIN_TRIES ? Date.now() + PIN_LOCK_MS : 0 });
+    return { ok: false, status: 403,
+      message: req.body?.pin ? "That PIN was not recognised." : "Enter the delete PIN." };
+  }
+  pinMisses.delete(me);
+  return { ok: true, pinSet, approver };
+}
+
 /** Hash a new PIN. Four digits minimum, and never stored in the clear. */
 export async function hashApprovalPin(pin) {
   const raw = String(pin ?? "").trim();

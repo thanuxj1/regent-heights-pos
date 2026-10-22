@@ -15,6 +15,7 @@ import { syncBookingCommission } from "../utils/commission.js";
 import { lockRooms, roomClash, countFreeRoomsOfType } from "../utils/roomLock.js";
 import { seatGuests, guestCharges, occupancyWarnings } from "../utils/guestCharges.js";
 import { takeStock, noteShortfall } from "../utils/inventory.js";
+import { checkDeletePin } from "../utils/approval.js";
 
 /**
  * Tell every front desk on this branch that the rack/calendar is stale.
@@ -977,6 +978,93 @@ export async function cancelBooking(req, res, next) {
       details: { reason: req.body?.reason || null } });
     res.json(rows[0]);
   } catch (err) { next(err); }
+}
+
+/**
+ * POST /api/hotel/bookings/:id/delete  body: { reason, pin? }
+ *
+ * An Administrator takes a booking made by mistake (or twice) off the books:
+ * the booking, its rooms and the payments taken for it are removed, so it
+ * leaves the calendar, Transactions, the reports and the cash drawer. Cancel
+ * is different — the guest pulled out, and any deposit taken is still money
+ * the hotel holds.
+ *
+ * A reason is always required; the approval PIN only once the owner has set
+ * one (utils/approval.js). The Activity Log keeps a full copy of what was
+ * deleted. A stay that has started (checked in or out), or that has restaurant
+ * orders on its bill, is refused: that is real history.
+ */
+export async function deleteBooking(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id);
+    await assertBookingInScope(req, res, id);
+    const reason = String(req.body?.reason ?? "").trim();
+    if (reason.length < 3) { res.status(400); throw new Error("Say why this booking is being deleted — it goes in the Activity Log."); }
+    if (reason.length > 200) { res.status(400); throw new Error("That reason is too long (200 characters)."); }
+
+    await client.query("BEGIN");
+    const { rows: [b] } = await client.query(
+      `SELECT b.*, g.full_name AS guest_name, g.phone AS guest_phone
+         FROM "BOOKING" b LEFT JOIN "GUEST" g ON g.guest_id = b.guest_id
+        WHERE b.booking_id = $1 FOR UPDATE OF b`, [id]);
+    if (!b) { res.status(404); throw new Error("Booking not found"); }
+    if (["checked_in", "checked_out"].includes(b.status)) {
+      res.status(409);
+      throw new Error(b.status === "checked_in"
+        ? "The guest is checked in. Check them out instead — a stay that has started cannot be deleted."
+        : "This stay is completed and billed, so it cannot be deleted.");
+    }
+    const { rows: orders } = await client.query(
+      `SELECT o.or_id FROM "ORDER" o JOIN "FOLIO" f ON f.folio_id = o.folio_id
+        WHERE f.booking_id = $1 AND o.or_status <> 'cancelled'`, [id]);
+    if (orders.length) {
+      res.status(409);
+      throw new Error(`Restaurant order${orders.length > 1 ? "s" : ""} ${orders.map((o) => "#" + o.or_id).join(", ")} `
+        + "are on this booking's bill. Delete those first.");
+    }
+
+    const pin = await checkDeletePin(req, b.b_id);
+    if (!pin.ok) { res.status(pin.status); throw new Error(pin.message); }
+
+    // What goes, kept in the log: the money taken, the rooms, and any commission.
+    const { rows: payments } = await client.query(
+      `SELECT bp_id, amount, method, kind, paid_at, received_by, session_id FROM "BOOKING_PAYMENT" WHERE booking_id = $1 ORDER BY bp_id`, [id]);
+    const { rows: rooms } = await client.query(
+      `SELECT br.room_type_id, rt.type_name, br.room_id, br.rate_per_night
+         FROM "BOOKING_ROOM" br LEFT JOIN "ROOM_TYPE" rt ON rt.room_type_id = br.room_type_id
+        WHERE br.booking_id = $1`, [id]);
+    const { rows: commissions } = await client.query(
+      `SELECT record_id, agent_id, commission_amount, status FROM "COMMISSION_RECORD" WHERE booking_id = $1`, [id]);
+
+    // Its payments, rooms, bill and commission go with it (ON DELETE CASCADE).
+    await client.query(`DELETE FROM "BOOKING" WHERE booking_id = $1`, [id]);
+    await client.query("COMMIT");
+
+    announce(b.b_id, { action: "deleted", booking_id: id });
+
+    const net = payments.reduce((s, p) => s + (p.kind === "refund" ? -1 : 1) * Number(p.amount), 0);
+    const money = (v) => `LKR ${Number(v).toFixed(2)}`;
+    logActivity(req, {
+      action: "delete", entity: "booking", entity_id: id, b_id: b.b_id,
+      summary: `Deleted booking ${b.booking_ref} (${b.guest_name || "guest"}, ${String(b.check_in_date).slice(0, 10)}`
+             + ` to ${String(b.check_out_date).slice(0, 10)}, total ${money(b.grand_total)}`
+             + (payments.length ? `; ${money(net)} paid (${[...new Set(payments.map((p) => p.method))].join(", ")}) removed` : "")
+             + `) — ${reason}. ` + (pin.pinSet ? `PIN: ${pin.approver.name || "manager"}` : "No PIN set at the property"),
+      details: {
+        reason, booking_ref: b.booking_ref, status: b.status, guest: b.guest_name, guest_phone: b.guest_phone,
+        check_in_date: b.check_in_date, check_out_date: b.check_out_date, grand_total: b.grand_total,
+        payments, rooms, commissions, approved_by: pin.approver.u_id, approver: pin.approver.name,
+      },
+    });
+
+    res.json({ success: true, booking_id: id, booking_ref: b.booking_ref });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
 }
 
 // ─── CHECK-IN ────────────────────────────────────────────────────────────────

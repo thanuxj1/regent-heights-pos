@@ -6,6 +6,7 @@ import {
   getBookingById, getBookingFolio, getAvailability, checkInBooking, checkOutBooking,
   postFolioItem, deleteFolioItem, addBookingPayment, cancelBooking, getBookingConfirmation,
   getGuests, getAgents, getGuestById, updateGuest, getBranchById, getStayPolicy, getMealPlans,
+  deleteBookingWithPin, getDiscountApproval,
 } from "../../services/api";
 import { printGuestRegistration } from "../../utils/printGuestRegistration";
 import { readImageFile } from "../../utils/readImageFile";
@@ -51,6 +52,31 @@ export default function BookingDetail() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   const [editing, setEditing] = useState(null); // { guests, agents } once loaded, while the form is open
+
+  // Delete a booking made by mistake (Administrators only; the server checks
+  // again). A reason always; the PIN only once the owner has set one.
+  const isAdministrator = [1, 2, 6].includes(Number(user?.role_id));
+  const [deleting, setDeleting] = useState(null); // { reason, pin, pinNeeded, busy, error }
+  const openDelete = async () => {
+    setDeleting({ reason: "", pin: "", pinNeeded: false, busy: false, error: "" });
+    let pinNeeded = true;
+    try { pinNeeded = Boolean((await getDiscountApproval())?.pin_needed); } catch { /* ask for it */ }
+    setDeleting((d) => d && { ...d, pinNeeded });
+  };
+  const confirmDelete = async (e) => {
+    e.preventDefault();
+    const reason = deleting.reason.trim();
+    if (reason.length < 3) { setDeleting({ ...deleting, error: "Write why this booking is being deleted." }); return; }
+    if (deleting.pinNeeded && !/^\d{4,8}$/.test(deleting.pin)) { setDeleting({ ...deleting, error: "Enter the PIN (4 to 8 digits)." }); return; }
+    setDeleting({ ...deleting, busy: true, error: "" });
+    try {
+      await deleteBookingWithPin(id, { reason, pin: deleting.pin });
+      navigate("/hotel/bookings");
+    } catch (err) {
+      setDeleting((d) => d && { ...d, busy: false, pin: "",
+        error: err?.response?.data?.message || err?.response?.data?.error || "Could not delete the booking" });
+    }
+  };
 
   // Guest Registration — the paper form the guest signs at check-in
   // (passport/ID, next destination, chauffeur, payment method) covers GUEST
@@ -364,8 +390,48 @@ export default function BookingDetail() {
                   }}
                   style={btn("danger")}>Cancel Booking</button>
               )}
+              {isAdministrator && !["checked_in", "checked_out"].includes(booking.status) && (
+                <button onClick={openDelete} style={{ ...btn("ghost"), color: "#B91C1C", borderColor: "#FECACA" }}>
+                  🗑 Delete Booking
+                </button>
+              )}
             </div>
           </div>
+
+          {deleting && (
+            <div style={modalWrap}>
+              <form onSubmit={confirmDelete} style={{ ...modalBox, maxWidth: 440 }}>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1E293B" }}>Delete booking {booking.booking_ref}?</h3>
+                <p style={{ margin: "6px 0 12px", fontSize: 13, color: "#64748B", lineHeight: 1.5 }}>
+                  {booking.guest_name || "Guest"} · {dmy(booking.check_in_date)} → {dmy(booking.check_out_date)} · {money(booking.grand_total)}
+                  {Number(booking.paid_total) > 0 ? ` · ${money(booking.paid_total)} paid` : ""}
+                </p>
+                <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 10px", marginBottom: 14, lineHeight: 1.5 }}>
+                  The booking and {Number(booking.paid_total) > 0 ? "the payments taken for it are" : "everything on it is"} removed:
+                  it leaves the calendar, Transactions, the reports and the cash drawer. Use <strong>Cancel Booking</strong> instead
+                  if the guest pulled out and you are keeping their deposit. Your name and the reason go in the Activity Log.
+                </div>
+                <label style={{ ...label, marginBottom: 4 }}>Reason</label>
+                <input autoFocus value={deleting.reason} maxLength={200} placeholder="e.g. entered twice"
+                  onChange={(e) => setDeleting({ ...deleting, reason: e.target.value })} style={{ ...input, marginBottom: 12 }} />
+                {deleting.pinNeeded && (
+                  <>
+                    <label style={{ ...label, marginBottom: 4 }}>PIN</label>
+                    <input type="password" inputMode="numeric" autoComplete="off" value={deleting.pin}
+                      onChange={(e) => setDeleting({ ...deleting, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })}
+                      style={{ ...input, letterSpacing: 4 }} />
+                  </>
+                )}
+                {deleting.error && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: "#B91C1C" }}>{deleting.error}</div>}
+                <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+                  <button type="button" onClick={() => setDeleting(null)} disabled={deleting.busy} style={{ ...btn("ghost"), flex: 1 }}>Keep it</button>
+                  <button type="submit" disabled={deleting.busy} style={{ ...btn("danger"), flex: 1, opacity: deleting.busy ? 0.6 : 1 }}>
+                    {deleting.busy ? "Deleting…" : "Delete booking"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
 
           {/* Room assignment (pre check-in) */}
           {canCheckIn && (

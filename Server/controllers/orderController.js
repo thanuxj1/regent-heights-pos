@@ -13,7 +13,7 @@ import {
 import { branchClause, writeBranchId } from "../utils/scope.js";
 import { takeStock, returnStock, isStockProblem } from "../utils/inventory.js";
 import { logActivity } from "../utils/activityLog.js";
-import { requireApproval, findApprover, approverExists, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
+import { requireApproval, checkDeletePin, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
 import { hasKitchenScreen } from "../utils/kitchenScreen.js";
@@ -1512,12 +1512,6 @@ export const voidOrder = async (req, res) => {
   }
 };
 
-// Wrong PINs per user: a four-digit PIN must not be guessable by trying them
-// all from a signed-in screen.
-const PIN_TRIES = 5;
-const PIN_LOCK_MS = 15 * 60 * 1000;
-const pinMisses = new Map(); // u_id -> { n, until }
-
 /**
  * POST /api/orders/:id/delete — an Administrator takes an order off the books.
  *
@@ -1542,15 +1536,6 @@ export const deleteOrderWithPin = async (req, res) => {
   }
   if (reason.length > 200) {
     return res.status(400).json({ success: false, error: "That reason is too long (200 characters)." });
-  }
-
-  const me = Number(req.user?.u_id);
-  const miss = pinMisses.get(me);
-  if (miss && miss.until > Date.now()) {
-    return res.status(429).json({
-      success: false,
-      error: `Too many wrong PINs. Try again in ${Math.ceil((miss.until - Date.now()) / 60000)} minutes.`,
-    });
   }
 
   const client = await pool.connect();
@@ -1582,23 +1567,12 @@ export const deleteOrderWithPin = async (req, res) => {
       });
     }
 
-    // Until the owner sets an approval PIN, an Administrator deletes without
-    // one; once any PIN is set at the property, it is always asked for.
-    const pinSet = await approverExists(order.b_id);
-    const approver = pinSet
-      ? await findApprover(req.body?.pin, order.b_id)
-      : { u_id: null, name: null };
-    if (!approver) {
+    const pin = await checkDeletePin(req, order.b_id);
+    if (!pin.ok) {
       await client.query("ROLLBACK");
-      // Misses since the last lock (an expired lock starts the count again).
-      const n = (miss && !miss.until ? miss.n : 0) + 1;
-      pinMisses.set(me, { n: n >= PIN_TRIES ? 0 : n, until: n >= PIN_TRIES ? Date.now() + PIN_LOCK_MS : 0 });
-      return res.status(403).json({
-        success: false,
-        error: req.body?.pin ? "That PIN was not recognised." : "Enter the delete PIN.",
-      });
+      return res.status(pin.status).json({ success: false, error: pin.message });
     }
-    pinMisses.delete(me);
+    const { pinSet, approver } = pin;
 
     // Money already handed over for it (a rider's COD cash, a credit customer's
     // payment). A settlement for this order alone goes with it; one that also

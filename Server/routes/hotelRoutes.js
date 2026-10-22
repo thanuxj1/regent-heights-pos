@@ -1,7 +1,7 @@
 import { Router } from "express";
 import {
   requireAuth, requireBranchAdminOr, CAPABILITIES, requireCashierOrAbove,
-  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS, requireRole, ROLES,
 } from "../middleware/authMiddleware.js";
 import {
   getRoomTypes, getRoomTypeById, createRoomType, updateRoomType, deleteRoomType,
@@ -10,7 +10,7 @@ import {
 } from "../controllers/roomController.js";
 import {
   getGuests, getGuestById, createGuest, updateGuest,
-  getAvailability, getBookings, getBookingById, createBooking, updateBooking, cancelBooking,
+  getAvailability, getBookings, getBookingById, createBooking, updateBooking, cancelBooking, deleteBooking,
   checkIn, checkOut, getFolio, postFolioItem, deleteFolioItem, addPayment,
   getDashboard, getConfirmation, getStayPolicy, updateStayPolicy,
 } from "../controllers/bookingController.js";
@@ -87,6 +87,10 @@ router.post("/bookings",                   createBooking);
 router.get("/bookings/:id",                getBookingById);
 router.put("/bookings/:id",                updateBooking);
 router.post("/bookings/:id/cancel",        cancelBooking);
+// A booking made by mistake, taken off the books with its payments: the
+// Administrator's own correction (a reason always, a PIN once one is set).
+router.post("/bookings/:id/delete",
+  requireRole([ROLES.BRANCH_ADMIN, ROLES.ADMIN], "Administrator"), deleteBooking);
 router.post("/bookings/:id/check-in",      checkIn);
 router.post("/bookings/:id/check-out",     checkOut);
 router.get("/bookings/:id/confirmation",   getConfirmation);
