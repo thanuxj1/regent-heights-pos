@@ -128,7 +128,13 @@ export default function BookingDetail() {
         ? { ...br, room_number: roomNumberById[pendingId] }
         : br;
     });
-    printGuestRegistration({ branchName, booking: { ...booking, rooms }, guest: guestForm || guest || {}, stayPolicy });
+    // The meal plan chosen on this screen if there is one (it may not be saved
+    // yet — it posts at check-in), otherwise the one already on the booking.
+    const picked = mealPlans.find((p) => String(p.plan_id) === String(selectedMealPlanId));
+    const mealPlan = picked
+      ? { plan_name: picked.plan_name, plan_code: picked.plan_code }
+      : (booking.plan_name || booking.plan_code ? { plan_name: booking.plan_name, plan_code: booking.plan_code } : null);
+    printGuestRegistration({ branchName, booking: { ...booking, rooms }, guest: guestForm || guest || {}, stayPolicy, mealPlan });
   };
 
   const load = useCallback(async () => {

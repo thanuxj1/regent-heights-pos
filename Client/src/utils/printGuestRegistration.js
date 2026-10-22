@@ -26,7 +26,11 @@ const field = (label, value) => `
     <div class="field-value">${esc(value) || "&nbsp;"}</div>
   </div>`;
 
-export const printGuestRegistration = ({ branchName, booking, guest, stayPolicy }) => {
+export const printGuestRegistration = ({ branchName, booking, guest, stayPolicy, mealPlan }) => {
+  // e.g. "Bed & Breakfast (DBL/BB)". Blank when the stay has no meal plan.
+  const mealPlanText = mealPlan
+    ? [mealPlan.plan_name, mealPlan.plan_code && `(${mealPlan.plan_code})`].filter(Boolean).join(" ")
+    : "";
   const rooms = booking.rooms || [];
   const roomTypeNames = [...new Set(rooms.map((r) => r.type_name))].join(", ");
   const roomNumbers = rooms.map((r) => r.room_number || "TBD at check-in").join(", ");
@@ -54,7 +58,7 @@ export const printGuestRegistration = ({ branchName, booking, guest, stayPolicy 
     field("Date of Issue", dateOnly(guest.passport_issue_date)),
     field("Expiry Date", dateOnly(guest.passport_expiry_date)),
     field("Person / Adults", [booking.adults, booking.children ? `+${booking.children} child${booking.children === 1 ? "" : "ren"}` : null].filter(Boolean).join(" ")),
-    field("Meal Plan", ""),
+    field("Meal Plan", mealPlanText),
     field("Room Type", roomTypeNames),
     field("Room #", roomNumbers),
     field("Room Rate", roomRate ? `LKR ${Number(roomRate).toFixed(2)}` : ""),
