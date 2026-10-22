@@ -400,7 +400,7 @@ export default function BookingDetail() {
 
           {deleting && (
             <div style={modalWrap}>
-              <form onSubmit={confirmDelete} style={{ ...modalBox, maxWidth: 440 }}>
+              <form onSubmit={confirmDelete} style={modalBox(440)}>
                 <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1E293B" }}>Delete booking {booking.booking_ref}?</h3>
                 <p style={{ margin: "6px 0 12px", fontSize: 13, color: "#64748B", lineHeight: 1.5 }}>
                   {booking.guest_name || "Guest"} · {dmy(booking.check_in_date)} → {dmy(booking.check_out_date)} · {money(booking.grand_total)}

@@ -931,8 +931,11 @@ export async function updateBooking(req, res, next) {
     const commissionNote = await syncBookingCommission(client, id);
 
     await client.query("COMMIT");
+    // A DATE column comes back as midnight UTC; printed raw it read
+    // "Tue Oct 20 2026 00:00:00 GMT+0000 (Coordinated Universal Time)".
+    const day = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d ?? "").slice(0, 10));
     logActivity(req, { action: "update", entity: "booking", entity_id: id, b_id: rows[0].b_id,
-      summary: `Edited booking ${rows[0].booking_ref} — ${rows[0].check_in_date} to ${rows[0].check_out_date}, total ${rows[0].grand_total}`
+      summary: `Edited booking ${rows[0].booking_ref} — ${day(rows[0].check_in_date)} to ${day(rows[0].check_out_date)}, total ${rows[0].grand_total}`
              + (commissionNote ? ` (${commissionNote})` : "") });
     announce(rows[0].b_id, { action: "updated", booking_id: rows[0].booking_id });
     res.json({ ...rows[0], warnings: overbookWarnings });
@@ -1005,7 +1008,8 @@ export async function deleteBooking(req, res, next) {
 
     await client.query("BEGIN");
     const { rows: [b] } = await client.query(
-      `SELECT b.*, g.full_name AS guest_name, g.phone AS guest_phone
+      `SELECT b.*, b.check_in_date::text AS in_day, b.check_out_date::text AS out_day,
+              g.full_name AS guest_name, g.phone AS guest_phone
          FROM "BOOKING" b LEFT JOIN "GUEST" g ON g.guest_id = b.guest_id
         WHERE b.booking_id = $1 FOR UPDATE OF b`, [id]);
     if (!b) { res.status(404); throw new Error("Booking not found"); }
@@ -1047,13 +1051,12 @@ export async function deleteBooking(req, res, next) {
     const money = (v) => `LKR ${Number(v).toFixed(2)}`;
     logActivity(req, {
       action: "delete", entity: "booking", entity_id: id, b_id: b.b_id,
-      summary: `Deleted booking ${b.booking_ref} (${b.guest_name || "guest"}, ${String(b.check_in_date).slice(0, 10)}`
-             + ` to ${String(b.check_out_date).slice(0, 10)}, total ${money(b.grand_total)}`
+      summary: `Deleted booking ${b.booking_ref} (${b.guest_name || "guest"}, ${b.in_day} to ${b.out_day}, total ${money(b.grand_total)}`
              + (payments.length ? `; ${money(net)} paid (${[...new Set(payments.map((p) => p.method))].join(", ")}) removed` : "")
              + `) — ${reason}. ` + (pin.pinSet ? `PIN: ${pin.approver.name || "manager"}` : "No PIN set at the property"),
       details: {
         reason, booking_ref: b.booking_ref, status: b.status, guest: b.guest_name, guest_phone: b.guest_phone,
-        check_in_date: b.check_in_date, check_out_date: b.check_out_date, grand_total: b.grand_total,
+        check_in_date: b.in_day, check_out_date: b.out_day, grand_total: b.grand_total,
         payments, rooms, commissions, approved_by: pin.approver.u_id, approver: pin.approver.name,
       },
     });

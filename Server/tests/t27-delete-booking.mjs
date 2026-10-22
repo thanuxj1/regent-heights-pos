@@ -69,6 +69,7 @@ await t("the Activity Log says who deleted it, why, and what was paid", async ()
   eq(Number(rows[0].u_id), Number(A.owner.u_id), "who");
   ok(rows[0].summary.includes(ref) && rows[0].summary.includes("entered twice"), rows[0].summary);
   ok(rows[0].summary.includes("5000.00 paid (cash) removed"), rows[0].summary);
+  ok(rows[0].summary.includes(`${hotelDay(20)} to ${hotelDay(21)}`), `dates as YYYY-MM-DD: ${rows[0].summary}`);
   eq(rows[0].details.payments.length, 1, "the payment kept in the log");
 });
 
