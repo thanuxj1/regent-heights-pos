@@ -1178,6 +1178,19 @@ export function BookingFormModal({ branchId, guests, agents, initial = null, onC
                 {overAdvance && <span style={hint}>Grand total is only {money(totals.grand)}</span>}
               </label>
               )}
+              {/* How the advance was paid. It was always recorded as cash, so a card
+                  or bank-transfer deposit showed as cash in Transactions and was
+                  counted in the cash drawer. */}
+              {!isEdit && numOr(advance) > 0 && (
+              <label style={label}>Advance Paid By
+                <select value={advanceMethod} onChange={e => setAdvanceMethod(e.target.value)}
+                  style={{ ...input, marginTop: 4 }}>
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="bank_transfer">Bank Transfer</option>
+                </select>
+              </label>
+              )}
             </div>
 
             <div style={{ background: "#F8FAFC", borderRadius: 10, padding: 16 }}>
