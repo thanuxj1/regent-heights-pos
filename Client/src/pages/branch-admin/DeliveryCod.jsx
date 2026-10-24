@@ -10,6 +10,11 @@ import {
 } from "../../services/api";
 import { dayKey, todayKey } from "../../utils/dates";
 import { exportCsv, dateCell } from "../../utils/exportCsv";
+import { useAuth } from "../../context/AuthContext";
+import RemoveSettlementDialog from "../../components/branch-admin/RemoveSettlementDialog";
+
+// A COD hand-over recorded by mistake can be removed by an Administrator.
+const removeBtn = { border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer" };
 
 function money(n) {
   return `LKR ${Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -58,7 +63,7 @@ const ghostBtn = { padding: "9px 16px", background: "#fff", color: "#344054", bo
 const field = { width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #D0D5DD", fontSize: 14, outline: "none", boxSizing: "border-box" };
 
 /** One partner: lifetime numbers, a trend, and the settle-outstanding flow. */
-function DeliveryPartnerDetailView({ partner, outstanding, history, onBack, onSettled, onToggleActive, onEdit, onDelete }) {
+function DeliveryPartnerDetailView({ partner, outstanding, history, onBack, onSettled, onToggleActive, onEdit, onDelete, onRemoveSettlement }) {
   const partnerOrders = useMemo(
     () => outstanding.orders.filter((o) => (o.delivery_partner || "other") === partner.key),
     [outstanding, partner.key],
@@ -340,8 +345,11 @@ function DeliveryPartnerDetailView({ partner, outstanding, history, onBack, onSe
           <div style={{ color: "#94A3B8" }}>No settlements recorded yet for {partner.name}.</div>
         ) : partnerHistory.map((s) => (
           <div key={s.settlement_id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F1F5F9", fontSize: 13 }}>
-            <span style={{ color: "#475569" }}>{dayKey(s.settled_date)} · {s.order_count} order{s.order_count === 1 ? "" : "s"} · {s.recorded_by || "—"}</span>
-            <span style={{ fontWeight: 700, color: "#059669" }}>{money(s.amount)}</span>
+            <span style={{ color: "#475569" }}>{dayKey(s.settled_date)} · {s.orders || `${s.order_count} order${s.order_count === 1 ? "" : "s"}`} · {s.recorded_by || "—"}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontWeight: 700, color: "#059669" }}>{money(s.amount)}</span>
+              {onRemoveSettlement && <button type="button" style={removeBtn} onClick={() => onRemoveSettlement(s)}>Remove</button>}
+            </span>
           </div>
         ))}
       </div>
@@ -350,6 +358,10 @@ function DeliveryPartnerDetailView({ partner, outstanding, history, onBack, onSe
 }
 
 export default function DeliveryCod() {
+  const { user } = useAuth();
+  const isAdministrator = [1, 2, 6].includes(Number(user?.role_id));
+  const [removing, setRemoving] = useState(null);
+  const [removedNote, setRemovedNote] = useState("");
   const [partners, setPartners] = useState([]);
   const [outstanding, setOutstanding] = useState({ orders: [], byPartner: [] });
   const [history, setHistory] = useState([]);
@@ -464,6 +476,25 @@ export default function DeliveryCod() {
               {loadError}
             </div>
           )}
+          {removedNote && (
+            <div style={{ background: "#ECFDF3", border: "1px solid #ABEFC6", color: "#067647", padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+              {removedNote}
+            </div>
+          )}
+          {removing && (
+            <RemoveSettlementDialog
+              kind="cod"
+              record={{ settlement_id: removing.settlement_id, amount: removing.amount, method: removing.method,
+                        who: partners.find((p) => p.key === removing.delivery_partner)?.name || removing.delivery_partner,
+                        orders: removing.orders }}
+              onClose={() => setRemoving(null)}
+              onDone={async (r) => {
+                setRemoving(null);
+                setRemovedNote(`Payment removed. ${r.orders_unpaid_again?.length ? `Order${r.orders_unpaid_again.length > 1 ? "s" : ""} ${r.orders_unpaid_again.map((i) => "#" + i).join(", ")} owed by the rider again.` : ""}`);
+                await load();
+              }}
+            />
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
             <StatCard title="Outstanding COD" value={money(totalOutstanding)} subtitle="Cash partners are holding for us" icon="💰" iconClass="bg-violet-100 text-violet-700" showAction={false} onClick={() => {}} />
@@ -483,6 +514,7 @@ export default function DeliveryCod() {
               onToggleActive={handleToggleActive}
               onEdit={handleEditPartner}
               onDelete={handleDeletePartner}
+              onRemoveSettlement={isAdministrator ? setRemoving : null}
             />
           ) : (
             <>
@@ -540,8 +572,8 @@ export default function DeliveryCod() {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                       <thead>
                         <tr style={{ background: "#F8FAFC" }}>
-                          {["Date", "Partner", "Amount", "Method", "Orders", "Recorded By"].map((h) => (
-                            <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
+                          {["Date", "Partner", "Amount", "Method", "Orders", "Recorded By", ...(isAdministrator ? [""] : [])].map((h, i) => (
+                            <th key={h || i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -552,8 +584,13 @@ export default function DeliveryCod() {
                             <td style={{ padding: "12px 16px", fontWeight: 600, color: "#1E293B" }}>{partners.find((p) => p.key === s.delivery_partner)?.name || s.delivery_partner}</td>
                             <td style={{ padding: "12px 16px", fontWeight: 700, color: "#059669" }}>{money(s.amount)}</td>
                             <td style={{ padding: "12px 16px", color: "#64748B", textTransform: "capitalize" }}>{s.method?.replace("_", " ")}</td>
-                            <td style={{ padding: "12px 16px", color: "#64748B" }}>{s.order_count}</td>
+                            <td style={{ padding: "12px 16px", color: "#64748B" }}>{s.orders || s.order_count}</td>
                             <td style={{ padding: "12px 16px", color: "#94A3B8" }}>{s.recorded_by || "—"}</td>
+                            {isAdministrator && (
+                              <td style={{ padding: "12px 16px", textAlign: "right" }}>
+                                <button type="button" style={removeBtn} onClick={() => setRemoving(s)}>Remove</button>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>

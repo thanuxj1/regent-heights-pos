@@ -4,6 +4,8 @@ import Sidebar from "../../components/branch-admin/Sidebar";
 import StatCard from "../../components/branch-admin/StatCard";
 import { getOutstandingCredit, getCreditHistory, settleCredit } from "../../services/api";
 import { todayKey } from "../../utils/dates";
+import { useAuth } from "../../context/AuthContext";
+import RemoveSettlementDialog from "../../components/branch-admin/RemoveSettlementDialog";
 
 /**
  * Credit sales: food given at the till to someone the house knows, who pays
@@ -25,6 +27,10 @@ const btn = (primary) => ({
 });
 
 export default function CreditSales() {
+  const { user } = useAuth();
+  // Administrators can remove a payment recorded by mistake (the server checks too).
+  const isAdministrator = [1, 2, 6].includes(Number(user?.role_id));
+  const [removing, setRemoving] = useState(null);
   const [data, setData] = useState({ orders: [], by_customer: [], total: 0 });
   const [history, setHistory] = useState([]);
   const [loadError, setLoadError] = useState("");
@@ -133,6 +139,7 @@ export default function CreditSales() {
                 <thead><tr>
                   <th style={th}>Paid on</th><th style={th}>Customer</th><th style={th}>Bills</th><th style={th}>Method</th>
                   <th style={th}>Note</th><th style={th}>Recorded by</th><th style={{ ...th, textAlign: "right" }}>Amount</th>
+                  {isAdministrator && <th style={th} />}
                 </tr></thead>
                 <tbody>
                   {history.map((h) => (
@@ -144,6 +151,14 @@ export default function CreditSales() {
                       <td style={td}>{h.note || "—"}</td>
                       <td style={td}>{h.recorded_by || "—"}</td>
                       <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{money(h.amount)}</td>
+                      {isAdministrator && (
+                        <td style={{ ...td, textAlign: "right" }}>
+                          <button type="button" onClick={() => setRemoving(h)}
+                            style={{ border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                            Remove
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -203,6 +218,20 @@ export default function CreditSales() {
             </div>
           </div>
         </div>
+      )}
+
+      {removing && (
+        <RemoveSettlementDialog
+          kind="credit"
+          record={{ settlement_id: removing.settlement_id, amount: removing.amount, method: removing.method,
+                    who: removing.customer_name || "customer", orders: removing.orders }}
+          onClose={() => setRemoving(null)}
+          onDone={async (r) => {
+            setRemoving(null);
+            setDone(`Payment removed. ${r.orders_unpaid_again?.length ? `Bill${r.orders_unpaid_again.length > 1 ? "s" : ""} ${r.orders_unpaid_again.map((i) => "#" + i).join(", ")} owed again.` : ""}`);
+            await load();
+          }}
+        />
       )}
     </div>
   );

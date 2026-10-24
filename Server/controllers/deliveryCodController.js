@@ -78,6 +78,7 @@ export async function getCodHistory(req, res, next) {
       `SELECT s.settlement_id, s.delivery_partner, s.amount, s.settled_date,
               s.method, s.note, s.created_at,
               COUNT(o.or_id) AS order_count,
+              STRING_AGG('#' || o.or_id, ', ' ORDER BY o.or_id) AS orders,
               NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS recorded_by
          FROM "DELIVERY_COD_SETTLEMENT" s
          LEFT JOIN "ORDER" o ON o.cod_settlement_id = s.settlement_id

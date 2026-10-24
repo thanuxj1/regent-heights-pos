@@ -1,9 +1,10 @@
 import express from "express";
 import {
   requireAuth, requireCashierOrAbove, requireBranchAdminOr, CAPABILITIES,
-  requireDefaultNotRevoked, DEFAULT_PERMISSIONS,
+  requireDefaultNotRevoked, DEFAULT_PERMISSIONS, requireRole, ROLES,
 } from "../middleware/authMiddleware.js";
 import { getOutstandingCod, getCodHistory, createCodSettlement } from "../controllers/deliveryCodController.js";
+import { removeSettlement } from "../utils/settlementRemoval.js";
 
 const router = express.Router();
 
@@ -17,5 +18,8 @@ const viewCod = requireDefaultNotRevoked(DEFAULT_PERMISSIONS.VIEW_DIRECTORY, { u
 router.get("/outstanding", requireAuth, requireCashierOrAbove, viewCod, getOutstandingCod);
 router.get("/history", requireAuth, requireCashierOrAbove, viewCod, getCodHistory);
 router.post("/settle", requireAuth, requireCashierOrAbove, requireDefaultNotRevoked(DEFAULT_PERMISSIONS.POS_TERMINAL), createCodSettlement);
+// Undo a hand-over recorded by mistake: the Administrator's own correction.
+router.post("/settlements/:id/delete", requireAuth,
+  requireRole([ROLES.BRANCH_ADMIN, ROLES.ADMIN], "Administrator"), removeSettlement("cod"));
 
 export default router;

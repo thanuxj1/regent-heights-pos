@@ -334,6 +334,13 @@ export const getCreditHistory = async () => {
   return response.data;
 };
 
+/** An Administrator removes a COD hand-over or credit payment recorded by mistake. */
+export const removeSettlementRecord = async (kind, id, { reason, pin }) => {
+  const base = kind === "cod" ? "/delivery-cod" : "/credit";
+  const response = await api.post(`${base}/settlements/${id}/delete`, { reason, pin });
+  return response.data;
+};
+
 export const settleCredit = async (payload) => {
   const response = await api.post("/credit/settle", payload);
   return response.data;
