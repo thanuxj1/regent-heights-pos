@@ -6,7 +6,7 @@ import {
   getBookingById, getBookingFolio, getAvailability, checkInBooking, checkOutBooking,
   postFolioItem, deleteFolioItem, addBookingPayment, cancelBooking, getBookingConfirmation,
   getGuests, getAgents, getGuestById, updateGuest, getBranchById, getStayPolicy, getMealPlans,
-  deleteBookingWithPin, getDiscountApproval,
+  deleteBookingWithPin, getDiscountApproval, removeBookingPayment,
 } from "../../services/api";
 import { printGuestRegistration } from "../../utils/printGuestRegistration";
 import { readImageFile } from "../../utils/readImageFile";
@@ -63,6 +63,30 @@ export default function BookingDetail() {
     try { pinNeeded = Boolean((await getDiscountApproval())?.pin_needed); } catch { /* ask for it */ }
     setDeleting((d) => d && { ...d, pinNeeded });
   };
+  // Remove a payment entered by mistake (wrong method, wrong amount, twice).
+  const [removingPay, setRemovingPay] = useState(null); // { payment, reason, pin, pinNeeded, busy, error }
+  const openRemovePayment = async (payment) => {
+    setRemovingPay({ payment, reason: "", pin: "", pinNeeded: false, busy: false, error: "" });
+    let pinNeeded = true;
+    try { pinNeeded = Boolean((await getDiscountApproval())?.pin_needed); } catch { /* ask for it */ }
+    setRemovingPay((d) => d && { ...d, pinNeeded });
+  };
+  const confirmRemovePayment = async (e) => {
+    e.preventDefault();
+    const reason = removingPay.reason.trim();
+    if (reason.length < 3) { setRemovingPay({ ...removingPay, error: "Write why this payment is being removed." }); return; }
+    if (removingPay.pinNeeded && !/^\d{4,8}$/.test(removingPay.pin)) { setRemovingPay({ ...removingPay, error: "Enter the PIN (4 to 8 digits)." }); return; }
+    setRemovingPay({ ...removingPay, busy: true, error: "" });
+    try {
+      await removeBookingPayment(id, removingPay.payment.bp_id, { reason, pin: removingPay.pin });
+      setRemovingPay(null);
+      load();
+    } catch (err) {
+      setRemovingPay((d) => d && { ...d, busy: false, pin: "",
+        error: err?.response?.data?.message || err?.response?.data?.error || "Could not remove the payment" });
+    }
+  };
+
   const confirmDelete = async (e) => {
     e.preventDefault();
     const reason = deleting.reason.trim();
@@ -707,18 +731,31 @@ export default function BookingDetail() {
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#F8FAFC" }}>
-                  {["Date", "Kind", "Method", "Reference", "Amount"].map(h => <th key={h} style={th}>{h}</th>)}
+                  {["Date", "Kind", "Method", "Reference", "Amount", ...(isAdministrator ? [""] : [])].map((h, i) => <th key={h || i} style={th}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {booking.payments.map(p => (
                     <tr key={p.bp_id} style={{ borderTop: "1px solid #F1F5F9" }}>
-                      <td style={td}>{dmy(p.paid_at)}</td>
-                      <td style={td}>{p.kind}</td>
-                      <td style={td}>{p.method}</td>
+                      <td style={td}>
+                        {dmy(p.paid_at)}
+                        <span style={{ color: "#94A3B8", marginLeft: 6 }}>
+                          {new Date(p.paid_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </td>
+                      <td style={{ ...td, textTransform: "capitalize" }}>{p.kind}</td>
+                      <td style={{ ...td, textTransform: "capitalize" }}>{String(p.method || "").replace(/_/g, " ")}</td>
                       <td style={td}>{p.reference || "—"}</td>
                       <td style={{ ...td, fontWeight: 700, color: p.kind === "refund" ? "#DC2626" : "#059669" }}>
                         {p.kind === "refund" ? "-" : ""}{money(p.amount)}
                       </td>
+                      {isAdministrator && (
+                        <td style={{ ...td, textAlign: "right" }}>
+                          <button onClick={() => openRemovePayment(p)}
+                            style={{ ...btn("ghost"), padding: "4px 10px", fontSize: 12, color: "#B91C1C", borderColor: "#FECACA" }}>
+                            Remove
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -738,6 +775,40 @@ export default function BookingDetail() {
       )}
       {showCharge   && <ChargeModal  onClose={() => setShowCharge(false)}  onSave={async (p) => { await postFolioItem(id, p); setShowCharge(false); load(); }} />}
       {showPayment  && <PaymentModal balance={balance} onClose={() => setShowPayment(false)} onSave={async (p) => { await addBookingPayment(id, p); setShowPayment(false); load(); }} />}
+      {removingPay && (
+        <div style={modalWrap}>
+          <form onSubmit={confirmRemovePayment} style={modalBox(420)}>
+            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1E293B" }}>Remove this payment?</h3>
+            <p style={{ margin: "6px 0 12px", fontSize: 13, color: "#64748B", lineHeight: 1.5 }}>
+              {money(removingPay.payment.amount)} · {String(removingPay.payment.method || "").replace(/_/g, " ")} · {removingPay.payment.kind}
+              {" · "}{dmy(removingPay.payment.paid_at)} {new Date(removingPay.payment.paid_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+            </p>
+            <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 10px", marginBottom: 14, lineHeight: 1.5 }}>
+              For a payment entered by mistake — the wrong method, the wrong amount, or entered twice. It comes off the
+              bill, Transactions, the reports and the cash drawer. Money really handed back to the guest is a <strong>refund</strong> instead.
+              Your name and the reason go in the Activity Log.
+            </div>
+            <label style={{ ...label, marginBottom: 4 }}>Reason</label>
+            <input autoFocus value={removingPay.reason} maxLength={200} placeholder="e.g. entered twice / wrong method"
+              onChange={(e) => setRemovingPay({ ...removingPay, reason: e.target.value })} style={{ ...input, marginBottom: 12 }} />
+            {removingPay.pinNeeded && (
+              <>
+                <label style={{ ...label, marginBottom: 4 }}>PIN</label>
+                <input type="password" inputMode="numeric" autoComplete="off" value={removingPay.pin}
+                  onChange={(e) => setRemovingPay({ ...removingPay, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })}
+                  style={{ ...input, letterSpacing: 4 }} />
+              </>
+            )}
+            {removingPay.error && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: "#B91C1C" }}>{removingPay.error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+              <button type="button" onClick={() => setRemovingPay(null)} disabled={removingPay.busy} style={{ ...btn("ghost"), flex: 1 }}>Keep it</button>
+              <button type="submit" disabled={removingPay.busy} style={{ ...btn("danger"), flex: 1, opacity: removingPay.busy ? 0.6 : 1 }}>
+                {removingPay.busy ? "Removing…" : "Remove payment"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
       {showConfirm && confirmation && <ConfirmationModal data={confirmation} onClose={() => setShowConfirm(false)} />}
       {editing && (
         <BookingFormModal
@@ -811,9 +882,21 @@ function PaymentModal({ balance, onClose, onSave }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Nothing owed: taking another payment would only put the guest in credit
+  // (the server refuses it too). A refund is still allowed.
+  const fullyPaid = balance <= 0.01;
+  const tooMuch = form.kind !== "refund" && Number(form.amount) > Math.max(balance, 0) + 0.01;
+
   const submit = async (e) => {
     e.preventDefault();
+    if (busy) return;
     if (!(Number(form.amount) > 0)) { setErr("Amount must be greater than zero"); return; }
+    if (tooMuch) {
+      setErr(fullyPaid
+        ? "This booking is already fully paid. If a payment was entered with the wrong method or amount, remove it from the Payments list and enter it again."
+        : `Only ${money(balance)} is owed — this is more than the bill.`);
+      return;
+    }
     setBusy(true);
     try { await onSave({ ...form, amount: Number(form.amount) }); }
     catch (ex) { setErr(ex?.response?.data?.message || "Could not record payment"); setBusy(false); }
@@ -823,6 +906,12 @@ function PaymentModal({ balance, onClose, onSave }) {
     <div style={modalWrap}><div style={modalBox(400)}>
       <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 700, color: "#1E293B" }}>Record Payment</h2>
       <div style={{ fontSize: 13, color: "#64748B", marginBottom: 18 }}>Outstanding balance: <strong>{money(balance)}</strong></div>
+      {fullyPaid && form.kind !== "refund" && (
+        <div style={{ fontSize: 13, color: "#065F46", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 8, padding: "10px 12px", marginBottom: 14, lineHeight: 1.5 }}>
+          <strong>This booking is fully paid.</strong> Nothing more needs to be taken. To fix a payment entered with the
+          wrong method or amount, remove it from the Payments list below and enter it again.
+        </div>
+      )}
       {err && <div style={errorBox}>{err}</div>}
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <label style={label}>Amount *
@@ -847,7 +936,8 @@ function PaymentModal({ balance, onClose, onSave }) {
         </label>
         <div style={{ display: "flex", gap: 12 }}>
           <button type="button" onClick={onClose} style={{ ...btn("ghost"), flex: 1, padding: 11 }}>Cancel</button>
-          <button type="submit" disabled={busy} style={{ ...btn("success"), flex: 1, padding: 11 }}>
+          <button type="submit" disabled={busy || (fullyPaid && form.kind !== "refund")}
+            style={{ ...btn("success"), flex: 1, padding: 11, opacity: busy || (fullyPaid && form.kind !== "refund") ? 0.5 : 1 }}>
             {busy ? "Saving…" : "Record Payment"}
           </button>
         </div>

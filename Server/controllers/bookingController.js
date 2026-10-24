@@ -1369,17 +1369,49 @@ export async function deleteFolioItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * What the guest is billed and what they have paid, for one booking. The bill
+ * is the folio once the guest has checked in (room, meals, room service, any
+ * charge posted), and the booking's quoted total before that.
+ */
+async function billAndPaid(db, booking_id) {
+  const { rows: [r] } = await db.query(
+    `SELECT b.grand_total,
+            EXISTS (SELECT 1 FROM "FOLIO" f WHERE f.booking_id = b.booking_id) AS has_folio,
+            (SELECT COALESCE(SUM(fi.amount), 0) FROM "FOLIO" f JOIN "FOLIO_ITEM" fi ON fi.folio_id = f.folio_id
+              WHERE f.booking_id = b.booking_id) AS folio_charges,
+            (SELECT COALESCE(SUM(CASE WHEN kind='refund' THEN -amount ELSE amount END), 0)
+               FROM "BOOKING_PAYMENT" WHERE booking_id = b.booking_id) AS paid
+       FROM "BOOKING" b WHERE b.booking_id = $1`, [booking_id]);
+  const bill = r.has_folio ? num(r.folio_charges) : num(r.grand_total);
+  return { bill, paid: num(r.paid), owed: +(bill - num(r.paid)).toFixed(2) };
+}
+
+/** Keep the booking's advance_paid mirror in step with its payments. */
+const syncPaidMirror = (db, booking_id) => db.query(
+  `UPDATE "BOOKING" SET advance_paid = (
+     SELECT COALESCE(SUM(CASE WHEN kind='refund' THEN -amount ELSE amount END),0)
+     FROM "BOOKING_PAYMENT" WHERE booking_id=$1
+   ) WHERE booking_id=$1`, [booking_id]);
+
 /** POST /api/hotel/bookings/:id/payments */
 export async function addPayment(req, res, next) {
+  const client = await pool.connect();
   try {
     const id = Number(req.params.id);
     await assertBookingInScope(req, res, id);
     const { amount, method, kind, reference } = req.body;
     const paid = moneyField(amount, "Amount");
-    if (!(paid > 0)) { res.status(400); return next(new Error("Amount must be greater than zero.")); }
+    if (!(paid > 0)) { res.status(400); throw new Error("Amount must be greater than zero."); }
     const payMethod = oneOf(method, "Payment method", PAYMENT_METHODS, "cash");
     const payKind   = oneOf(kind,   "Payment type",   PAYMENT_KINDS,   "settlement");
     const payRef    = textField(reference, "Reference", 100);
+
+    // One payment at a time per booking: the checks below read what has been
+    // paid, so two submits a moment apart must not both read the old figure.
+    await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM "BOOKING" WHERE booking_id = $1 FOR UPDATE`, [id]);
+    const { bill, paid: already, owed } = await billAndPaid(client, id);
 
     // You cannot give back money that was never taken.
     //
@@ -1388,51 +1420,106 @@ export async function addPayment(req, res, next) {
     // owing 45,000 more than they do — and is 45,000 in cash out of the drawer
     // with a receipt to justify it. Refunds are capped at what this booking has
     // actually received.
-    if (payKind === "refund") {
-      const { rows: net } = await pool.query(
-        `SELECT COALESCE(SUM(CASE WHEN kind='refund' THEN -amount ELSE amount END),0) AS paid
-         FROM "BOOKING_PAYMENT" WHERE booking_id=$1`,
-        [id]
-      );
-      const available = Number(net[0].paid);
-      if (paid > available + 0.01) {
-        res.status(400);
-        return next(new Error(
-          available <= 0
-            ? "Nothing has been paid on this booking, so there is nothing to refund."
-            : `Only LKR ${available.toFixed(2)} has been paid on this booking; `
-              + `a refund cannot exceed it.`
-        ));
-      }
+    if (payKind === "refund" && paid > already + 0.01) {
+      res.status(400);
+      throw new Error(
+        already <= 0
+          ? "Nothing has been paid on this booking, so there is nothing to refund."
+          : `Only LKR ${already.toFixed(2)} has been paid on this booking; a refund cannot exceed it.`);
+    }
+
+    // Nor take more than the guest owes. On 2026-10-24 a 5,990 balance was paid,
+    // then paid twice more within a minute (card, cash, card — the desk trying
+    // to change the method), and every one was accepted: the bill showed the
+    // guest 11,980 in credit and the reports counted 17,970. A payment is
+    // corrected by removing it (Administrators, removePayment below), never by
+    // adding another.
+    if (payKind !== "refund" && paid > owed + 0.01) {
+      res.status(409);
+      throw new Error(owed <= 0.01
+        ? `This booking is already fully paid (LKR ${already.toFixed(2)} of LKR ${bill.toFixed(2)}), so nothing more can be taken. `
+          + "If a payment was entered with the wrong method or amount, remove it and enter it again."
+        : `Only LKR ${owed.toFixed(2)} is owed on this booking; LKR ${paid.toFixed(2)} would be more than the bill. `
+          + "If the guest is paying for something new, post the charge first.");
     }
 
     // The same drawer a restaurant sale would use — a room payment taken in cash
     // is money in the same physical till, and must be counted with it.
-    const drawer = await pool.query(
+    const drawer = await client.query(
       `SELECT cs.session_id FROM "CASH_SESSION" cs
        JOIN "BOOKING" b ON b.b_id = cs.b_id
        WHERE b.booking_id = $1 AND cs.opened_by = $2 AND cs.status = 'open'`,
       [id, req.user?.u_id || null],
     );
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `INSERT INTO "BOOKING_PAYMENT" (booking_id, amount, method, kind, reference, received_by, session_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [id, paid, payMethod, payKind, payRef, req.user?.u_id || null, drawer.rows[0]?.session_id ?? null]
     );
+    await syncPaidMirror(client, id);
+    await client.query("COMMIT");
 
-    // Keep the booking's advance_paid mirror in step
-    await pool.query(
-      `UPDATE "BOOKING" SET advance_paid = (
-         SELECT COALESCE(SUM(CASE WHEN kind='refund' THEN -amount ELSE amount END),0)
-         FROM "BOOKING_PAYMENT" WHERE booking_id=$1
-       ) WHERE booking_id=$1`,
-      [id]
-    );
     logActivity(req, { action: "payment", entity: "booking", entity_id: id,
       summary: `Took a ${rows[0].kind || "payment"} of ${rows[0].amount} by ${rows[0].method || "cash"}`,
       details: { amount: rows[0].amount, method: rows[0].method, reference: rows[0].reference } });
     res.status(201).json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * POST /api/hotel/bookings/:id/payments/:paymentId/delete  body: { reason, pin? }
+ *
+ * An Administrator removes a payment entered by mistake — the wrong method, the
+ * wrong amount, or the same payment twice. Without this the only way to
+ * "correct" a payment was to add another, which is how one bill came to be
+ * paid three times. A reason always; the approval PIN once one is set. The
+ * Activity Log keeps the removed payment.
+ */
+export async function removePayment(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id);
+    const paymentId = Number(req.params.paymentId);
+    await assertBookingInScope(req, res, id);
+    const reason = String(req.body?.reason ?? "").trim();
+    if (reason.length < 3) { res.status(400); throw new Error("Say why this payment is being removed — it goes in the Activity Log."); }
+    if (reason.length > 200) { res.status(400); throw new Error("That reason is too long (200 characters)."); }
+
+    await client.query("BEGIN");
+    const { rows: [b] } = await client.query(
+      `SELECT booking_id, b_id, booking_ref FROM "BOOKING" WHERE booking_id = $1 FOR UPDATE`, [id]);
+    if (!b) { res.status(404); throw new Error("Booking not found"); }
+    const { rows: [p] } = await client.query(
+      `SELECT * FROM "BOOKING_PAYMENT" WHERE bp_id = $1 AND booking_id = $2`, [paymentId, id]);
+    if (!p) { res.status(404); throw new Error("Payment not found on this booking"); }
+
+    const pin = await checkDeletePin(req, b.b_id);
+    if (!pin.ok) { res.status(pin.status); throw new Error(pin.message); }
+
+    await client.query(`DELETE FROM "BOOKING_PAYMENT" WHERE bp_id = $1`, [paymentId]);
+    await syncPaidMirror(client, id);
+    await client.query("COMMIT");
+
+    const method = String(p.method || "cash").replace(/_/g, " ");
+    logActivity(req, {
+      action: "delete", entity: "payment", entity_id: paymentId, b_id: b.b_id,
+      summary: `Removed a ${p.kind} of LKR ${Number(p.amount).toFixed(2)} by ${method} from booking ${b.booking_ref} — ${reason}. `
+             + (pin.pinSet ? `PIN: ${pin.approver.name || "manager"}` : "No PIN set at the property"),
+      details: { reason, booking_id: id, booking_ref: b.booking_ref, payment: p,
+                 approved_by: pin.approver.u_id, approver: pin.approver.name },
+    });
+    res.json({ success: true, removed: paymentId });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
 }
 
 // ─── CHECK-OUT ───────────────────────────────────────────────────────────────
@@ -1506,8 +1593,19 @@ export async function checkOut(req, res, next) {
       }
     }
 
-    // Optional settlement taken at the desk
+    // Optional settlement taken at the desk — never more than is owed, the same
+    // rule as a payment taken on its own (addPayment).
     if (num(req.body?.settle_amount) > 0) {
+      const settleMethod = oneOf(req.body.method, "Payment method", PAYMENT_METHODS, "cash");
+      const { owed } = await billAndPaid(client, id);
+      if (num(req.body.settle_amount) > owed + 0.01) {
+        await client.query("ROLLBACK");
+        res.status(409);
+        return next(new Error(owed <= 0.01
+          ? "This booking is already fully paid, so no settlement is needed. Check out without taking a payment."
+          : `Only LKR ${owed.toFixed(2)} is owed; LKR ${num(req.body.settle_amount).toFixed(2)} would be more than the bill.`));
+      }
+      req.body.method = settleMethod;
       const drawer = await client.query(
         `SELECT cs.session_id FROM "CASH_SESSION" cs
          JOIN "BOOKING" b ON b.b_id = cs.b_id

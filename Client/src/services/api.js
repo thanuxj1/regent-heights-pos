@@ -977,6 +977,11 @@ export const cancelBooking = async (id, reason) => {
   const res = await api.post(`/hotel/bookings/${id}/cancel`, { reason });
   return res.data;
 };
+/** An Administrator removes a payment entered by mistake. */
+export const removeBookingPayment = async (id, paymentId, { reason, pin }) => {
+  const res = await api.post(`/hotel/bookings/${id}/payments/${paymentId}/delete`, { reason, pin });
+  return res.data;
+};
 /** An Administrator deletes a booking made by mistake, with its payments. */
 export const deleteBookingWithPin = async (id, { reason, pin }) => {
   const res = await api.post(`/hotel/bookings/${id}/delete`, { reason, pin });

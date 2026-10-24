@@ -11,7 +11,7 @@ import {
 import {
   getGuests, getGuestById, createGuest, updateGuest,
   getAvailability, getBookings, getBookingById, createBooking, updateBooking, cancelBooking, deleteBooking,
-  checkIn, checkOut, getFolio, postFolioItem, deleteFolioItem, addPayment,
+  checkIn, checkOut, getFolio, postFolioItem, deleteFolioItem, addPayment, removePayment,
   getDashboard, getConfirmation, getStayPolicy, updateStayPolicy,
 } from "../controllers/bookingController.js";
 import {
@@ -100,5 +100,9 @@ router.get("/bookings/:id/folio",                  getFolio);
 router.post("/bookings/:id/folio/items",           postFolioItem);
 router.delete("/bookings/:id/folio/items/:itemId", deleteFolioItem);
 router.post("/bookings/:id/payments",              addPayment);
+// A payment entered by mistake (wrong method, wrong amount, entered twice) is
+// removed by an Administrator — a reason always, a PIN once one is set.
+router.post("/bookings/:id/payments/:paymentId/delete",
+  requireRole([ROLES.BRANCH_ADMIN, ROLES.ADMIN], "Administrator"), removePayment);
 
 export default router;
