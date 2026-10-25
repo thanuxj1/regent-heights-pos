@@ -26,9 +26,10 @@ export default function TransactionDetailsModal({ item, onClose }) {
     setFetchError('');
     const load = async () => {
       // A hotel payment, an expense, a commission record, a waste record, and
-      // a COD settlement are each already the whole thing — a single row,
-      // not an order with lines to fetch.
-      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission' || item.type === 'waste' || item.type === 'cod') {
+      // a COD settlement or a credit payment are each already the whole thing —
+      // a single row, not an order with lines to fetch. (A credit payment used
+      // to fall through to the purchase-order lookup below, by its own number.)
+      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission' || item.type === 'waste' || item.type === 'cod' || item.type === 'credit') {
         setDetails(null);
         return;
       }
@@ -137,6 +138,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
                   : item.type === 'commission' ? 'Commission Record #'
                   : item.type === 'waste' ? 'Waste Record #'
                   : item.type === 'cod' ? 'Settlement #'
+                  : item.type === 'credit' ? 'Credit Payment #'
                   : 'Invoice / PO Number'}
               </span>
               <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.type === 'hotel' ? '' : '#'}{item.invoiceNo}</span>
@@ -153,7 +155,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
             </div>
             <div>
               <span className="block text-slate-400 font-medium uppercase tracking-wider">Total Value Gross</span>
-              <span className={`text-sm font-bold font-mono mt-0.5 block ${item.type === 'sale' || item.type === 'cod' || (item.type === 'hotel' && item.direction !== 'out') ? 'text-emerald-600' : 'text-rose-600'}`}>
+              <span className={`text-sm font-bold font-mono mt-0.5 block ${(item.direction ? item.direction !== 'out' : ['sale', 'cod', 'credit', 'hotel'].includes(item.type)) ? 'text-emerald-600' : 'text-rose-600'}`}>
                 LKR {formatAmount(item.amount)}
               </span>
             </div>
@@ -257,6 +259,25 @@ export default function TransactionDetailsModal({ item, onClose }) {
                   <p className="mt-3 text-slate-500">
                     Cash-on-delivery cash settled by this partner{item.raw?.reference ? ` — ${item.raw.reference}` : ''}.
                     See Delivery COD for which orders it covered.
+                  </p>
+                </div>
+              )}
+              {item.type === 'credit' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Customer</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.party || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Recorded by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.handled_by || 'Not recorded'}</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-slate-500">
+                    One payment from a credit customer settling their tab
+                    {item.invoiceLabel ? `: ${item.invoiceLabel}` : ''}. Each order was given on credit earlier and counts as
+                    takings on the day this payment came in. See Credit Sales for the full history.
                   </p>
                 </div>
               )}

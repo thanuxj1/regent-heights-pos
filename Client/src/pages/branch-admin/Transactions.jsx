@@ -69,21 +69,31 @@ export default function Transactions() {
 
         const rows = (report?.transactions || []).map((t, i) => {
           const type = ledgerType(t.type);
+          // A COD hand-over or a credit customer's payment is one payment that can
+          // cover several orders (Ms.Charlotte paid six credit bills at once): its
+          // own number identifies it, and the orders it paid for are the invoice.
+          // Credit payments had no entry here, so they showed as "TX##70, #71…".
+          const settlement = type === "cod" || type === "credit";
           const invoiceNo = type === "sale" ? t.or_id
             : type === "purchase" ? t.po_id
             : type === "expense" ? t.exp_id
             : type === "commission" ? t.record_id
             : type === "waste" ? t.waste_id
-            : type === "cod" ? t.settlement_id
+            : settlement ? t.settlement_id
             : t.reference;
-          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM", waste: "WASTE", cod: "COD" }[type] || "TX";
+          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM", waste: "WASTE", cod: "COD", credit: "CREDIT" }[type] || "TX";
+          const ordersPaid = settlement ? String(t.reference || "").split(" — ")[0] : "";
 
           return {
             id: `${type}-${invoiceNo ?? i}-${t.at}`,
             type,
             direction: t.direction,
-            txId: `${txPrefix}#${invoiceNo ?? t.reference ?? i}`,
+            txId: `${txPrefix}#${invoiceNo ?? i}`,
             invoiceNo,
+            // What the Invoice column shows: the orders a settlement paid for.
+            invoiceLabel: settlement
+              ? (ordersPaid ? `${ordersPaid}${ordersPaid.includes(",") ? ` (${ordersPaid.split(",").length} orders)` : ""}` : "—")
+              : null,
             branchId: branchFromUser,
             branchLabel: branchName,
             cashierId: t.handled_by_id ?? null,
@@ -117,10 +127,10 @@ export default function Transactions() {
 
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
-      // Room payments count as income; a refund to a guest counts as money out.
-      // A COD settlement is also income — cash a delivery partner was holding
-      // for us, finally landing.
-      const moneyIn = t.type === "sale" || t.type === "cod" || (t.type === "hotel" && t.direction !== "out");
+      // In or out as the server says (reportController marks every row). A
+      // hand-picked list of "income" types left credit payments out, so a
+      // customer settling their tab was filed under expenses.
+      const moneyIn = t.direction !== "out";
       if (filters.tab === "income" && !moneyIn) return false;
       if (filters.tab === "expense" && moneyIn) return false;
 
@@ -162,7 +172,7 @@ export default function Transactions() {
       return [
         dateCell(dayKey(t.date)), time, t.type, t.direction,
         t.branchLabel || "", t.cashierLabel || "", t.paymentMethod || "",
-        t.amount, t.invoiceNo ?? "",
+        t.amount, t.invoiceLabel ?? t.invoiceNo ?? "",
       ];
     });
     exportCsv(`financial-ledger_${dayKey(new Date())}`, head, rows);
