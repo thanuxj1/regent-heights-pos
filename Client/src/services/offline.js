@@ -163,6 +163,14 @@ export async function flushQueue(send) {
           setReachable(false);
           break; // still down — leave the rest in order
         }
+        // Signed out (the session ran out during a long outage, or someone
+        // logged out): the sale is fine, the login is not. It stays queued and
+        // goes once someone signs in again — parking it here used to mean the
+        // cashier had to ring it up again by hand.
+        if (err?.response?.status === 401) {
+          setReachable(true);
+          break;
+        }
         // The server answered, it just answered "no" — so it is up.
         setReachable(true);
         park(sale, err?.response?.data?.error || err?.message || "Rejected by the server");

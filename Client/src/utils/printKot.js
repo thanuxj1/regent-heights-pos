@@ -108,7 +108,7 @@ export function printKot(order, items, meta = {}) {
   node.innerHTML = kotHtml(order, items, meta);
   // 80mm paper, of which a thermal head prints about 72: a 6mm margin each side
   // leaves a 68mm ticket that sits inside that band.
-  printElement(node, { title: `KOT-${order?.or_id ?? ""}`, widthMm: 80, paddingMm: 6 });
+  printElement(node, { title: `KOT-${order?.or_id ?? ""}`, widthMm: 80, paddingMm: 6, onDone: meta.onDone });
 }
 
 /**

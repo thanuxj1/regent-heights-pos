@@ -10,7 +10,12 @@ import { printHtml } from "./printElement";
  */
 const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export const printReceipt = (invoice) => {
+/**
+ * @param invoice  the bill; branchAddress / branchPhone print under the name when given
+ * @param onDone   called once the print window has finished, so another print
+ *                 (a kitchen ticket) can follow without cancelling this one
+ */
+export const printReceipt = (invoice, { onDone } = {}) => {
   const subtotal = Number(invoice.subtotal || 0).toFixed(2);
   const discount = Number(invoice.discount || 0).toFixed(2);
   const tax = Number(invoice.tax || 0).toFixed(2);
@@ -126,8 +131,10 @@ export const printReceipt = (invoice) => {
           <img src="${window.location.origin}/brand-logo.png" alt=""
                onerror="this.style.display='none'"
                style="max-width:200px;max-height:70px;object-fit:contain;margin-bottom:8px;" />
-          <div class="hotel-name">${invoice.branchName || "Payment Receipt"}</div>
-          <div class="subtitle">Payment Receipt</div>
+          <div class="hotel-name">${escapeHtml(invoice.branchName || "Payment Receipt")}</div>
+          ${invoice.branchAddress ? `<div class="subtitle">${escapeHtml(invoice.branchAddress)}</div>` : ""}
+          ${invoice.branchPhone ? `<div class="subtitle">Tel: ${escapeHtml(invoice.branchPhone)}</div>` : ""}
+          <div class="subtitle">${invoice.offline ? "Payment Receipt — saved offline" : "Payment Receipt"}</div>
         </div>
 
         <div class="divider"></div>
@@ -165,7 +172,7 @@ export const printReceipt = (invoice) => {
             .map(
               (item) => `
                 <div class="item-row">
-                  <span>${item.pro_name} x ${item.qty}</span>
+                  <span>${escapeHtml(item.pro_name)} x ${item.qty}</span>
                   <span>LKR ${Number(item.total).toFixed(2)}</span>
                 </div>
               `
@@ -228,5 +235,5 @@ export const printReceipt = (invoice) => {
     </html>
   `;
 
-  printHtml(page, { title: `Bill ${invoice.invoiceNo ?? invoice.orderId ?? ""}`.trim() });
+  printHtml(page, { title: `Bill ${invoice.invoiceNo ?? invoice.orderId ?? ""}`.trim(), onDone });
 };

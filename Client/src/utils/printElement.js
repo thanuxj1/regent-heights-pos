@@ -144,7 +144,13 @@ export function printHtml(page, { title = document.title, onDone } = {}) {
     if (typeof onDone === "function") onDone();
   };
 
+  // One print per frame. A frame put on the page before its content fires
+  // "load" twice (an empty page, then the bill), and each fired a print: a till
+  // printing without a dialog (kiosk mode) gave every bill and ticket twice.
+  let started = false;
   frame.onload = () => {
+    if (started) return;
+    started = true;
     const win = frame.contentWindow;
     if (!win) {
       finish();
@@ -165,6 +171,7 @@ export function printHtml(page, { title = document.title, onDone } = {}) {
     }, 250);
   };
 
-  document.body.appendChild(frame);
+  // Content first, so the only "load" is the bill's.
   frame.srcdoc = page;
+  document.body.appendChild(frame);
 }

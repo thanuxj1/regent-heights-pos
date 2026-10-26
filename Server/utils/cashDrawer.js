@@ -29,8 +29,12 @@ export const CASH_TENDERS = ["cash"];
  * manager — it is the one action that lowers the expected figure.
  */
 export async function sessionTotals(db, session_id) {
-  const [sales, movements, hotel] = await Promise.all([
-    db.query(
+  // One after another, not side by side: `db` is a single connection when a
+  // drawer is being closed inside a transaction, and pg refuses (from v9; it
+  // warns today) a second query on a connection that is still busy.
+  const run = async (queries) => { const out = []; for (const q of queries) out.push(await q()); return out; };
+  const [sales, movements, hotel] = await run([
+    () => db.query(
       `SELECT
          COALESCE(SUM("or_totalCostWtax") FILTER (
            WHERE payment_method = ANY($2::text[]) AND or_status <> 'cancelled'), 0) AS cash_sales,
@@ -45,7 +49,7 @@ export async function sessionTotals(db, session_id) {
        FROM "ORDER" WHERE session_id = $1`,
       [session_id, CASH_TENDERS],
     ),
-    db.query(
+    () => db.query(
       `SELECT
          COALESCE(SUM(amount) FILTER (WHERE kind = 'pay_in'), 0)  AS pay_in,
          COALESCE(SUM(amount) FILTER (WHERE kind = 'pay_out'), 0) AS pay_out,
@@ -55,7 +59,7 @@ export async function sessionTotals(db, session_id) {
     ),
     // A guest's cash advance or settlement, taken against this same drawer. A
     // refund handed back in cash comes back out of it, the same as a void.
-    db.query(
+    () => db.query(
       `SELECT
          COALESCE(SUM(amount) FILTER (WHERE method = ANY($2::text[]) AND kind <> 'refund'), 0) AS hotel_cash_in,
          COALESCE(SUM(amount) FILTER (WHERE method = ANY($2::text[]) AND kind = 'refund'), 0)   AS hotel_cash_refunds,

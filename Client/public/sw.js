@@ -82,8 +82,16 @@ function cacheKey(request) {
  */
 async function networkFirst(request, cacheName, timeoutMs = 4000, key = request) {
   const cache = await caches.open(cacheName);
-  const network = fetch(request).then((response) => {
+  const network = fetch(request).then(async (response) => {
     if (response.ok) cache.put(key, response.clone());
+    // A server error (5xx) is no better than no answer: the server or the
+    // proxy in front of it is down. Serve the saved copy if there is one —
+    // only a network failure used to count, so a 502 from a gateway emptied
+    // the business name off the receipt.
+    if (response.status >= 500) {
+      const hit = await cache.match(key);
+      if (hit) return hit;
+    }
     return response;
   });
   network.catch(() => {}); // a late failure after a saved copy was served is not an error

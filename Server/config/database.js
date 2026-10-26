@@ -35,7 +35,11 @@ const connectionString = String(process.env.DATABASE_URL || "")
 
 const pool = new Pool({
   connectionString,
-  ssl: {
+  // A hosted database (Neon) needs TLS. One on the same machine — the
+  // restaurant's own server, or a local copy for trying things — usually has
+  // none, and insisting on it stopped the server starting. DB_SSL=false turns
+  // it off; anything else keeps it.
+  ssl: String(process.env.DB_SSL).toLowerCase() === "false" ? false : {
     rejectUnauthorized: false,
   },
 

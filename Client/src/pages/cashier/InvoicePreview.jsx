@@ -1,29 +1,24 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { FaPrint, FaTimes } from "react-icons/fa";
 import { printReceipt } from "../../utils/printReceipt";
 import { createPayment } from "../../services/api";
 import { todayKey } from "../../utils/dates";
 
+// Only fills gaps in a real sale. There used to be a sample bill here ("Signature
+// Cocktail", LKR 715, "Kandy Branch"): opening this page with no sale — a reload
+// clears it — showed that bill, and Pay tried to record a payment against it.
+// With no sale the page now goes back to the till (below).
 const defaultState = {
-  orderId: "INV-0000000",
   cashierName: "Cashier",
-  branchName: "Kandy Branch",
-  branchLabel: "Kandy\nBranch",
+  branchName: "",
+  branchLabel: "",
   paymentMethod: "Cash",
-  items: [
-    {
-      Bpro_id: 3,
-      pro_name: "Signature Cocktail",
-      unitPrice: 650,
-      qty: 1,
-      total: 650,
-    },
-  ],
-  subtotal: 650,
+  items: [],
+  subtotal: 0,
   discount: 0,
-  tax: 65,
-  total: 715,
+  tax: 0,
+  total: 0,
 };
 
 const InvoicePreview = () => {
@@ -48,6 +43,9 @@ const InvoicePreview = () => {
     const timer = setTimeout(() => navigate("/cashier/pos"), printed ? 0 : 3000);
     return () => clearTimeout(timer);
   }, [isPaid, printed, navigate]);
+
+  // No sale to show (opened directly, or reloaded): back to the till.
+  if (!location.state?.orderId) return <Navigate to="/cashier/pos" replace />;
 
   const grandTotal = Number(invoice.total ?? 0).toFixed(2);
   const subtotalNum = Number(invoice.subtotal ?? 0);

@@ -117,6 +117,8 @@ const CashierPos = () => {
   };
   useEffect(() => { if (!isManager) refreshDiscountPin(); }, [isManager]); // eslint-disable-line react-hooks/exhaustive-deps
   const [branchName, setBranchName] = useState("");
+  // Printed under the name on every receipt (Business Profile).
+  const [branchContact, setBranchContact] = useState({ branchAddress: "", branchPhone: "" });
   const [showOrderNotes, setShowOrderNotes] = useState(false);
   const [sentToKitchen, setSentToKitchen] = useState(false);
   const [branchId, setBranchId] = useState(null);
@@ -359,6 +361,7 @@ const CashierPos = () => {
         invoiceNo: o.or_id,
         cashierName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(),
         branchName,
+        ...branchContact,
         items,
         subtotal,
         discount: Number(ord.discount_pct || 0),
@@ -474,7 +477,10 @@ const CashierPos = () => {
 
         if (branchResult.status === "fulfilled") {
           const branch = branchResult.value;
-          setBranchName(branch?.B_name ?? branch?.data?.B_name ?? "Selected branch");
+          const b = branch?.data ?? branch;
+          // Blank rather than a made-up name: the receipt then reads "Payment Receipt".
+          setBranchName(b?.B_name ?? "");
+          setBranchContact({ branchAddress: b?.B_address ?? "", branchPhone: b?.B_conNo ?? "" });
         }
 
         if (productsResult.status === "rejected") throw productsResult.reason;
@@ -1165,6 +1171,48 @@ const CashierPos = () => {
           // The network is down. The sale is kept exactly as it would have been
           // sent, and goes out the moment the connection is back.
           queueSale(sale);
+
+          // Printing happens on this till, so it works with no connection: the
+          // customer still gets a bill, and — because the kitchen screen cannot
+          // be reached — the kitchen gets a paper ticket. Both carry a reference
+          // made from the sale's own key, so the bill can be matched later. The
+          // ticket prints once the bill's print window has finished.
+          const offlineRef = `OFF-${String(sale.order.client_ref).replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase()}`;
+          const staffName = `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim();
+          const ticketItems = cart.map((i) => ({ name: i.pro_name, qty: i.qty }));
+          const printTicket = () => {
+            try {
+              printKotAtTill(
+                { or_id: offlineRef, or_type: orderType, allergies, addons, notes, customer: customerLabel() },
+                ticketItems, { branchName, staffName },
+              );
+            } catch { /* the sale is safe; a ticket can be written by hand */ }
+          };
+          try {
+            printReceipt({
+              orderId: offlineRef,
+              invoiceNo: offlineRef,
+              offline: true,
+              cashierName: staffName || "Cashier",
+              branchName,
+              ...branchContact,
+              paymentMethod: isDelivery
+                ? DELIVERY_PAY_LABEL[deliveryPaymentMethod] || deliveryPaymentMethod
+                : effectivePaymentMethod === "Bank" ? "Bank transfer" : effectivePaymentMethod,
+              credit: isCreditSale() ? { customer: creditName.trim(), phone: creditPhone.trim() } : null,
+              customer: isDelivery && customerFields().customer_name
+                ? { name: customerFields().customer_name, phone: customerFields().customer_phone }
+                : null,
+              items: cart.map((i) => ({ pro_name: i.pro_name, qty: i.qty, total: Number((i.unitPrice * i.qty).toFixed(2)) })),
+              subtotal: Number(subtotal.toFixed(2)),
+              discount: Number(discountPct || 0),
+              serviceFee: Number(serviceFee || 0),
+              deliveryCharge: deliveryChargeAmount,
+              tax: Number(tax.toFixed(2)),
+              total: Number(total.toFixed(2)),
+            }, { onDone: printTicket });
+          } catch { printTicket(); }
+
           setCart([]);
           setSentToKitchen(false);
           setEditingOrderId(null);
@@ -1172,8 +1220,8 @@ const CashierPos = () => {
           setEditingOrderTableId(null);
           setSubmitting(false);
           setSuccessNote(
-            `Saved offline — LKR ${total.toFixed(2)} taken. It will be sent automatically ` +
-            `when the connection is back. Nothing is lost if this till is closed.`,
+            `Saved offline (${offlineRef}) — LKR ${total.toFixed(2)} taken; bill and kitchen ticket printed. ` +
+            `It will be sent automatically when the connection is back. Nothing is lost if this till is closed.`,
           );
           return;
         }
@@ -1207,7 +1255,9 @@ const CashierPos = () => {
           orderId,
           cashierName: `${user?.u_fname || "Cashier"} ${user?.u_lname || ""}`.trim(),
           branchName,
-          branchLabel: `${branchName.split(" ")[0] || branchName}\nBranch`,
+          ...branchContact,
+          // The name as written: "<first word>\nBranch" turned a two-word name into "<first word> Branch".
+          branchLabel: branchName,
           paymentMethod: isDelivery
             ? DELIVERY_PAY_LABEL[deliveryPaymentMethod] || deliveryPaymentMethod
             : paymentMethod === "Bank" ? "Bank transfer" : paymentMethod,
