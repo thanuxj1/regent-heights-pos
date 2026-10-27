@@ -85,9 +85,6 @@ export default function Accounting() {
     [customCats],
   );
   const catOf = (key) => allCats.find(c => c.key === key);
-  // Filtering by a category nothing is filed under shows nothing, so the
-  // filter offers only those in use. Adding an expense still offers them all.
-  const filterCats = catUsed ? allCats.filter(c => catUsed[c.key] || c.key === filterCat) : allCats;
   const addCat = async (ev) => {
     ev.preventDefault(); setCatError("");
     try { await createExpenseCategory({ ...catForm, b_id: branchId }); setCatForm({ name:"", department:"shared" }); await loadCats(); }
@@ -106,6 +103,9 @@ export default function Accounting() {
   };
 
   const [filterCat, setFilterCat] = useState("all");
+  // Filtering by a category nothing is filed under shows nothing, so the
+  // filter offers only those in use. Adding an expense still offers them all.
+  const filterCats = catUsed ? allCats.filter(c => catUsed[c.key] || c.key === filterCat) : allCats;
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo]   = useState("");
 
