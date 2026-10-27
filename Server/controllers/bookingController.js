@@ -14,7 +14,7 @@ import { lateCheckoutFee, prettyTime, cancellationLine, termsLines, SUGGESTED_TE
 import { syncBookingCommission } from "../utils/commission.js";
 import { lockRooms, roomClash, countFreeRoomsOfType } from "../utils/roomLock.js";
 import { seatGuests, guestCharges, occupancyWarnings } from "../utils/guestCharges.js";
-import { takeStock, noteShortfall } from "../utils/inventory.js";
+import { takeStock, noteShortfall, returnStock } from "../utils/inventory.js";
 import { checkDeletePin, requireApproval } from "../utils/approval.js";
 import { ROLES } from "../middleware/authMiddleware.js";
 
@@ -1354,8 +1354,15 @@ export async function postFolioItem(req, res, next) {
  * Administrator gives the delete PIN once one is set (as for removing an order
  * or a payment). The Activity Log keeps the removed line, the reason and who
  * approved it.
+ *
+ * A line that came from a restaurant order (room service, an order charged to
+ * the room) takes that order with it: it is cancelled like a void, its stock
+ * put back. Left standing, check-out's sweep of room-charged orders found it
+ * "not yet on the bill" and charged it again — a removed 650 came back as an
+ * outstanding 650 that blocked the check-out.
  */
 export async function deleteFolioItem(req, res, next) {
+  const client = await pool.connect();
   try {
     const itemId = Number(req.params.itemId);
     const { rows: [item] } = await pool.query(
@@ -1388,22 +1395,45 @@ export async function deleteFolioItem(req, res, next) {
       approver = ok.approver;
     }
 
-    const { rowCount } = await pool.query(
+    await client.query("BEGIN");
+    const { rowCount } = await client.query(
       `DELETE FROM "FOLIO_ITEM" fi USING "FOLIO" f
        WHERE fi.item_id=$1 AND fi.folio_id=f.folio_id AND f.status='open'`,
       [itemId]
     );
-    if (!rowCount) { res.status(404); return next(new Error("Item not found, or its bill is already closed")); }
+    if (!rowCount) { await client.query("ROLLBACK"); res.status(404); return next(new Error("Item not found, or its bill is already closed")); }
+    let cancelledOrder = null;
+    if (item.ref_order_id) {
+      const { rows: [o] } = await client.query(
+        `UPDATE "ORDER"
+         SET or_status = 'cancelled', void_reason = $2, voided_by = $3, voided_at = NOW(), approved_by = $4,
+             status_changed_at = NOW()
+         WHERE or_id = $1 AND or_status <> 'cancelled'
+         RETURNING or_id`,
+        [item.ref_order_id, `Removed from the guest's bill — ${reason}`.slice(0, 200), req.user?.u_id ?? null, approver?.u_id ?? null]
+      );
+      if (o) {
+        await returnStock(client, { order_id: o.or_id, u_id: req.user?.u_id ?? null });
+        cancelledOrder = o.or_id;
+      }
+    }
+    await client.query("COMMIT");
     logActivity(req, {
       action: "delete", entity: "folio_item", entity_id: itemId, b_id: item.b_id,
       summary: `Removed "${item.description}" (LKR ${Number(item.amount).toFixed(2)}) from booking ${item.booking_ref} — ${reason}. `
-             + (approver ? `Approved by ${approver.name || "manager"}` : "No PIN set at the property"),
-      details: { reason, booking_id: item.booking_id, booking_ref: item.booking_ref,
+             + (approver ? `Approved by ${approver.name || "manager"}` : "No PIN set at the property")
+             + (cancelledOrder ? `. Order #${cancelledOrder} cancelled with it` : ""),
+      details: { reason, booking_id: item.booking_id, booking_ref: item.booking_ref, cancelled_order: cancelledOrder,
                  item: { source: item.source, description: item.description, qty: item.qty, unit_price: item.unit_price, amount: item.amount, item_date: item.item_date },
                  approved_by: approver?.u_id ?? null, approver: approver?.name ?? null },
     });
-    res.json({ success: true, removed: itemId });
-  } catch (err) { next(err); }
+    res.json({ success: true, removed: itemId, cancelled_order: cancelledOrder });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
 }
 
 /**
