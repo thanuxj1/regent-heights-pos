@@ -3,14 +3,23 @@ import { branchClause, writeBranchId, assertInScope } from "../utils/scope.js";
 import { logActivity } from "../utils/activityLog.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { moneyField, textField, dateField, oneOf, invalid } from "../utils/validate.js";
+import {
+  BUILTIN_CATEGORIES, EXPENSE_METHODS, customCategories, resolveCategory, isBuiltinName,
+} from "../utils/expenseCategories.js";
 
 const MAX_EXPENSE = 99999999.99; // what NUMERIC(10,2) holds
 const given = (body, key) => Object.prototype.hasOwnProperty.call(body, key);
 
-export const EXPENSE_CATEGORIES = [
-  "utilities", "salary", "raw_materials", "commission",
-  "maintenance", "marketing", "delivery", "food_packets", "other"
-];
+// The built-in ones; a property adds its own (utils/expenseCategories.js).
+export const EXPENSE_CATEGORIES = BUILTIN_CATEGORIES;
+
+/** How it was paid: one of EXPENSE_METHODS, or blank for "not recorded". */
+const methodOf = (v) => {
+  const m = String(v ?? "").trim();
+  if (!m) return null;
+  if (!EXPENSE_METHODS.includes(m)) invalid("Choose how it was paid: cash, card, bank transfer, cheque or online.");
+  return m;
+};
 
 export async function getExpenses(req, res, next) {
   try {
@@ -226,18 +235,19 @@ export async function createExpense(req, res, next) {
     const b_id = writeBranchId(req);
     // Everything is checked here, in words, rather than left for the database to
     // refuse with a constraint error the screen can only call "something went wrong".
-    const category = oneOf(req.body.exp_category, "Category", EXPENSE_CATEGORIES);
+    const category = await resolveCategory(pool, b_id, req.body.exp_category);
     if (!category) invalid("Choose a category for this expense.");
     const amount = moneyField(req.body.exp_amount, "Amount", { min: 0.01, max: MAX_EXPENSE });
     if (!(amount > 0)) invalid("Enter the amount spent.");
     const description = textField(req.body.exp_description, "Description", 500);
     // The hotel's day, not GMT's, when no date was given.
     const date = dateField(req.body.exp_date, "Date") || hotelToday();
+    const method = methodOf(req.body.exp_method);
 
     const { rows } = await pool.query(
-      `INSERT INTO "EXPENSE" (b_id, exp_category, exp_amount, exp_description, exp_date, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [b_id||null, category, amount, description, date, req.user?.u_id||null]
+      `INSERT INTO "EXPENSE" (b_id, exp_category, exp_amount, exp_description, exp_date, created_by, exp_method)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [b_id||null, category, amount, description, date, req.user?.u_id||null, method]
     );
     logActivity(req, { action: "create", entity: "expense", entity_id: rows[0].exp_id, b_id: rows[0].b_id,
       summary: `Recorded ${rows[0].exp_category} expense of ${rows[0].exp_amount}` });
@@ -256,8 +266,8 @@ export async function updateExpense(req, res, next) {
     // A field that is sent replaces what is there — including with nothing. The
     // description was COALESCEd, so once written it could never be cleared.
     let category = was.exp_category;
-    if (given(req.body, "exp_category")) {
-      category = oneOf(req.body.exp_category, "Category", EXPENSE_CATEGORIES);
+    if (given(req.body, "exp_category") && req.body.exp_category !== was.exp_category) {
+      category = await resolveCategory(pool, was.b_id, req.body.exp_category);
       if (!category) invalid("Choose a category for this expense.");
     }
     let amount = was.exp_amount;
@@ -268,12 +278,13 @@ export async function updateExpense(req, res, next) {
     const description = given(req.body, "exp_description")
       ? textField(req.body.exp_description, "Description", 500) : was.exp_description;
     const date = given(req.body, "exp_date") ? dateField(req.body.exp_date, "Date") : null;
+    const method = given(req.body, "exp_method") ? methodOf(req.body.exp_method) : was.exp_method;
 
     const { rows } = await pool.query(
       `UPDATE "EXPENSE"
-       SET exp_category = $1, exp_amount = $2, exp_description = $3, exp_date = COALESCE($4, exp_date)
+       SET exp_category = $1, exp_amount = $2, exp_description = $3, exp_date = COALESCE($4, exp_date), exp_method = $6
        WHERE exp_id = $5 RETURNING *`,
-      [category, amount, description, date, id]
+      [category, amount, description, date, id, method]
     );
     if (!rows.length) { res.status(404); return next(new Error("Expense not found")); }
     logActivity(req, { action: "update", entity: "expense", entity_id: id, b_id: rows[0].b_id,
@@ -301,6 +312,111 @@ export async function deleteExpense(req, res, next) {
         : `Deleted expense #${id}`,
       details: gone || null,
     });
+    res.status(204).send();
+  } catch (err) { next(err); }
+}
+
+// ─── The property's own categories ───────────────────────────────────────────
+
+const DEPARTMENTS = ["hotel", "restaurant", "shared"];
+const categoryName = (v) => {
+  const name = textField(v, "Name", 40);
+  if (!name || name.trim().length < 2) invalid("Give the category a name (2 to 40 characters).");
+  if (isBuiltinName(name)) invalid(`"${name.trim()}" is already one of the standard categories.`);
+  return name.trim();
+};
+
+/** GET /api/expenses/categories — the built-in ones and the property's own, with how often each is used. */
+export async function listCategories(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    const own = await customCategories(pool, b_id);
+    const { rows: used } = await pool.query(
+      `SELECT exp_category, COUNT(*)::int AS n FROM "EXPENSE" WHERE b_id = $1 GROUP BY 1`, [b_id]);
+    const usedBy = Object.fromEntries(used.map((u) => [u.exp_category, u.n]));
+    res.json({
+      builtin: BUILTIN_CATEGORIES,
+      custom: own.map((c) => ({ ...c, used: usedBy[c.name] || 0 })),
+      methods: EXPENSE_METHODS,
+    });
+  } catch (err) { next(err); }
+}
+
+/** POST /api/expenses/categories  body: { name, department } */
+export async function createCategory(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.body?.b_id);
+    if (!b_id) invalid("Choose the property first.");
+    const name = categoryName(req.body?.name);
+    const department = oneOf(req.body?.department, "Belongs to", DEPARTMENTS, "shared");
+    const clash = await pool.query(
+      `SELECT 1 FROM "EXPENSE_CATEGORY" WHERE b_id = $1 AND lower(name) = lower($2)`, [b_id, name]);
+    if (clash.rows.length) { res.status(409); return next(new Error(`There is already a category called "${name}".`)); }
+    const { rows } = await pool.query(
+      `INSERT INTO "EXPENSE_CATEGORY" (b_id, name, department, created_by) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [b_id, name, department, req.user?.u_id ?? null]);
+    logActivity(req, { action: "create", entity: "expense_category", entity_id: rows[0].cat_id, b_id,
+      summary: `Added the expense category "${name}" (${department === "shared" ? "whole property" : department})` });
+    res.status(201).json(rows[0]);
+  } catch (err) { next(err); }
+}
+
+/**
+ * PUT /api/expenses/categories/:id  body: { name?, department? }
+ * A rename carries the expenses filed under it along, so none is left under
+ * a name that no longer exists.
+ */
+export async function updateCategory(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id);
+    await assertInScope(req, res, { table: "EXPENSE_CATEGORY", idColumn: "cat_id", id });
+    const { rows: [was] } = await client.query(`SELECT * FROM "EXPENSE_CATEGORY" WHERE cat_id = $1`, [id]);
+    if (!was) { res.status(404); throw new Error("Category not found"); }
+    const name = given(req.body, "name") ? categoryName(req.body.name) : was.name;
+    const department = given(req.body, "department") ? oneOf(req.body.department, "Belongs to", DEPARTMENTS, was.department) : was.department;
+    if (name.toLowerCase() !== was.name.toLowerCase()) {
+      const clash = await client.query(
+        `SELECT 1 FROM "EXPENSE_CATEGORY" WHERE b_id = $1 AND lower(name) = lower($2) AND cat_id <> $3`, [was.b_id, name, id]);
+      if (clash.rows.length) { res.status(409); throw new Error(`There is already a category called "${name}".`); }
+    }
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE "EXPENSE_CATEGORY" SET name = $2, department = $3 WHERE cat_id = $1 RETURNING *`, [id, name, department]);
+    let moved = 0;
+    if (name !== was.name) {
+      moved = (await client.query(
+        `UPDATE "EXPENSE" SET exp_category = $3 WHERE b_id = $1 AND exp_category = $2`, [was.b_id, was.name, name])).rowCount;
+    }
+    await client.query("COMMIT");
+    logActivity(req, { action: "update", entity: "expense_category", entity_id: id, b_id: was.b_id,
+      summary: `Changed the expense category "${was.name}" to "${name}" (${department === "shared" ? "whole property" : department})`
+             + (moved ? `; ${moved} expense(s) moved with it` : "") });
+    res.json(rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+/** DELETE /api/expenses/categories/:id — only once no expense is filed under it. */
+export async function deleteCategory(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    await assertInScope(req, res, { table: "EXPENSE_CATEGORY", idColumn: "cat_id", id });
+    const { rows: [c] } = await pool.query(`SELECT * FROM "EXPENSE_CATEGORY" WHERE cat_id = $1`, [id]);
+    if (!c) { res.status(404); return next(new Error("Category not found")); }
+    const { rows: [u] } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM "EXPENSE" WHERE b_id = $1 AND exp_category = $2`, [c.b_id, c.name]);
+    if (u.n > 0) {
+      res.status(409);
+      return next(new Error(`${u.n} expense(s) are filed under "${c.name}". Move them to another category first, or rename it instead.`));
+    }
+    await pool.query(`DELETE FROM "EXPENSE_CATEGORY" WHERE cat_id = $1`, [id]);
+    logActivity(req, { action: "delete", entity: "expense_category", entity_id: id, b_id: c.b_id,
+      summary: `Removed the expense category "${c.name}"` });
     res.status(204).send();
   } catch (err) { next(err); }
 }

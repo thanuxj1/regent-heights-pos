@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  getCashSession, openCashSession, addCashMovement, closeCashSession,
+  getCashSession, openCashSession, addCashMovement, closeCashSession, getExpenseCategories,
 } from "../../services/api";
 
 /**
@@ -54,6 +54,11 @@ const PAYOUT_CATEGORIES = [
 
 export default function CashDrawerModal({ branchId, onClose, onChanged }) {
   const [state, setState] = useState(null);
+  // Categories the property added itself (Accounting), offered beside the standard ones.
+  const [ownCategories, setOwnCategories] = useState([]);
+  useEffect(() => {
+    getExpenseCategories({ b_id: branchId }).then((r) => setOwnCategories(r?.custom || [])).catch(() => {});
+  }, [branchId]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [view, setView] = useState("loading");   // loading | open | shift | close | result
@@ -315,7 +320,9 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
                 <select style={{ ...input, marginTop: 8 }} value={mvCategory}
                   onChange={(e) => setMvCategory(e.target.value)}>
                   <option value="">What was it spent on?</option>
-                  {PAYOUT_CATEGORIES.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  {PAYOUT_CATEGORIES.filter(([k]) => k !== "supplier").map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  {ownCategories.map((c) => <option key={c.cat_id} value={c.name}>{c.name}</option>)}
+                  {PAYOUT_CATEGORIES.filter(([k]) => k === "supplier").map(([k, label]) => <option key={k} value={k}>{label}</option>)}
                 </select>
               )}
               <button style={{ ...btn("ghost"), marginTop: 8, width: "100%", flex: "none" }}

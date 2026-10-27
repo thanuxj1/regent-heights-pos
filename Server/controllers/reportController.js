@@ -1,6 +1,7 @@
 import pool from "../config/database.js";
 import { branchClause, writeBranchId } from "../utils/scope.js";
 import { hotelToday, hotelDay } from "../utils/hotelTime.js";
+import { departmentCategories } from "../utils/expenseCategories.js";
 
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 // The hotel's day, not GMT's. See utils/hotelTime.js.
@@ -323,8 +324,9 @@ export async function getSummary(req, res, next) {
     const hotelSupplies = num(supSplit.rows[0].hotel);
     const hotelWaste = num(wasteSplit.rows[0].hotel);
     const expCat = Object.fromEntries(expByCat.rows.map(r => [r.exp_category, num(r.total)]));
-    const HOTEL_EXP = ["commission"];
-    const REST_EXP = ["raw_materials", "food_packets", "delivery"];
+    // Whose each category is: the built-in ones, and each the property added
+    // itself (Accounting → categories). Anything else is the whole property's.
+    const { hotel: HOTEL_EXP, restaurant: REST_EXP } = await departmentCategories(pool, b_id);
     const sumOf = (keys) => keys.reduce((n, k) => n + (expCat[k] || 0), 0);
     const hotelExpCommission = sumOf(HOTEL_EXP);
     const restExpenses = sumOf(REST_EXP);
@@ -953,7 +955,7 @@ export async function getTransactions(req, res, next) {
 
     if (kind === "all" || kind === "expense") {
       const r = await pool.query(
-        `SELECT e.exp_id, e.exp_date AS at, e.exp_amount AS amount, e.exp_category, e.exp_description,
+        `SELECT e.exp_id, e.exp_date AS at, e.exp_amount AS amount, e.exp_category, e.exp_description, e.exp_method,
                 NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
          FROM "EXPENSE" e
          LEFT JOIN "User" u ON u.u_id = e.created_by
@@ -963,7 +965,7 @@ export async function getTransactions(req, res, next) {
       );
       r.rows.forEach(x => out.push({
         at: x.at, type: `Expense (${x.exp_category})`, direction: "out",
-        amount: num(x.amount), method: "—", reference: "", party: x.exp_description,
+        amount: num(x.amount), method: x.exp_method || "—", reference: "", party: x.exp_description,
         handled_by: x.handled_by || null,
         exp_id: x.exp_id,
       }));

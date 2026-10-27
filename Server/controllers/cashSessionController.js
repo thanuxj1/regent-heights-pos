@@ -1,4 +1,4 @@
-import { EXPENSE_CATEGORIES } from "./expenseController.js";
+import { resolveCategory } from "../utils/expenseCategories.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import pool from "../config/database.js";
 import { writeBranchId, branchClause } from "../utils/scope.js";
@@ -163,8 +163,10 @@ export async function addMovement(req, res, next) {
     // owner's accounts in the same transaction, so the drawer and the books
     // agree. Paying a supplier's purchase order is recorded against that order
     // on the Suppliers page instead ("supplier"), so it is not counted twice.
-    const category = kind === "pay_out" ? String(req.body.category || "").trim() || null : null;
-    if (category && category !== "supplier" && !EXPENSE_CATEGORIES.includes(category)) {
+    const asked = kind === "pay_out" ? String(req.body.category || "").trim() || null : null;
+    // A standard category or one the property added itself (Accounting).
+    const category = asked === "supplier" ? "supplier" : asked ? await resolveCategory(pool, b_id, asked) : null;
+    if (asked && !category) {
       res.status(400);
       return next(new Error("Pick what the money was spent on."));
     }
@@ -182,8 +184,8 @@ export async function addMovement(req, res, next) {
       if (category && category !== "supplier") {
         const e = await client.query(
           `INSERT INTO "EXPENSE"
-             (b_id, exp_category, exp_amount, exp_description, exp_date, created_by, cash_movement_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING exp_id`,
+             (b_id, exp_category, exp_amount, exp_description, exp_date, created_by, cash_movement_id, exp_method)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'cash') RETURNING exp_id`,
           [b_id, category, amount, `${reason} (paid from the till)`, hotelToday(),
            req.user.u_id, rows[0].movement_id],
         );

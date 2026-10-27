@@ -845,6 +845,14 @@ export const getExpenseSummary = async (params = {}) => {
   const res = await api.get("/expenses/summary", { params });
   return res.data ?? {};
 };
+/** The standard expense categories, the property's own, and the ways to pay. */
+export const getExpenseCategories = async (params = {}) => {
+  const res = await api.get("/expenses/categories", { params });
+  return res.data ?? { builtin: [], custom: [], methods: [] };
+};
+export const createExpenseCategory = async (payload) => (await api.post("/expenses/categories", payload)).data;
+export const updateExpenseCategory = async (id, payload) => (await api.put(`/expenses/categories/${id}`, payload)).data;
+export const deleteExpenseCategory = async (id) => { await api.delete(`/expenses/categories/${id}`); };
 export const createExpense = async (payload) => {
   const res = await api.post("/expenses", payload);
   return res.data;

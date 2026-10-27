@@ -2,7 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import Header from "../../components/branch-admin/Header";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
-import { getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense } from "../../services/api";
+import {
+  getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense,
+  getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
+} from "../../services/api";
 import { dayKey, todayKey } from "../../utils/dates";
 import { exportCsv, dateCell } from "../../utils/exportCsv";
 
@@ -18,6 +21,12 @@ const CATEGORIES = [
   { key:"other",        label:"Other",           icon:"📋" },
 ];
 const CAT_MAP = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
+// How an expense was paid. Blank on older ones: nobody was asked then.
+const METHODS = [["cash","Cash"],["card","Card"],["bank_transfer","Bank transfer"],["cheque","Cheque"],["online","Online"]];
+const METHOD_LABEL = Object.fromEntries(METHODS);
+// Whose cost a category the property adds is — Reports splits profit by it.
+const DEPARTMENTS = [["shared","Whole property"],["hotel","Hotel"],["restaurant","Restaurant"]];
+const DEPT_LABEL = Object.fromEntries(DEPARTMENTS);
 // Money out that is not typed in here, but is money out all the same.
 const EXTRA_CAT = {
   supplier_payments: { label:"Paid to suppliers", icon:"🚛" },
@@ -37,7 +46,7 @@ function compact(v) {
 }
 function thisYear() { return new Date().getFullYear(); }
 
-const blankExpense = () => ({ exp_category:"utilities", exp_amount:"", exp_description:"", exp_date: todayStr() });
+const blankExpense = () => ({ exp_category:"utilities", exp_amount:"", exp_description:"", exp_date: todayStr(), exp_method:"cash" });
 
 export default function Accounting() {
   const { user } = useAuth();
@@ -54,6 +63,39 @@ export default function Accounting() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
+
+  // The property's own categories, beside the nine standard ones.
+  const [customCats, setCustomCats] = useState([]);
+  const [showCats, setShowCats] = useState(false);
+  const [catForm, setCatForm] = useState({ name:"", department:"shared" });
+  const [catEdit, setCatEdit] = useState(null); // { cat_id, name, department }
+  const [catError, setCatError] = useState("");
+  const loadCats = async () => {
+    if (!branchId) return;
+    try { setCustomCats((await getExpenseCategories({ b_id: branchId })).custom || []); } catch { /* the standard ones still work */ }
+  };
+  useEffect(() => { loadCats(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [branchId]);
+  const allCats = useMemo(
+    () => [...CATEGORIES, ...customCats.map(c => ({ key: c.name, label: c.name, icon: "🏷️", custom: true }))],
+    [customCats],
+  );
+  const catOf = (key) => allCats.find(c => c.key === key);
+  const addCat = async (ev) => {
+    ev.preventDefault(); setCatError("");
+    try { await createExpenseCategory({ ...catForm, b_id: branchId }); setCatForm({ name:"", department:"shared" }); await loadCats(); }
+    catch (err) { setCatError(err?.response?.data?.message || "Could not add the category"); }
+  };
+  const saveCat = async () => {
+    setCatError("");
+    try { await updateExpenseCategory(catEdit.cat_id, { name: catEdit.name, department: catEdit.department }); setCatEdit(null); await loadCats(); await load(); }
+    catch (err) { setCatError(err?.response?.data?.message || "Could not save the category"); }
+  };
+  const removeCat = async (c) => {
+    if (!confirm(`Remove the category "${c.name}"?`)) return;
+    setCatError("");
+    try { await deleteExpenseCategory(c.cat_id); await loadCats(); }
+    catch (err) { setCatError(err?.response?.data?.message || "Could not remove the category"); }
+  };
 
   const [filterCat, setFilterCat] = useState("all");
   const [filterFrom, setFilterFrom] = useState("");
@@ -114,10 +156,10 @@ export default function Accounting() {
     rows.sort((a, b) => Number(b.total) - Number(a.total));
     return rows.map(r => ({
       ...r,
-      cat: CAT_MAP[r.exp_category] || EXTRA_CAT[r.exp_category] || { label: r.exp_category, icon:"📋" },
+      cat: catOf(r.exp_category) || EXTRA_CAT[r.exp_category] || { label: r.exp_category, icon:"🏷️" },
       pct: moneyOut > 0 ? (Number(r.total) / moneyOut * 100).toFixed(1) : 0,
     }));
-  }, [summary, moneyOut, supplierPayments, commissionTotal, wasteTotal]);
+  }, [summary, moneyOut, supplierPayments, commissionTotal, wasteTotal, allCats]);
 
   // Money out per month — expenses, supplier payments and commission together, so
   // the bars add up to the "Money out" figure above them.
@@ -127,15 +169,15 @@ export default function Accounting() {
   );
 
   const openNew = () => { setForm(blankExpense()); setEditingId(null); setError(""); setShowModal(true); };
-  const openEdit = (e) => { setForm({ exp_category:e.exp_category, exp_amount:e.exp_amount, exp_description:e.exp_description||"", exp_date:dayKey(e.exp_date) }); setEditingId(e.exp_id); setError(""); setShowModal(true); };
+  const openEdit = (e) => { setForm({ exp_category:e.exp_category, exp_amount:e.exp_amount, exp_description:e.exp_description||"", exp_date:dayKey(e.exp_date), exp_method:e.exp_method||"" }); setEditingId(e.exp_id); setError(""); setShowModal(true); };
 
   // Whatever the current filters show — same rows as the table beneath it.
   const handleExport = () => {
     if (!expenses.length) return;
-    const head = ["Date", "Category", "Amount (LKR)", "Description", "Added By"];
+    const head = ["Date", "Category", "Amount (LKR)", "Paid by", "Description", "Added By"];
     const rows = expenses.map(e => [
-      dateCell(dayKey(e.exp_date)), CAT_MAP[e.exp_category]?.label || e.exp_category,
-      e.exp_amount, e.exp_description || "", e.created_by_name || "",
+      dateCell(dayKey(e.exp_date)), catOf(e.exp_category)?.label || e.exp_category,
+      e.exp_amount, METHOD_LABEL[e.exp_method] || "", e.exp_description || "", e.created_by_name || "",
     ]);
     exportCsv(`expenses_${dayKey(new Date())}`, head, rows);
   };
@@ -277,7 +319,7 @@ export default function Accounting() {
                   <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
                     style={{ padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:9, fontSize:13, background:"#fff" }}>
                     <option value="all">All Categories</option>
-                    {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
+                    {allCats.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
                   </select>
                   <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)}
                     style={{ padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:9, fontSize:13 }} />
@@ -289,6 +331,8 @@ export default function Accounting() {
                   <div style={{ flex:1 }} />
                   <button onClick={handleExport} disabled={!expenses.length}
                     style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor: expenses.length ? "pointer" : "not-allowed", opacity: expenses.length ? 1 : 0.5, fontSize:13, color:"#475569", fontWeight:600 }}>Export CSV</button>
+                  <button onClick={() => { setCatError(""); setShowCats(true); }}
+                    style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor:"pointer", fontSize:13, color:"#475569", fontWeight:600 }}>Categories</button>
                   <button onClick={openNew}
                     style={{ padding:"9px 18px", background:"#1565C0", color:"#fff", border:"none", borderRadius:9, fontWeight:700, cursor:"pointer", fontSize:13 }}>+ Add Expense</button>
                 </div>
@@ -302,14 +346,14 @@ export default function Accounting() {
                     <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                       <thead>
                         <tr style={{ background:"#F8FAFC" }}>
-                          {["Date","Category","Amount","Description","Added By",""].map(h => (
+                          {["Date","Category","Amount","Paid by","Description","Added By",""].map(h => (
                             <th key={h} style={{ padding:"10px 16px", textAlign:"left", fontSize:11, fontWeight:700, color:"#64748B", textTransform:"uppercase", letterSpacing:"0.05em" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {expenses.map((e, i) => {
-                          const cat = CAT_MAP[e.exp_category] || { icon:"📋", label: e.exp_category };
+                          const cat = catOf(e.exp_category) || { icon:"🏷️", label: e.exp_category };
                           return (
                             <tr key={e.exp_id} style={{ borderTop:"1px solid #F1F5F9" }}>
                               <td style={{ padding:"12px 16px", color:"#475569" }}>{dayKey(e.exp_date)}</td>
@@ -323,6 +367,7 @@ export default function Accounting() {
                                 )}
                               </td>
                               <td style={{ padding:"12px 16px", fontWeight:700, color:"#DC2626" }}>LKR {fmt(e.exp_amount)}</td>
+                              <td style={{ padding:"12px 16px", color: e.exp_method ? "#475569" : "#CBD5E1" }}>{METHOD_LABEL[e.exp_method] || "—"}</td>
                               <td style={{ padding:"12px 16px", color:"#64748B", maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.exp_description||"—"}</td>
                               <td style={{ padding:"12px 16px", color:"#94A3B8" }}>{e.created_by_name||"—"}</td>
                               <td style={{ padding:"12px 16px" }}>
@@ -341,7 +386,7 @@ export default function Accounting() {
                           <td style={{ padding:"12px 16px", fontWeight:700, color:"#DC2626" }}>
                             LKR {fmt(expenses.reduce((s,e) => s + Number(e.exp_amount), 0))}
                           </td>
-                          <td colSpan={3} />
+                          <td colSpan={4} />
                         </tr>
                       </tfoot>
                     </table>
@@ -406,6 +451,68 @@ export default function Accounting() {
         </main>
       </div>
 
+      {/* The property's own categories */}
+      {showCats && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:110, padding:16 }}>
+          <div style={{ background:"#fff", borderRadius:16, padding:24, width:"100%", maxWidth:520, maxHeight:"85vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.15)" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+              <h2 style={{ margin:0, fontSize:18, fontWeight:700, color:"#1E293B" }}>Expense categories</h2>
+              <button onClick={() => { setShowCats(false); setCatEdit(null); }} style={{ background:"none", border:"none", fontSize:18, color:"#94A3B8", cursor:"pointer" }}>✕</button>
+            </div>
+            <div style={{ fontSize:12, color:"#64748B", marginBottom:14, lineHeight:1.5 }}>
+              Add your own headings beside the standard ones. "Belongs to" decides whose costs they are in Reports'
+              profit by department; Whole property costs are shown once and not divided.
+            </div>
+            {catError && <div style={{ background:"#FEF2F2", border:"1px solid #FECACA", color:"#DC2626", padding:"8px 12px", borderRadius:8, marginBottom:12, fontSize:13 }}>{catError}</div>}
+            <form onSubmit={addCat} style={{ display:"flex", gap:8, marginBottom:16 }}>
+              <input value={catForm.name} maxLength={40} placeholder="e.g. Gas, Staff meals, Water bowser"
+                onChange={e => setCatForm(f => ({ ...f, name: e.target.value }))}
+                style={{ flex:1, padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:8, fontSize:13 }} />
+              <select value={catForm.department} onChange={e => setCatForm(f => ({ ...f, department: e.target.value }))}
+                style={{ padding:"9px 10px", border:"1px solid #E2E8F0", borderRadius:8, fontSize:13 }}>
+                {DEPARTMENTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+              <button type="submit" disabled={catForm.name.trim().length < 2}
+                style={{ padding:"9px 14px", background:"#1565C0", color:"#fff", border:"none", borderRadius:8, fontWeight:700, cursor:"pointer", fontSize:13, opacity: catForm.name.trim().length < 2 ? 0.5 : 1 }}>Add</button>
+            </form>
+            <div style={{ fontSize:11, fontWeight:700, color:"#64748B", textTransform:"uppercase", marginBottom:6 }}>Your categories</div>
+            {customCats.length === 0 ? (
+              <div style={{ fontSize:13, color:"#94A3B8", padding:"8px 0 14px" }}>None yet.</div>
+            ) : customCats.map(c => (
+              <div key={c.cat_id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid #F1F5F9", fontSize:13 }}>
+                {catEdit?.cat_id === c.cat_id ? (
+                  <>
+                    <input value={catEdit.name} maxLength={40} onChange={e => setCatEdit(x => ({ ...x, name: e.target.value }))}
+                      style={{ flex:1, padding:"6px 10px", border:"1px solid #CBD5E1", borderRadius:6, fontSize:13 }} />
+                    <select value={catEdit.department} onChange={e => setCatEdit(x => ({ ...x, department: e.target.value }))}
+                      style={{ padding:"6px 8px", border:"1px solid #CBD5E1", borderRadius:6, fontSize:13 }}>
+                      {DEPARTMENTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                    </select>
+                    <button onClick={saveCat} style={{ padding:"5px 10px", background:"#1565C0", color:"#fff", border:"none", borderRadius:6, fontSize:12, cursor:"pointer" }}>Save</button>
+                    <button onClick={() => setCatEdit(null)} style={{ padding:"5px 10px", border:"1px solid #E2E8F0", background:"#fff", borderRadius:6, fontSize:12, cursor:"pointer" }}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ flex:1, color:"#1E293B" }}>🏷️ {c.name}</span>
+                    <span style={{ color:"#64748B", fontSize:12 }}>{DEPT_LABEL[c.department]}</span>
+                    <span style={{ color:"#94A3B8", fontSize:12, minWidth:70, textAlign:"right" }}>{c.used} expense(s)</span>
+                    <button onClick={() => setCatEdit({ cat_id: c.cat_id, name: c.name, department: c.department })}
+                      style={{ padding:"4px 10px", border:"1px solid #E2E8F0", borderRadius:6, background:"#fff", cursor:"pointer", fontSize:12, color:"#475569" }}>Edit</button>
+                    <button onClick={() => removeCat(c)} disabled={c.used > 0}
+                      title={c.used > 0 ? "Move its expenses to another category first" : "Remove"}
+                      style={{ padding:"4px 10px", border:"1px solid #FECACA", borderRadius:6, background:"#FEF2F2", cursor: c.used > 0 ? "not-allowed" : "pointer", fontSize:12, color:"#DC2626", opacity: c.used > 0 ? 0.4 : 1 }}>Remove</button>
+                  </>
+                )}
+              </div>
+            ))}
+            <div style={{ fontSize:11, fontWeight:700, color:"#64748B", textTransform:"uppercase", margin:"16px 0 6px" }}>Standard</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {CATEGORIES.map(c => <span key={c.key} style={{ background:"#F1F5F9", padding:"3px 10px", borderRadius:20, fontSize:12, color:"#475569" }}>{c.icon} {c.label}</span>)}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Expense Modal */}
       {showModal && (
         <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, padding:16 }}>
@@ -419,7 +526,18 @@ export default function Accounting() {
               <label style={{ fontSize:12, fontWeight:600, color:"#64748B" }}>Category *
                 <select value={form.exp_category} onChange={e => setForm(p=>({...p,exp_category:e.target.value}))} required
                   style={{ display:"block", width:"100%", marginTop:4, padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:8, fontSize:14 }}>
-                  {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
+                  {allCats.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
+                </select>
+                <button type="button" onClick={() => { setCatError(""); setShowCats(true); }}
+                  style={{ marginTop:4, background:"none", border:"none", padding:0, color:"#1565C0", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                  + Add a category of your own
+                </button>
+              </label>
+              <label style={{ fontSize:12, fontWeight:600, color:"#64748B" }}>Paid by
+                <select value={form.exp_method} onChange={e => setForm(p=>({...p,exp_method:e.target.value}))}
+                  style={{ display:"block", width:"100%", marginTop:4, padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:8, fontSize:14 }}>
+                  {!form.exp_method && <option value="">Not recorded</option>}
+                  {METHODS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
               </label>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>

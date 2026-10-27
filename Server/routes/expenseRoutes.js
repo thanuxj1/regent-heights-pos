@@ -1,10 +1,14 @@
 import { Router } from "express";
 import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
-  getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense
+  getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense,
+  listCategories, createCategory, updateCategory, deleteCategory,
 } from "../controllers/expenseController.js";
 
 const router = Router();
+// The category list is read by the till too, for a pay-out from the drawer —
+// so it sits before the Accounting guard below. Changing it does not.
+router.get("/categories", requireAuth, listCategories);
 // The owner's books — salaries, bills, what the place costs to run. Any
 // signed-in user could read every line and delete the owner's entries; a
 // waiter did exactly that in testing. Cash paid out of the till still reaches
@@ -13,6 +17,10 @@ router.use(requireAuth, requireBranchAdminOr(CAPABILITIES.REPORTS_ACCOUNTING));
 
 router.get("/",        getExpenses);
 router.get("/summary", getExpenseSummary);
+// The property's own categories (the nine standard ones are fixed).
+router.post("/categories",       createCategory);
+router.put("/categories/:id",    updateCategory);
+router.delete("/categories/:id", deleteCategory);
 router.post("/",       createExpense);
 router.put("/:id",     updateExpense);
 router.delete("/:id",  deleteExpense);
