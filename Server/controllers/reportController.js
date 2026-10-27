@@ -84,7 +84,8 @@ export async function getSummary(req, res, next) {
       pool.query(
         `SELECT COALESCE(SUM(exp_amount),0) AS total
          FROM "EXPENSE"
-         WHERE b_id = $1 AND exp_date BETWEEN $2::date AND $3::date`,
+         WHERE b_id = $1 AND exp_date BETWEEN $2::date AND $3::date
+           AND exp_review_note IS NULL -- held for checking: not counted yet`,
         [b_id, from, to]
       ),
 
@@ -127,6 +128,7 @@ export async function getSummary(req, res, next) {
         `SELECT exp_date AS day, SUM(exp_amount) AS total
          FROM "EXPENSE"
          WHERE b_id = $1 AND exp_date BETWEEN $2::date AND $3::date
+           AND exp_review_note IS NULL -- held for checking: not counted yet
          GROUP BY day ORDER BY day`,
         [b_id, from, to]
       ),
@@ -135,6 +137,7 @@ export async function getSummary(req, res, next) {
         `SELECT exp_category, SUM(exp_amount) AS total
          FROM "EXPENSE"
          WHERE b_id = $1 AND exp_date BETWEEN $2::date AND $3::date
+           AND exp_review_note IS NULL -- held for checking: not counted yet
          GROUP BY exp_category ORDER BY total DESC`,
         [b_id, from, to]
       ),
@@ -960,6 +963,7 @@ export async function getTransactions(req, res, next) {
          FROM "EXPENSE" e
          LEFT JOIN "User" u ON u.u_id = e.created_by
          WHERE e.b_id = $1 AND e.exp_date BETWEEN $2::date AND $3::date
+           AND e.exp_review_note IS NULL
          ORDER BY e.exp_date DESC`,
         [b_id, from, to]
       );

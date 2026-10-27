@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireBranchAdminOr, CAPABILITIES } from "../middleware/authMiddleware.js";
 import {
   getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense,
-  listCategories, createCategory, updateCategory, deleteCategory,
+  listCategories, createCategory, updateCategory, deleteCategory, countHeldExpense,
 } from "../controllers/expenseController.js";
 
 const router = Router();
@@ -23,6 +23,8 @@ router.put("/categories/:id",    updateCategory);
 router.delete("/categories/:id", deleteCategory);
 router.post("/",       createExpense);
 router.put("/:id",     updateExpense);
+// A possible duplicate, checked against the bills: a separate one after all.
+router.post("/:id/count", countHeldExpense);
 router.delete("/:id",  deleteExpense);
 
 export default router;

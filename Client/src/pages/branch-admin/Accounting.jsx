@@ -3,7 +3,7 @@ import Header from "../../components/branch-admin/Header";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import { useAuth } from "../../context/AuthContext";
 import {
-  getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense,
+  getExpenses, getExpenseSummary, createExpense, updateExpense, deleteExpense, countHeldExpense,
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
 } from "../../services/api";
 import { dayKey, todayKey } from "../../utils/dates";
@@ -168,14 +168,33 @@ export default function Accounting() {
     [summary],
   );
 
+  // Possible duplicates held for checking: in no total until someone with the
+  // bills counts them or deletes them. The table and its total are the rest.
+  const held    = useMemo(() => expenses.filter(e => e.exp_review_note), [expenses]);
+  const counted = useMemo(() => expenses.filter(e => !e.exp_review_note), [expenses]);
+  const [heldBusy, setHeldBusy] = useState(null);
+  const handleCount = async (e) => {
+    setHeldBusy(e.exp_id);
+    try { await countHeldExpense(e.exp_id); await load(); }
+    catch (err) { alert(err?.response?.data?.message || "Could not count this expense"); }
+    finally { setHeldBusy(null); }
+  };
+  const handleDuplicate = async (e) => {
+    if (!confirm(`Delete this ${fmt(e.exp_amount)} line as a duplicate? It is already in the books once.`)) return;
+    setHeldBusy(e.exp_id);
+    try { await deleteExpense(e.exp_id); await load(); }
+    catch { alert("Could not delete expense"); }
+    finally { setHeldBusy(null); }
+  };
+
   const openNew = () => { setForm(blankExpense()); setEditingId(null); setError(""); setShowModal(true); };
   const openEdit = (e) => { setForm({ exp_category:e.exp_category, exp_amount:e.exp_amount, exp_description:e.exp_description||"", exp_date:dayKey(e.exp_date), exp_method:e.exp_method||"" }); setEditingId(e.exp_id); setError(""); setShowModal(true); };
 
   // Whatever the current filters show — same rows as the table beneath it.
   const handleExport = () => {
-    if (!expenses.length) return;
+    if (!counted.length) return;
     const head = ["Date", "Category", "Amount (LKR)", "Paid by", "Description", "Added By"];
-    const rows = expenses.map(e => [
+    const rows = counted.map(e => [
       dateCell(dayKey(e.exp_date)), catOf(e.exp_category)?.label || e.exp_category,
       e.exp_amount, METHOD_LABEL[e.exp_method] || "", e.exp_description || "", e.created_by_name || "",
     ]);
@@ -329,17 +348,53 @@ export default function Accounting() {
                   <button onClick={() => { setFilterCat("all"); setFilterFrom(""); setFilterTo(""); }}
                     style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor:"pointer", fontSize:13, color:"#64748B" }}>Clear</button>
                   <div style={{ flex:1 }} />
-                  <button onClick={handleExport} disabled={!expenses.length}
-                    style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor: expenses.length ? "pointer" : "not-allowed", opacity: expenses.length ? 1 : 0.5, fontSize:13, color:"#475569", fontWeight:600 }}>Export CSV</button>
+                  <button onClick={handleExport} disabled={!counted.length}
+                    style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor: counted.length ? "pointer" : "not-allowed", opacity: counted.length ? 1 : 0.5, fontSize:13, color:"#475569", fontWeight:600 }}>Export CSV</button>
                   <button onClick={() => { setCatError(""); setShowCats(true); }}
                     style={{ padding:"9px 14px", border:"1px solid #E2E8F0", borderRadius:9, background:"#fff", cursor:"pointer", fontSize:13, color:"#475569", fontWeight:600 }}>Categories</button>
                   <button onClick={openNew}
                     style={{ padding:"9px 18px", background:"#1565C0", color:"#fff", border:"none", borderRadius:9, fontWeight:700, cursor:"pointer", fontSize:13 }}>+ Add Expense</button>
                 </div>
 
+                {!loading && held.length > 0 && (
+                  <div style={{ border:"1px solid #FDE68A", background:"#FFFBEB", borderRadius:10, padding:16, marginBottom:20 }}>
+                    <div style={{ fontWeight:700, color:"#92400E", fontSize:14 }}>
+                      To check — {held.length} possible duplicate{held.length === 1 ? "" : "s"} (LKR {fmt(held.reduce((s,e) => s + Number(e.exp_amount), 0))})
+                    </div>
+                    <div style={{ color:"#A16207", fontSize:12, margin:"4px 0 12px" }}>
+                      These may be a bill written up twice. They are not in any total or report until checked against the paper bills.
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      {held.map(e => {
+                        const cat = catOf(e.exp_category) || { icon:"🏷️", label: e.exp_category };
+                        return (
+                          <div key={e.exp_id} style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", background:"#fff", border:"1px solid #FEF3C7", borderRadius:8, padding:"10px 12px", fontSize:13 }}>
+                            <div style={{ flex:"1 1 280px", minWidth:0 }}>
+                              <div style={{ color:"#1E293B" }}>
+                                <b>LKR {fmt(e.exp_amount)}</b> · {dayKey(e.exp_date)} · {cat.icon} {cat.label} · {e.exp_description || "—"}
+                              </div>
+                              <div style={{ color:"#B45309", fontSize:12, marginTop:2 }}>{e.exp_review_note}</div>
+                            </div>
+                            <div style={{ display:"flex", gap:8 }}>
+                              <button disabled={heldBusy === e.exp_id} onClick={() => handleCount(e)}
+                                style={{ padding:"5px 10px", border:"1px solid #BBF7D0", borderRadius:6, background:"#F0FDF4", cursor:"pointer", fontSize:12, color:"#15803D", fontWeight:600 }}>
+                                Separate bill — count it
+                              </button>
+                              <button disabled={heldBusy === e.exp_id} onClick={() => handleDuplicate(e)}
+                                style={{ padding:"5px 10px", border:"1px solid #FECACA", borderRadius:6, background:"#FEF2F2", cursor:"pointer", fontSize:12, color:"#DC2626", fontWeight:600 }}>
+                                Duplicate — delete
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {loading ? (
                   <div style={{ textAlign:"center", padding:"48px 0", color:"#94A3B8" }}>Loading...</div>
-                ) : expenses.length === 0 ? (
+                ) : counted.length === 0 ? (
                   <div style={{ textAlign:"center", padding:"48px 0", color:"#94A3B8" }}>No expenses found.</div>
                 ) : (
                   <div style={{ border:"1px solid #E2E8F0", borderRadius:10, overflow:"hidden" }}>
@@ -352,7 +407,7 @@ export default function Accounting() {
                         </tr>
                       </thead>
                       <tbody>
-                        {expenses.map((e, i) => {
+                        {counted.map((e, i) => {
                           const cat = catOf(e.exp_category) || { icon:"🏷️", label: e.exp_category };
                           return (
                             <tr key={e.exp_id} style={{ borderTop:"1px solid #F1F5F9" }}>
@@ -384,7 +439,7 @@ export default function Accounting() {
                         <tr style={{ background:"#F8FAFC", borderTop:"2px solid #E2E8F0" }}>
                           <td colSpan={2} style={{ padding:"12px 16px", fontWeight:700, color:"#1E293B" }}>Total</td>
                           <td style={{ padding:"12px 16px", fontWeight:700, color:"#DC2626" }}>
-                            LKR {fmt(expenses.reduce((s,e) => s + Number(e.exp_amount), 0))}
+                            LKR {fmt(counted.reduce((s,e) => s + Number(e.exp_amount), 0))}
                           </td>
                           <td colSpan={4} />
                         </tr>

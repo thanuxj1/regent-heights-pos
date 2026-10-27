@@ -80,13 +80,13 @@ export async function getExpenseSummary(req, res, next) {
       pool.query(
         `SELECT to_char(exp_date,'YYYY-MM') AS month, exp_category, SUM(exp_amount) AS total
            FROM "EXPENSE"
-          WHERE EXTRACT(YEAR FROM exp_date) = $1${e.where}
+          WHERE EXTRACT(YEAR FROM exp_date) = $1 AND exp_review_note IS NULL${e.where}
           GROUP BY month, exp_category
           ORDER BY month DESC`, e.params),
       pool.query(
         `SELECT exp_category, SUM(exp_amount) AS total
            FROM "EXPENSE"
-          WHERE EXTRACT(YEAR FROM exp_date) = $1${e.where}
+          WHERE EXTRACT(YEAR FROM exp_date) = $1 AND exp_review_note IS NULL${e.where}
           GROUP BY exp_category
           ORDER BY total DESC`, e.params),
       // Revenue the way the owner's report counts it: everything posted to a
@@ -313,6 +313,27 @@ export async function deleteExpense(req, res, next) {
       details: gone || null,
     });
     res.status(204).send();
+  } catch (err) { next(err); }
+}
+
+/**
+ * POST /api/expenses/:id/count — an expense held for checking (a possible
+ * duplicate) turns out to be a bill of its own: it is counted from now on.
+ * A real duplicate is deleted instead, as any expense is.
+ */
+export async function countHeldExpense(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    await assertInScope(req, res, { table: "EXPENSE", idColumn: "exp_id", id });
+    const { rows: [was] } = await pool.query('SELECT * FROM "EXPENSE" WHERE exp_id = $1', [id]);
+    if (!was) { res.status(404); return next(new Error("Expense not found")); }
+    if (!was.exp_review_note) { res.status(409); return next(new Error("This expense is already counted.")); }
+    const { rows } = await pool.query(
+      'UPDATE "EXPENSE" SET exp_review_note = NULL WHERE exp_id = $1 RETURNING *', [id]);
+    logActivity(req, { action: "update", entity: "expense", entity_id: id, b_id: was.b_id,
+      summary: `Checked ${was.exp_category} expense of ${was.exp_amount} — a separate bill, now counted`,
+      details: { was_held_because: was.exp_review_note } });
+    res.json(rows[0]);
   } catch (err) { next(err); }
 }
 

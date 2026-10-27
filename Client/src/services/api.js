@@ -861,6 +861,8 @@ export const updateExpense = async (id, payload) => {
   const res = await api.put(`/expenses/${id}`, payload);
   return res.data;
 };
+// A possible duplicate held for checking turns out to be a separate bill.
+export const countHeldExpense = async (id) => (await api.post(`/expenses/${id}/count`)).data;
 export const deleteExpense = async (id) => {
   await api.delete(`/expenses/${id}`);
 };
