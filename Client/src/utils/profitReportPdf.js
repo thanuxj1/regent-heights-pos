@@ -101,6 +101,8 @@ export function downloadProfitReportPdf({ data, payables, from, to, propertyName
     line("  of which cash on delivery received", d.restaurant.cod_received ?? 0,
       `${d.restaurant.cod_orders ?? 0} delivery order(s) whose cash a rider handed over in this period. Counted on the day the cash arrived, not the day the order went out.`),
     line("  of which delivery charges", d.restaurant.delivery_charges ?? 0, "Already inside the revenue above, shown so it can be seen."),
+    ...(d.restaurant.refunds > 0 ? [line("  less refunds handed back", -d.restaurant.refunds,
+      `${d.restaurant.refund_count} refund(s) to restaurant customers, already taken off the revenue above on the day each was given.`)] : []),
     ...(d.restaurant.imported > 0 ? [line("  of which from the old sales reports", d.restaurant.imported,
       `${(data.imported?.by_line || []).filter((l) => l.department === "restaurant").map((l) => `${l.line} ${fmt(l.total)}`).join(", ")}. Days before the system went live, typed in from the daily summary sheets.`)] : []),
     sub("Costs that belong to the restaurant"),

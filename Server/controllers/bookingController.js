@@ -15,8 +15,7 @@ import { syncBookingCommission } from "../utils/commission.js";
 import { lockRooms, roomClash, countFreeRoomsOfType } from "../utils/roomLock.js";
 import { seatGuests, guestCharges, occupancyWarnings } from "../utils/guestCharges.js";
 import { takeStock, noteShortfall, returnStock } from "../utils/inventory.js";
-import { checkDeletePin, requireApproval } from "../utils/approval.js";
-import { ROLES } from "../middleware/authMiddleware.js";
+import { checkDeletePin, approveMoneyBack } from "../utils/approval.js";
 
 /**
  * Tell every front desk on this branch that the rack/calendar is stale.
@@ -1383,17 +1382,9 @@ export async function deleteFolioItem(req, res, next) {
     if (reason.length < 3) { res.status(400); return next(new Error("Say why this charge is being removed — it goes in the Activity Log.")); }
     if (reason.length > 200) { res.status(400); return next(new Error("That reason is too long (200 characters).")); }
 
-    const manager = [ROLES.BRANCH_ADMIN, ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(Number(req.user?.role_id));
-    let approver;
-    if (manager) {
-      const pin = await checkDeletePin(req, item.b_id);
-      if (!pin.ok) { res.status(pin.status); return next(new Error(pin.message)); }
-      approver = pin.pinSet ? pin.approver : null;
-    } else {
-      const ok = await requireApproval(req, { pin: req.body?.pin, b_id: item.b_id, what: "remove a charge from a guest's bill" });
-      if (!ok.ok) { res.status(ok.status); return next(new Error(ok.message)); }
-      approver = ok.approver;
-    }
+    const ok = await approveMoneyBack(req, item.b_id, "remove a charge from a guest's bill");
+    if (!ok.ok) { res.status(ok.status); return next(new Error(ok.message)); }
+    const approver = ok.approver;
 
     await client.query("BEGIN");
     const { rowCount } = await client.query(

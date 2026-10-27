@@ -8,13 +8,14 @@ import {
   getBranchProducts,
 } from '../../services/api';
 import { printElement } from '../../utils/printElement';
+import RefundPanel from './RefundPanel';
 
 function formatAmount(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toFixed(2) : '0.00';
 }
 
-export default function TransactionDetailsModal({ item, onClose }) {
+export default function TransactionDetailsModal({ item, onClose, onChanged }) {
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useState(null);
   const [fetchError, setFetchError] = useState('');
@@ -29,7 +30,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
       // a COD settlement or a credit payment are each already the whole thing —
       // a single row, not an order with lines to fetch. (A credit payment used
       // to fall through to the purchase-order lookup below, by its own number.)
-      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission' || item.type === 'waste' || item.type === 'cod' || item.type === 'credit') {
+      if (item.type === 'hotel' || item.type === 'expense' || item.type === 'commission' || item.type === 'waste' || item.type === 'cod' || item.type === 'credit' || item.type === 'refund') {
         setDetails(null);
         return;
       }
@@ -100,6 +101,7 @@ export default function TransactionDetailsModal({ item, onClose }) {
                 : item.type === 'waste' ? 'Waste Record'
                 : item.type === 'cod' ? 'Delivery COD Settlement'
                 : item.type === 'credit' ? 'Credit payment'
+                : item.type === 'refund' ? 'Restaurant Refund'
                 : 'Purchase Expense Ledger'}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">Reference: {item.txId}</p>
@@ -280,6 +282,27 @@ export default function TransactionDetailsModal({ item, onClose }) {
                     takings on the day this payment came in. See Credit Sales for the full history.
                   </p>
                 </div>
+              )}
+              {item.type === 'refund' && (
+                <div className="rounded-xl border border-slate-100 p-4 text-xs">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Sale</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">Order #{item.invoiceNo}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-medium uppercase tracking-wider">Handed back by</span>
+                      <span className="text-sm font-semibold text-slate-800 mt-0.5 block">{item.raw?.handled_by || 'Not recorded'}</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-slate-500">
+                    Money returned to the customer: {String(item.raw?.reference || '').split(' — ').slice(1).join(' — ') || 'no reason recorded'}.
+                    It comes off restaurant sales on the day it was given. Open order #{item.invoiceNo} under Transactions for the sale and every refund on it.
+                  </p>
+                </div>
+              )}
+              {item.type === 'sale' && (
+                <RefundPanel orderId={Number(item.invoiceNo)} onRefunded={onChanged} />
               )}
               {item.type === 'sale' && details?.items && (
                 <div className="space-y-2">

@@ -261,6 +261,10 @@ export default function CashDrawerModal({ branchId, onClose, onChanged }) {
               {t.hotel_cash_refunds > 0 && (
                 <div style={row}><span>Room refunds handed back</span><strong>−{money(t.hotel_cash_refunds)}</strong></div>
               )}
+              {t.restaurant_cash_refunds > 0 && (
+                <div style={row}><span>Restaurant refunds handed back <span style={{ color: "#94A3B8" }}>({t.restaurant_refunds})</span></span>
+                  <strong>−{money(t.restaurant_cash_refunds)}</strong></div>
+              )}
               {t.pay_in > 0 && <div style={row}><span>Put in</span><strong>{money(t.pay_in)}</strong></div>}
               {t.pay_out > 0 && <div style={row}><span>Paid out</span><strong>−{money(t.pay_out)}</strong></div>}
               {t.drops > 0 && <div style={row}><span>Dropped to the safe</span><strong>−{money(t.drops)}</strong></div>}

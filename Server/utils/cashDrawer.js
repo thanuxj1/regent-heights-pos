@@ -8,7 +8,7 @@
 //
 //   opening float
 // + cash taken for sales during the shift
-// - cash handed back for refunds
+// - cash handed back for refunds (a guest's, or a restaurant customer's)
 // + money put in   (topping up change)
 // - money taken out (a supplier paid from the drawer, a run to the safe)
 // = expected cash
@@ -33,7 +33,7 @@ export async function sessionTotals(db, session_id) {
   // drawer is being closed inside a transaction, and pg refuses (from v9; it
   // warns today) a second query on a connection that is still busy.
   const run = async (queries) => { const out = []; for (const q of queries) out.push(await q()); return out; };
-  const [sales, movements, hotel] = await run([
+  const [sales, movements, hotel, refunds] = await run([
     () => db.query(
       `SELECT
          COALESCE(SUM("or_totalCostWtax") FILTER (
@@ -67,9 +67,16 @@ export async function sessionTotals(db, session_id) {
        FROM "BOOKING_PAYMENT" WHERE session_id = $1`,
       [session_id, CASH_TENDERS],
     ),
+    // Cash handed back to a restaurant customer from this drawer (a refund
+    // records the drawer only when it was cash).
+    () => db.query(
+      `SELECT COALESCE(SUM(amount), 0) AS cash_refunds, COUNT(*) AS n
+       FROM "ORDER_REFUND" WHERE session_id = $1 AND method = ANY($2::text[])`,
+      [session_id, CASH_TENDERS],
+    ),
   ]);
 
-  const [s, m, h] = [sales.rows[0], movements.rows[0], hotel.rows[0]];
+  const [s, m, h, r] = [sales.rows[0], movements.rows[0], hotel.rows[0], refunds.rows[0]];
   const n = (v) => Number(v || 0);
 
   return {
@@ -85,6 +92,8 @@ export async function sessionTotals(db, session_id) {
     hotel_cash_in:      +n(h.hotel_cash_in).toFixed(2),
     hotel_cash_refunds: +n(h.hotel_cash_refunds).toFixed(2),
     hotel_cash_payments: Number(h.hotel_cash_payments),
+    restaurant_cash_refunds: +n(r.cash_refunds).toFixed(2),
+    restaurant_refunds: Number(r.n),
   };
 }
 
@@ -98,6 +107,7 @@ export function expectedCash(openingFloat, totals) {
     - totals.drops
     + (totals.hotel_cash_in || 0)
     - (totals.hotel_cash_refunds || 0)
+    - (totals.restaurant_cash_refunds || 0)
   ).toFixed(2);
 }
 

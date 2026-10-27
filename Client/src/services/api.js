@@ -201,6 +201,16 @@ export const updateOrderStatus = async (orderId, status) => {
 };
 
 /** An Administrator deletes an order: always needs an approval PIN and a reason. */
+/** What has gone back on a paid restaurant order, and what still can. */
+export const getOrderRefunds = async (orderId) => {
+  const res = await api.get(`/orders/${orderId}/refunds`);
+  return res.data;
+};
+/** Hand money back on a paid restaurant order: a reason always, and a PIN. */
+export const refundOrder = async (orderId, { amount, method, reason, pin, items }) => {
+  const res = await api.post(`/orders/${orderId}/refund`, { amount, method, reason, pin, items });
+  return res.data;
+};
 export const deleteOrderWithPin = async (orderId, { pin, reason }) => {
   const response = await api.post(`/orders/${orderId}/delete`, { pin, reason });
   return response.data?.data;

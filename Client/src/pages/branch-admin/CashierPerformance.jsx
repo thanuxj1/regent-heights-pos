@@ -57,6 +57,7 @@ const CashierPerformance = () => {
 	const [orders, setOrders] = useState([]);
 	const [users, setUsers] = useState([]);
 	const [hotelPayments, setHotelPayments] = useState([]);
+	const [refunds, setRefunds] = useState([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [timeRange, setTimeRange] = useState("30days");
@@ -81,11 +82,15 @@ const CashierPerformance = () => {
 			const hotelReq = user?.b_id
 				? getReportTransactions({ b_id: user.b_id, kind: "hotel", from: dayOffset(-29), to: dayOffset(0) })
 				: Promise.resolve({ transactions: [] });
-			const results = await Promise.allSettled([getOrders(params), getUsers(), hotelReq]);
+			// Money a restaurant customer was handed back comes off the sales of whoever handed it.
+			const refundReq = user?.b_id
+				? getReportTransactions({ b_id: user.b_id, kind: "refund", from: dayOffset(-29), to: dayOffset(0) })
+				: Promise.resolve({ transactions: [] });
+			const results = await Promise.allSettled([getOrders(params), getUsers(), hotelReq, refundReq]);
 
 			if (!isMounted) return;
 
-			const [ordersResult, usersResult, hotelResult] = results;
+			const [ordersResult, usersResult, hotelResult, refundResult] = results;
 			const nextOrders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
 			const nextUsers = usersResult.status === "fulfilled" ? usersResult.value : [];
 
@@ -93,6 +98,8 @@ const CashierPerformance = () => {
 			setUsers(Array.isArray(nextUsers) ? nextUsers : []);
 			const nextHotel = hotelResult.status === "fulfilled" ? hotelResult.value?.transactions : [];
 			setHotelPayments(Array.isArray(nextHotel) ? nextHotel : []);
+			const nextRefunds = refundResult.status === "fulfilled" ? refundResult.value?.transactions : [];
+			setRefunds(Array.isArray(nextRefunds) ? nextRefunds : []);
 
 			if (results.some((result) => result.status === "rejected")) {
 				setError("Some performance data could not be loaded.");
@@ -159,6 +166,9 @@ const CashierPerformance = () => {
 
 		return cashierUsers.map((cashier) => {
 			const metrics = totals.get(cashier.u_id) || { revenue: 0, orders: 0 };
+			const handedBack = refunds
+				.filter((t) => t.handled_by_id === cashier.u_id && rangeKeys.has(dayKey(t.at)))
+				.reduce((sum, t) => sum + Number(t.amount || 0), 0);
 			const avgOrder = metrics.orders ? metrics.revenue / metrics.orders : 0;
 			const mine = rangeHotel.filter((t) => t.handled_by_id === cashier.u_id);
 			// refunds go back out of the till
@@ -167,15 +177,15 @@ const CashierPerformance = () => {
 				id: cashier.u_id,
 				name:
 					`${cashier.u_fname || ""} ${cashier.u_lname || ""}`.trim() || "Staff",
-				sales: metrics.revenue,
+				sales: metrics.revenue - handedBack,
 				hotel,
 				hotelCount: mine.length,
-				revenue: metrics.revenue + hotel,
+				revenue: metrics.revenue - handedBack + hotel,
 				orders: metrics.orders,
 				avgOrder,
 			};
 		});
-	}, [cashierUsers, rangeOrders, rangeHotel]);
+	}, [cashierUsers, rangeOrders, rangeHotel, refunds, rangeKeys]);
 
 	const sortedCashiers = useMemo(() => {
 		return [...cashierStats].sort((a, b) => b.revenue - a.revenue);

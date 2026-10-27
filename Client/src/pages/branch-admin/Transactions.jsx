@@ -14,6 +14,7 @@ import { exportCsv, dateCell } from "../../utils/exportCsv";
 // modal stay generic instead of each re-deriving it their own way.
 function ledgerType(reportType) {
   if (reportType === "Hotel payment") return "hotel";
+  if (reportType === "Refund (restaurant)") return "refund";
   if (reportType.startsWith("Restaurant")) return "sale";
   if (reportType.startsWith("Expense")) return "expense";
   if (reportType.startsWith("Commission")) return "commission";
@@ -40,6 +41,7 @@ export default function Transactions() {
   const [loadError, setLoadError] = useState('');
   const [transactions, setTransactions] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0); // bumped when a refund is given from the detail view
   const [pageSize] = useState(10);
   const [branchName, setBranchName] = useState(null);
 
@@ -74,14 +76,14 @@ export default function Transactions() {
           // own number identifies it, and the orders it paid for are the invoice.
           // Credit payments had no entry here, so they showed as "TX##70, #71…".
           const settlement = type === "cod" || type === "credit";
-          const invoiceNo = type === "sale" ? t.or_id
+          const invoiceNo = type === "sale" || type === "refund" ? t.or_id
             : type === "purchase" ? t.po_id
             : type === "expense" ? t.exp_id
             : type === "commission" ? t.record_id
             : type === "waste" ? t.waste_id
             : settlement ? t.settlement_id
             : t.reference;
-          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM", waste: "WASTE", cod: "COD", credit: "CREDIT" }[type] || "TX";
+          const txPrefix = { sale: "POS", purchase: "PAY", hotel: "HOTEL", expense: "EXP", commission: "COMM", waste: "WASTE", cod: "COD", credit: "CREDIT", refund: "REFUND" }[type] || "TX";
           const ordersPaid = settlement ? String(t.reference || "").split(" — ")[0] : "";
 
           return {
@@ -123,7 +125,7 @@ export default function Transactions() {
     // Filtering happens client-side in `filtered` below — changing a filter
     // must not re-fetch the whole ledger from the server.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branchFromUser, branchName]);
+  }, [branchFromUser, branchName, reloadKey]);
 
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
@@ -229,7 +231,7 @@ export default function Transactions() {
         </main>
       </div>
 
-      {selected && <TransactionDetailsModal item={selected} onClose={() => setSelected(null)} />}
+      {selected && <TransactionDetailsModal item={selected} onClose={() => setSelected(null)} onChanged={() => setReloadKey((k) => k + 1)} />}
     </div>
   );
 }

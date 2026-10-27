@@ -238,6 +238,19 @@ export async function getSummary(req, res, next) {
     const importedHotel = +importedOf("hotel").toFixed(2);
     const importedRest = +importedOf("restaurant").toFixed(2);
 
+    // Money handed back to restaurant customers (migration 070), on the day it
+    // went back — off restaurant revenue that day, like a cost of the sale.
+    const refundDaily = await pool.query(
+      `SELECT r.refund_date AS day, SUM(r.amount) AS total, COUNT(*)::int AS n
+       FROM "ORDER_REFUND" r
+       WHERE r.b_id = $1 AND r.refund_date BETWEEN $2::date AND $3::date
+         AND NOT EXISTS (${SHEET_DAY("r.refund_date", "r.b_id")})
+       GROUP BY 1`,
+      [b_id, from, to]
+    );
+    const refundsTotal = +refundDaily.rows.reduce((n, r) => n + num(r.total), 0).toFixed(2);
+    const refundCount = refundDaily.rows.reduce((n, r) => n + r.n, 0);
+
     // Merge the three daily series onto one timeline
     const dayMap = {};
     const put = (rows, key, col = "total") => rows.forEach(r => {
@@ -249,6 +262,10 @@ export async function getSummary(req, res, next) {
     put(importedDaily.rows, "hotel", "hotel");
     put(importedDaily.rows, "restaurant", "restaurant");
     importedDaily.rows.forEach(r => { dayMap[dayOf(r.day)].imported = true; });
+    refundDaily.rows.forEach(r => {
+      const d = dayOf(r.day);
+      (dayMap[d] ||= { day: d, hotel: 0, restaurant: 0, expenses: 0 }).restaurant -= num(r.total);
+    });
     put(expDaily.rows, "expenses");
     put(supplierDaily.rows, "expenses");
     put(wasteDaily.rows, "expenses");
@@ -259,7 +276,7 @@ export async function getSummary(req, res, next) {
 
     const liveHotelRev = num(hotel.rows[0].total);
     const hotelRev = +(liveHotelRev + importedHotel).toFixed(2);
-    const restRev  = +(num(restaurant.rows[0].total) + importedRest).toFixed(2);
+    const restRev  = +(num(restaurant.rows[0].total) + importedRest - refundsTotal).toFixed(2);
     const deliveryCharges = num(restaurant.rows[0].delivery_charges);
     const expTotal = num(expenses.rows[0].total);
     const supTotal = num(suppliers.rows[0].total);
@@ -340,8 +357,10 @@ export async function getSummary(req, res, next) {
         cod_orders: num(restaurant.rows[0].cod_orders),
         credit_received: num(restaurant.rows[0].credit_received),
         credit_orders: num(restaurant.rows[0].credit_orders),
-        paid_at_till: +(restRev - importedRest - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        paid_at_till: +(restRev - importedRest + refundsTotal - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
         imported: importedRest,
+        // Already taken off "revenue" above: money handed back in the range.
+        refunds: refundsTotal, refund_count: refundCount,
         costs: restCosts, cost_total: +restCostTotal.toFixed(2),
         profit: +(restRev - restCostTotal).toFixed(2),
       },
@@ -450,7 +469,27 @@ async function productProfitRows(b_id, from, to) {
      ORDER BY 5 DESC`,
     [b_id, from, to]
   );
+  // Dishes handed back in the range, by the same key: off their units and
+  // sales. What they cost to make stays — they were made.
+  const { rows: back } = await pool.query(
+    `SELECT COALESCE(p.pro_id::text, 'b' || bp."Bpro_id"::text) AS key,
+            SUM(ri.qty)::numeric AS units, SUM(ri.amount) AS sales
+     FROM "ORDER_REFUND_ITEM" ri
+     JOIN "ORDER_REFUND" r ON r.refund_id = ri.refund_id
+     JOIN "ORDER_ITEM" oi ON oi."orderItem_id" = ri."orderItem_id"
+     LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"
+     LEFT JOIN "Product" p ON p.pro_id = bp.pro_id
+     WHERE r.b_id = $1 AND r.refund_date BETWEEN $2::date AND $3::date
+     GROUP BY 1`,
+    [b_id, from, to]
+  );
+  const backOf = Object.fromEntries(back.map((b) => [b.key, b]));
   return rows.map((r) => {
+    const returned = backOf[r.key];
+    if (returned) {
+      r.units = num(r.units) - num(returned.units);
+      r.sales = num(r.sales) - num(returned.sales);
+    }
     const sales = num(r.sales), cost = num(r.cost);
     return {
       key: r.key, name: r.name, category: r.category || null,
@@ -754,7 +793,7 @@ export async function getSalesSummary(req, res, next) {
     const from = req.query.from || daysAgo(29);
     const to   = req.query.to   || todayStr();
 
-    const [folio, walkIn, imported] = await Promise.all([
+    const [folio, walkIn, imported, refunds] = await Promise.all([
       pool.query(
         `SELECT fi.item_date AS day,
                 CASE fi.source WHEN 'meal' THEN 'meal' WHEN 'restaurant' THEN 'restaurant' WHEN 'bar' THEN 'restaurant'
@@ -789,6 +828,14 @@ export async function getSalesSummary(req, res, next) {
          GROUP BY 1, 2`,
         [b_id, from, to]
       ),
+      pool.query(
+        `SELECT r.refund_date AS day, SUM(r.amount) AS total
+         FROM "ORDER_REFUND" r
+         WHERE r.b_id = $1 AND r.refund_date BETWEEN $2::date AND $3::date
+           AND NOT EXISTS (${SHEET_DAY("r.refund_date", "r.b_id")})
+         GROUP BY 1`,
+        [b_id, from, to]
+      ),
     ]);
 
     const keyOfLine = Object.fromEntries(SHEET_COLUMNS.map(([k, label]) => [label, k]));
@@ -802,6 +849,7 @@ export async function getSalesSummary(req, res, next) {
     };
     folio.rows.forEach((r) => add(r.day, r.col, r.total));
     walkIn.rows.forEach((r) => add(r.day, "restaurant", r.total));
+    refunds.rows.forEach((r) => add(r.day, "restaurant", -num(r.total)));
     imported.rows.forEach((r) => add(r.day, keyOfLine[r.line] || "room", r.total, true));
     // Every date gets its row, as on the sheet, a quiet day showing zeros.
     // Capped so a mistyped range cannot ask for thousands of empty rows.
@@ -882,6 +930,24 @@ export async function getTransactions(req, res, next) {
         or_id: x.or_id,
         // Part of `amount`, shown on its own for a delivery order.
         delivery_charge: num(x.delivery_charge),
+      }));
+    }
+
+    if (kind === "all" || kind === "restaurant" || kind === "refund") {
+      const r = await pool.query(
+        `SELECT r.refund_id, r.or_id, r.created_at AS at, r.amount, r.method, r.reason, r.refunded_by,
+                NULLIF(TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')), '') AS handled_by
+         FROM "ORDER_REFUND" r
+         LEFT JOIN "User" u ON u.u_id = r.refunded_by
+         WHERE r.b_id = $1 AND r.refund_date BETWEEN $2::date AND $3::date
+         ORDER BY r.created_at DESC`,
+        [b_id, from, to]
+      );
+      r.rows.forEach(x => out.push({
+        at: x.at, type: "Refund (restaurant)", direction: "out",
+        amount: num(x.amount), method: x.method, reference: `#${x.or_id} — ${x.reason}`, party: null,
+        handled_by: x.handled_by || null, handled_by_id: x.refunded_by ?? null,
+        or_id: x.or_id, refund_id: x.refund_id,
       }));
     }
 

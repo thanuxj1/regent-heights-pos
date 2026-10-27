@@ -12,6 +12,7 @@ import {
   createOrderWithItems,
 } from "../controllers/orderController.js";
 import { getKitchenBoard } from "../controllers/kitchenBoardController.js";
+import { getOrderRefunds, createOrderRefund } from "../controllers/refundController.js";
 
 import {
   requireAuth,
@@ -118,6 +119,13 @@ router.patch("/:id", requireAuth, canEditOrder, patchOrder);
 
 // DELETE /orders/:id
 router.post("/:id/void", requireAuth, canVoidOrder, posTerminal, waiterOrders, voidOrder);
+// Money handed back after a paid sale: a reason always, and a PIN (approveMoneyBack).
+const canRefundOrder = requireRole(
+  [ROLES.CASHIER, ROLES.BRANCH_ADMIN, ROLES.ADMIN],
+  "Cashier, Branch Admin or Admin",
+);
+router.get("/:id/refunds", requireAuth, canRefundOrder, getOrderRefunds);
+router.post("/:id/refund", requireAuth, canRefundOrder, createOrderRefund);
 // The Administrator's own correction: always needs an approval PIN, and is logged.
 router.post("/:id/delete", requireAuth, canDeleteOrder, deleteOrderWithPin);
 router.delete("/:id", requireAuth, canDeleteOrder, deleteOrder);

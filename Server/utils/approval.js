@@ -144,3 +144,23 @@ export async function hashApprovalPin(pin) {
   }
   return bcrypt.hash(raw, 10);
 }
+
+/**
+ * Money going back to a customer, or off what they owe — a refund, a charge
+ * taken off a guest's bill. Gated like the actions it sits beside: front-desk
+ * and till staff need a manager's approval PIN (as for a discount or a void);
+ * an Administrator gives the delete PIN once one is set (as for removing an
+ * order or a payment). The caller asks for the reason.
+ *
+ * @returns {Promise<{ok:true, approver:{u_id:number, name:string}|null}
+ *                  | {ok:false, status:number, message:string}>}
+ */
+export async function approveMoneyBack(req, b_id, what) {
+  if (APPROVER_ROLES.includes(Number(req.user?.role_id))) {
+    const pin = await checkDeletePin(req, b_id);
+    if (!pin.ok) return pin;
+    return { ok: true, approver: pin.pinSet ? pin.approver : null };
+  }
+  const ok = await requireApproval(req, { pin: req.body?.pin, b_id, what });
+  return ok.ok ? { ok: true, approver: ok.approver } : ok;
+}

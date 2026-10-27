@@ -228,6 +228,7 @@ export default function Reports() {
       line("  of which cash on delivery received", money(d.restaurant.cod_received ?? 0), `${d.restaurant.cod_orders ?? 0} delivery order(s) — counted on the day the rider handed the cash over`),
       line("  of which credit sales paid", money(d.restaurant.credit_received ?? 0), `${d.restaurant.credit_orders ?? 0} bill(s) — counted on the day the customer paid`),
       line("  of which delivery charges", money(d.restaurant.delivery_charges ?? 0), "Already included in revenue"),
+      line("  less refunds handed back", money(-(d.restaurant.refunds ?? 0)), `${d.restaurant.refund_count ?? 0} refund(s) — already taken off revenue, on the day each was given`),
       line("  Food and drink bought", money(d.restaurant.costs.food_and_drink_bought), "Ingredients and resale products, as paid to suppliers"),
       line("  Food wasted", money(d.restaurant.costs.food_wasted)),
       line("  Raw materials, packaging, delivery costs", money(d.restaurant.costs.raw_materials_packaging_delivery), "Recorded expenses"),
@@ -374,6 +375,11 @@ export default function Reports() {
                     {" "}({data.by_department?.restaurant.credit_orders ?? 0} bill(s))<br />
                     · delivery charges of{" "}
                     <strong style={{ color: "#1E293B" }}>{money(data.revenue.delivery_charges ?? 0)}</strong>
+                    {data.by_department?.restaurant.refunds > 0 && (
+                      <><br />· less refunds handed back{" "}
+                        <strong style={{ color: "#B91C1C" }}>−{money(data.by_department.restaurant.refunds)}</strong>
+                        {" "}({data.by_department.restaurant.refund_count} refund(s))</>
+                    )}
                     {payables && data.receivables?.cod_outstanding > 0 && (
                       <><br /><span style={{ color: "#B45309" }}>
                         Not counted yet: {money(data.receivables.cod_outstanding)} of cash on delivery still with riders.
