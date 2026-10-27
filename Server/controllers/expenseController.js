@@ -359,6 +359,8 @@ export async function listCategories(req, res, next) {
       builtin: BUILTIN_CATEGORIES,
       custom: own.map((c) => ({ ...c, used: usedBy[c.name] || 0 })),
       methods: EXPENSE_METHODS,
+      // How many expenses each category holds, built-in ones too.
+      used: usedBy,
     });
   } catch (err) { next(err); }
 }

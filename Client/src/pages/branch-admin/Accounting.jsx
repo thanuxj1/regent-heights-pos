@@ -66,13 +66,18 @@ export default function Accounting() {
 
   // The property's own categories, beside the nine standard ones.
   const [customCats, setCustomCats] = useState([]);
+  const [catUsed, setCatUsed] = useState(null); // { category: number of expenses }
   const [showCats, setShowCats] = useState(false);
   const [catForm, setCatForm] = useState({ name:"", department:"shared" });
   const [catEdit, setCatEdit] = useState(null); // { cat_id, name, department }
   const [catError, setCatError] = useState("");
   const loadCats = async () => {
     if (!branchId) return;
-    try { setCustomCats((await getExpenseCategories({ b_id: branchId })).custom || []); } catch { /* the standard ones still work */ }
+    try {
+      const r = await getExpenseCategories({ b_id: branchId });
+      setCustomCats(r.custom || []);
+      setCatUsed(r.used || null);
+    } catch { /* the standard ones still work */ }
   };
   useEffect(() => { loadCats(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [branchId]);
   const allCats = useMemo(
@@ -80,6 +85,9 @@ export default function Accounting() {
     [customCats],
   );
   const catOf = (key) => allCats.find(c => c.key === key);
+  // Filtering by a category nothing is filed under shows nothing, so the
+  // filter offers only those in use. Adding an expense still offers them all.
+  const filterCats = catUsed ? allCats.filter(c => catUsed[c.key] || c.key === filterCat) : allCats;
   const addCat = async (ev) => {
     ev.preventDefault(); setCatError("");
     try { await createExpenseCategory({ ...catForm, b_id: branchId }); setCatForm({ name:"", department:"shared" }); await loadCats(); }
@@ -117,6 +125,7 @@ export default function Accounting() {
         getExpenses(params),
         getExpenseSummary({ b_id: branchId, year }),
       ]);
+      loadCats(); // the filter's "in use" counts
       if (exp.status === "fulfilled") setExpenses(Array.isArray(exp.value) ? exp.value : []);
       if (sum.status === "fulfilled") setSummary(sum.value && typeof sum.value === "object" ? sum.value : {});
       const failed = [exp, sum].find((r) => r.status === "rejected");
@@ -338,7 +347,7 @@ export default function Accounting() {
                   <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
                     style={{ padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:9, fontSize:13, background:"#fff" }}>
                     <option value="all">All Categories</option>
-                    {allCats.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
+                    {filterCats.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
                   </select>
                   <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)}
                     style={{ padding:"9px 12px", border:"1px solid #E2E8F0", borderRadius:9, fontSize:13 }} />
