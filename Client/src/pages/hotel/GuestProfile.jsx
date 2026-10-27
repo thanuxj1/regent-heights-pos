@@ -9,7 +9,7 @@ import {
 
 const SOURCE_LABEL = {
   room: "Room", meal: "Meal Plan", restaurant: "Restaurant", bar: "Bar",
-  laundry: "Laundry", minibar: "Minibar", tax: "Tax", discount: "Discount", misc: "Other",
+  laundry: "Laundry", transport: "Transport", minibar: "Minibar", tax: "Tax", discount: "Discount", misc: "Other",
 };
 
 // Kept at module scope so React reuses the component type across renders instead

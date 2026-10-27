@@ -1060,6 +1060,10 @@ export const getReportOrdersMix = async (params = {}) => {
   const res = await api.get("/reports/orders-mix", { params });
   return res.data ?? { types: [], totals: {}, delivery: { by_partner: [], by_payment: [] } };
 };
+export const getReportSalesSummary = async (params = {}) => {
+  const res = await api.get("/reports/sales-summary", { params });
+  return res.data ?? { columns: [], days: [], totals: {} };
+};
 export const getReportPayables = async (params = {}) => {
   const res = await api.get("/reports/payables", { params });
   return res.data ?? { suppliers: [], commissions: [], totals: {} };

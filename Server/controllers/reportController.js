@@ -728,6 +728,102 @@ export async function getPurchases(req, res, next) {
  * GET /api/reports/transactions?b_id=&from=&to=&kind=
  * A flat, exportable ledger — every money movement in one list.
  */
+/**
+ * GET /api/reports/sales-summary?b_id=&from=&to=
+ *
+ * The property's own daily sales sheet, one row a day in its columns. Days an
+ * old sheet covers come from that sheet (IMPORTED_SALES); every other day from
+ * the live system:
+ *   room        room nights, extra guests, late check-out, tax, discounts and
+ *               the bill's other lines (minibar, "Other")
+ *   meal        meal plans ("basis guest meal")
+ *   restaurant  walk-in sales, counted as Reports counts them, and food and
+ *               bar charged to a room
+ *   transport, laundry   those charges on guests' bills
+ *   cafe, rice  the live system does not split these out; old sheets only
+ * Each day's total, and so the grand total, is the revenue Reports shows.
+ */
+const SHEET_COLUMNS = [
+  ["room", "Room revenue"], ["meal", "Basis guest meal"], ["restaurant", "Restaurant"],
+  ["cafe", "Café"], ["rice", "Rice & curry"], ["transport", "Transport"], ["laundry", "Laundry"],
+];
+export async function getSalesSummary(req, res, next) {
+  try {
+    const b_id = writeBranchId(req, req.query.b_id);
+    if (!b_id) { res.status(400); return next(new Error("b_id is required")); }
+    const from = req.query.from || daysAgo(29);
+    const to   = req.query.to   || todayStr();
+
+    const [folio, walkIn, imported] = await Promise.all([
+      pool.query(
+        `SELECT fi.item_date AS day,
+                CASE fi.source WHEN 'meal' THEN 'meal' WHEN 'restaurant' THEN 'restaurant' WHEN 'bar' THEN 'restaurant'
+                               WHEN 'transport' THEN 'transport' WHEN 'laundry' THEN 'laundry' ELSE 'room' END AS col,
+                SUM(fi.amount) AS total
+         FROM "FOLIO_ITEM" fi
+         JOIN "FOLIO" f   ON f.folio_id = fi.folio_id
+         JOIN "BOOKING" b ON b.booking_id = f.booking_id
+         WHERE b.b_id = $1 AND fi.item_date BETWEEN $2::date AND $3::date
+           AND NOT EXISTS (${SHEET_DAY("fi.item_date", "b.b_id")})
+         GROUP BY 1, 2`,
+        [b_id, from, to]
+      ),
+      // The same sales, on the same days, as the restaurant revenue in getSummary.
+      pool.query(
+        `SELECT COALESCE(cs.settled_date, o.or_date) AS day, SUM(COALESCE(o."or_totalCostWtax", o.or_totalcost, 0)) AS total
+         FROM "ORDER" o
+         LEFT JOIN "DELIVERY_COD_SETTLEMENT" cs ON cs.settlement_id = o.cod_settlement_id
+         WHERE o.b_id = $1 AND o.folio_id IS NULL AND o.or_status <> 'cancelled'
+           AND (
+             (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND o.or_date BETWEEN $2::date AND $3::date)
+             OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date BETWEEN $2::date AND $3::date)
+           )
+           AND NOT EXISTS (${SHEET_DAY("COALESCE(cs.settled_date, o.or_date)", "o.b_id")})
+         GROUP BY 1`,
+        [b_id, from, to]
+      ),
+      pool.query(
+        `SELECT sale_date AS day, line, SUM(amount) AS total
+         FROM "IMPORTED_SALES"
+         WHERE b_id = $1 AND sale_date BETWEEN $2::date AND $3::date
+         GROUP BY 1, 2`,
+        [b_id, from, to]
+      ),
+    ]);
+
+    const keyOfLine = Object.fromEntries(SHEET_COLUMNS.map(([k, label]) => [label, k]));
+    const rows = {};
+    const add = (day, col, amount, isImported = false) => {
+      const d = dayOf(day);
+      const r = (rows[d] ||= { day: d, ...Object.fromEntries(SHEET_COLUMNS.map(([k]) => [k, 0])), total: 0, imported: false });
+      r[col] += num(amount);
+      r.total += num(amount);
+      if (isImported) r.imported = true;
+    };
+    folio.rows.forEach((r) => add(r.day, r.col, r.total));
+    walkIn.rows.forEach((r) => add(r.day, "restaurant", r.total));
+    imported.rows.forEach((r) => add(r.day, keyOfLine[r.line] || "room", r.total, true));
+    // Every date gets its row, as on the sheet, a quiet day showing zeros.
+    // Capped so a mistyped range cannot ask for thousands of empty rows.
+    for (let d = new Date(`${from}T00:00:00Z`), n = 0; d <= new Date(`${to}T00:00:00Z`) && n < 400; d.setUTCDate(d.getUTCDate() + 1), n++) {
+      const key = d.toISOString().slice(0, 10);
+      rows[key] ||= { day: key, ...Object.fromEntries(SHEET_COLUMNS.map(([k]) => [k, 0])), total: 0, imported: false };
+    }
+
+    const round = (r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === "number" ? +v.toFixed(2) : v]));
+    const days = Object.values(rows).sort((a, b) => a.day.localeCompare(b.day)).map(round);
+    const totals = round(Object.fromEntries([...SHEET_COLUMNS.map(([k]) => k), "total"]
+      .map((k) => [k, days.reduce((n, d) => n + d[k], 0)])));
+
+    res.json({
+      range: { from, to },
+      columns: SHEET_COLUMNS.map(([key, label]) => ({ key, label })),
+      days,
+      totals,
+    });
+  } catch (err) { next(err); }
+}
+
 export async function getTransactions(req, res, next) {
   try {
     const b_id = writeBranchId(req, req.query.b_id);

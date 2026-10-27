@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { useAuth } from "../../context/AuthContext";
-import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables, getReportOrdersMix, getBranchById } from "../../services/api";
+import { getReportSummary, getReportTransactions, getReportProducts, getReportPurchases, getReportPayables, getReportOrdersMix, getReportSalesSummary, getBranchById } from "../../services/api";
 import { card, input, label, btn, th, td, errorBox, money, dmy, ymd, addDays, today } from "./ui";
 import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 import { dayKey } from "../../utils/dates";
 import { exportCsv as downloadCsv, dateCell } from "../../utils/exportCsv";
 import { downloadProfitReportPdf } from "../../utils/profitReportPdf";
+import { downloadSalesSummaryCsv, downloadSalesSummaryPdf, salesSummaryTitle } from "../../utils/salesSummaryReport";
 
 const PRESETS = [
   ["Today",        () => [today(), today()]],
@@ -15,6 +16,9 @@ const PRESETS = [
   ["This month",   () => [ymd(new Date(new Date().getFullYear(), new Date().getMonth(), 1)), today()]],
   ["This year",    () => [`${new Date().getFullYear()}-01-01`, today()]],
 ];
+
+// The sales sheet's own style: plain figures, the currency said once above.
+const amount = (v) => Number(v || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const CAT_LABEL = {
   supplier_payments: "Paid to suppliers",
@@ -36,6 +40,7 @@ export default function Reports() {
   const [prodReport, setProdReport] = useState(null);
   const [payables, setPayables] = useState(null);
   const [mix, setMix] = useState(null);
+  const [sheet, setSheet] = useState(null);
   const [prodSort, setProdSort] = useState("sales");
   const [tab, setTab] = useState("overview");
   const [kind, setKind] = useState("all");
@@ -46,14 +51,15 @@ export default function Reports() {
     if (!branchId) return;
     setLoading(true); setError("");
     try {
-      const [s, t, p, pay, mx] = await Promise.all([
+      const [s, t, p, pay, mx, sh] = await Promise.all([
         getReportSummary({ b_id: branchId, from, to }),
         getReportTransactions({ b_id: branchId, from, to, kind }),
         getReportProducts({ b_id: branchId, from, to }),
         getReportPayables({ b_id: branchId }),
         getReportOrdersMix({ b_id: branchId, from, to }),
+        getReportSalesSummary({ b_id: branchId, from, to }),
       ]);
-      setData(s); setLedger(t); setProdReport(p); setPayables(pay); setMix(mx);
+      setData(s); setLedger(t); setProdReport(p); setPayables(pay); setMix(mx); setSheet(sh);
     } catch (e) {
       setError(e?.response?.data?.message || "Could not load reports");
     } finally { setLoading(false); }
@@ -167,6 +173,16 @@ export default function Reports() {
   };
 
   // The statement an auditor can read cold: every line explained, notes at the end.
+  const propertyNameOf = async () => {
+    try {
+      const b = await getBranchById(branchId);
+      return b?.B_name ?? b?.data?.B_name ?? "";
+    } catch { return ""; }
+  };
+  const exportSalesSummaryPdf = async () => {
+    if (sheet) downloadSalesSummaryPdf(sheet, from, to, await propertyNameOf());
+  };
+
   const exportProfitPdf = async () => {
     if (!data) return;
     let propertyName = "";
@@ -273,6 +289,8 @@ export default function Reports() {
         <button onClick={exportPurchasingCsv} disabled={!data} style={btn("ghost")}>Purchasing report</button>
         <button onClick={exportOrdersCsv} disabled={!mix} style={btn("ghost")}>Orders & deliveries</button>
         <button onClick={exportPayablesCsv} disabled={!payables} style={btn("ghost")}>Who we owe</button>
+        <button onClick={exportSalesSummaryPdf} disabled={!sheet} style={btn("ghost")}>Sales summary (PDF)</button>
+        <button onClick={() => downloadSalesSummaryCsv(sheet, from, to)} disabled={!sheet} style={btn("ghost")}>Sales summary (Excel)</button>
         <button onClick={exportProfitPdf} disabled={!data} style={btn("ghost")}>Profit report (PDF)</button>
         <button onClick={exportSummaryCsv} disabled={!data} style={btn("ghost")}>Profit report (Excel)</button>
         <button onClick={exportCsv} disabled={!ledger?.transactions?.length} style={btn("ghost")}>All transactions</button>
@@ -311,6 +329,7 @@ export default function Reports() {
             <div style={{ display: "flex", borderBottom: "1px solid #E2E8F0", paddingLeft: 8 }}>
               <button onClick={() => setTab("overview")} style={tabStyle("overview")}>Overview</button>
               <button onClick={() => setTab("daily")}    style={tabStyle("daily")}>Daily Breakdown</button>
+              <button onClick={() => setTab("sheet")}    style={tabStyle("sheet")}>Sales Summary</button>
               <button onClick={() => setTab("orders")}   style={tabStyle("orders")}>Orders &amp; Deliveries</button>
               <button onClick={() => setTab("products")} style={tabStyle("products")}>Product Profit</button>
               <button onClick={() => setTab("owed")}     style={tabStyle("owed")}>Who We Owe</button>
@@ -477,6 +496,48 @@ export default function Reports() {
                       <span style={{ color: data.profit.net >= 0 ? "#1565C0" : "#B91C1C" }}>{money(data.profit.net)}</span>
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* The property's own daily sheet, in its columns */}
+            {tab === "sheet" && sheet && (
+              <div style={{ padding: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: "#1E293B", flex: 1 }}>{salesSummaryTitle(from, to)}</div>
+                  <button onClick={exportSalesSummaryPdf} style={btn("ghost")}>Download PDF</button>
+                  <button onClick={() => downloadSalesSummaryCsv(sheet, from, to)} style={btn("ghost")}>Download Excel</button>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748B", marginBottom: 14, lineHeight: 1.5 }}>
+                  Laid out like the daily sales sheet. Room revenue includes tax, extra guests, late check-out and other bill lines;
+                  Restaurant includes food and drinks charged to rooms. Café and Rice &amp; curry come from the old sheets only —
+                  since go-live they are part of Restaurant. Days marked <em>old report</em> are from the old sheets. Amounts in LKR.
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+                    <thead><tr style={{ background: "#F8FAFC" }}>
+                      {["Date", ...sheet.columns.map(c => c.label), "Total"].map(h =>
+                        <th key={h} style={{ ...th, textAlign: h === "Date" ? "left" : "right", textTransform: "uppercase" }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {sheet.days.map(d => (
+                        <tr key={d.day} style={{ borderTop: "1px solid #F1F5F9", color: d.total ? "#1E293B" : "#94A3B8" }}>
+                          <td style={{ ...td, whiteSpace: "nowrap" }}>
+                            {d.day}
+                            {d.imported && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: "#92400E",
+                              background: "#FEF3C7", borderRadius: 8, padding: "1px 6px" }}>old report</span>}
+                          </td>
+                          {sheet.columns.map(c => <td key={c.key} style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>{amount(d[c.key])}</td>)}
+                          <td style={{ ...td, textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{amount(d.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot><tr style={{ background: "#F1F5F9", fontWeight: 700 }}>
+                      <td style={td}>TOTAL</td>
+                      {sheet.columns.map(c => <td key={c.key} style={{ ...td, textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{amount(sheet.totals[c.key])}</td>)}
+                      <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "#065F46", whiteSpace: "nowrap" }}>{amount(sheet.totals.total)}</td>
+                    </tr></tfoot>
+                  </table>
                 </div>
               </div>
             )}

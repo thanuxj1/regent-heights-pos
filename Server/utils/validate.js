@@ -73,7 +73,7 @@ export const BOOKING_SOURCES  = ["phone", "walk_in", "email", "agent", "online",
 export const BOOKING_STATUSES = ["tentative", "confirmed", "checked_in", "checked_out", "cancelled", "no_show"];
 export const PAYMENT_METHODS  = ["cash", "card", "bank_transfer", "online", "voucher"];
 export const PAYMENT_KINDS    = ["advance", "settlement", "refund"];
-export const FOLIO_SOURCES    = ["room", "meal", "restaurant", "bar", "laundry", "minibar", "tax", "discount", "payment", "late_checkout", "misc"];
+export const FOLIO_SOURCES    = ["room", "meal", "restaurant", "bar", "laundry", "minibar", "tax", "discount", "payment", "late_checkout", "transport", "misc"];
 
 const DATE_RE  = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE  = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;

@@ -23,7 +23,7 @@ import { DOCUMENT_LOGO, hideIfMissing } from "../../brand";
 const SOURCE_LABEL = {
   room: "Room", meal: "Meal Plan", restaurant: "Restaurant", bar: "Bar",
   laundry: "Laundry", minibar: "Minibar", tax: "Tax", discount: "Discount",
-  payment: "Payment", late_checkout: "Late Check-Out", misc: "Other",
+  payment: "Payment", late_checkout: "Late Check-Out", transport: "Transport", misc: "Other",
 };
 
 export default function BookingDetail() {
@@ -846,7 +846,7 @@ function ChargeModal({ onClose, onSave }) {
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <label style={label}>Type
           <select value={form.source} onChange={e => setForm(f => ({ ...f, source: e.target.value }))} style={{ ...input, marginTop: 4 }}>
-            {["misc", "laundry", "minibar", "bar", "restaurant", "room"].map(s =>
+            {["misc", "laundry", "transport", "minibar", "bar", "restaurant", "room"].map(s =>
               <option key={s} value={s}>{SOURCE_LABEL[s] || s}</option>)}
           </select>
         </label>
