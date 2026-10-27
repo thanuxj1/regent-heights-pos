@@ -71,6 +71,30 @@ export default function BookingDetail() {
     try { pinNeeded = Boolean((await getDiscountApproval())?.pin_needed); } catch { /* ask for it */ }
     setRemovingPay((d) => d && { ...d, pinNeeded });
   };
+  // Take a charge off the bill: the same reason and PIN as a discount or a void.
+  const [removingItem, setRemovingItem] = useState(null); // { item, reason, pin, pinNeeded, busy, error }
+  const openRemoveItem = async (item) => {
+    setRemovingItem({ item, reason: "", pin: "", pinNeeded: !isAdministrator, busy: false, error: "" });
+    if (!isAdministrator) return; // front desk always needs a manager's PIN
+    let pinNeeded = true;
+    try { pinNeeded = Boolean((await getDiscountApproval())?.pin_needed); } catch { /* ask for it */ }
+    setRemovingItem((d) => d && { ...d, pinNeeded });
+  };
+  const confirmRemoveItem = async (e) => {
+    e.preventDefault();
+    const reason = removingItem.reason.trim();
+    if (reason.length < 3) { setRemovingItem({ ...removingItem, error: "Write why this charge is being removed." }); return; }
+    if (removingItem.pinNeeded && !/^\d{4,8}$/.test(removingItem.pin)) { setRemovingItem({ ...removingItem, error: "Enter the PIN (4 to 8 digits)." }); return; }
+    setRemovingItem({ ...removingItem, busy: true, error: "" });
+    try {
+      await deleteFolioItem(id, removingItem.item.item_id, { reason, pin: removingItem.pin });
+      setRemovingItem(null);
+      load();
+    } catch (err) {
+      setRemovingItem((d) => d && { ...d, busy: false, pin: "",
+        error: err?.response?.data?.message || err?.response?.data?.error || "Could not remove the charge" });
+    }
+  };
   const confirmRemovePayment = async (e) => {
     e.preventDefault();
     const reason = removingPay.reason.trim();
@@ -693,7 +717,7 @@ export default function BookingDetail() {
                       <td className="folio-num" style={{ ...td, fontWeight: 700, color: Number(i.amount) < 0 ? "#059669" : "#1E293B" }}>{money(i.amount)}</td>
                       <td className="no-print" style={td}>
                         {folio.status === "open" && (
-                          <button onClick={() => run("delete", () => deleteFolioItem(id, i.item_id))} style={btn("danger")}>Del</button>
+                          <button onClick={() => openRemoveItem(i)} style={btn("danger")}>Del</button>
                         )}
                       </td>
                     </tr>
@@ -775,6 +799,38 @@ export default function BookingDetail() {
       )}
       {showCharge   && <ChargeModal  onClose={() => setShowCharge(false)}  onSave={async (p) => { await postFolioItem(id, p); setShowCharge(false); load(); }} />}
       {showPayment  && <PaymentModal balance={balance} onClose={() => setShowPayment(false)} onSave={async (p) => { await addBookingPayment(id, p); setShowPayment(false); load(); }} />}
+      {removingItem && (
+        <div style={modalWrap}>
+          <form onSubmit={confirmRemoveItem} style={modalBox(420)}>
+            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1E293B" }}>Remove this charge?</h3>
+            <p style={{ margin: "6px 0 12px", fontSize: 13, color: "#64748B", lineHeight: 1.5 }}>
+              {removingItem.item.description} · {money(removingItem.item.amount)} · {dmy(removingItem.item.item_date)}
+            </p>
+            <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 10px", marginBottom: 14, lineHeight: 1.5 }}>
+              For a charge put on the bill by mistake, or something the guest cancelled. It comes off what the guest owes —
+              nothing needs refunding unless they had already paid for it. Your name, the reason and who approved it go in the Activity Log.
+            </div>
+            <label style={{ ...label, marginBottom: 4 }}>Reason</label>
+            <input autoFocus value={removingItem.reason} maxLength={200} placeholder="e.g. guest cancelled the order"
+              onChange={(e) => setRemovingItem({ ...removingItem, reason: e.target.value })} style={{ ...input, marginBottom: 12 }} />
+            {removingItem.pinNeeded && (
+              <>
+                <label style={{ ...label, marginBottom: 4 }}>{isAdministrator ? "PIN" : "Manager's approval PIN"}</label>
+                <input type="password" inputMode="numeric" autoComplete="off" value={removingItem.pin}
+                  onChange={(e) => setRemovingItem({ ...removingItem, pin: e.target.value.replace(/\D/g, "").slice(0, 8) })}
+                  style={{ ...input, letterSpacing: 4 }} />
+              </>
+            )}
+            {removingItem.error && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: "#B91C1C" }}>{removingItem.error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+              <button type="button" onClick={() => setRemovingItem(null)} disabled={removingItem.busy} style={{ ...btn("ghost"), flex: 1 }}>Keep it</button>
+              <button type="submit" disabled={removingItem.busy} style={{ ...btn("danger"), flex: 1, opacity: removingItem.busy ? 0.6 : 1 }}>
+                {removingItem.busy ? "Removing…" : "Remove charge"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
       {removingPay && (
         <div style={modalWrap}>
           <form onSubmit={confirmRemovePayment} style={modalBox(420)}>

@@ -98,7 +98,8 @@ router.get("/bookings/:id/confirmation",   getConfirmation);
 // ─── Folio & payments ────────────────────────────────────────────────────────
 router.get("/bookings/:id/folio",                  getFolio);
 router.post("/bookings/:id/folio/items",           postFolioItem);
-router.delete("/bookings/:id/folio/items/:itemId", deleteFolioItem);
+// Taking a charge off a bill: a reason always, and a PIN (see deleteFolioItem).
+router.post("/bookings/:id/folio/items/:itemId/delete", deleteFolioItem);
 router.post("/bookings/:id/payments",              addPayment);
 // A payment entered by mistake (wrong method, wrong amount, entered twice) is
 // removed by an Administrator — a reason always, a PIN once one is set.

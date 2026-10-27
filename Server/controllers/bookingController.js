@@ -15,7 +15,8 @@ import { syncBookingCommission } from "../utils/commission.js";
 import { lockRooms, roomClash, countFreeRoomsOfType } from "../utils/roomLock.js";
 import { seatGuests, guestCharges, occupancyWarnings } from "../utils/guestCharges.js";
 import { takeStock, noteShortfall } from "../utils/inventory.js";
-import { checkDeletePin } from "../utils/approval.js";
+import { checkDeletePin, requireApproval } from "../utils/approval.js";
+import { ROLES } from "../middleware/authMiddleware.js";
 
 /**
  * Tell every front desk on this branch that the rack/calendar is stale.
@@ -1344,28 +1345,64 @@ export async function postFolioItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * POST /api/hotel/bookings/:id/folio/items/:itemId/delete  body: { reason, pin }
+ *
+ * Taking a charge off a guest's bill lowers what they owe, the same as a
+ * discount, so it is gated the same way: a reason always, and a PIN. Front-desk
+ * staff need a manager's approval PIN (as for a discount or a void); an
+ * Administrator gives the delete PIN once one is set (as for removing an order
+ * or a payment). The Activity Log keeps the removed line, the reason and who
+ * approved it.
+ */
 export async function deleteFolioItem(req, res, next) {
   try {
-    const owner = await pool.query(
-      `SELECT f.booking_id FROM "FOLIO_ITEM" fi
+    const itemId = Number(req.params.itemId);
+    const { rows: [item] } = await pool.query(
+      `SELECT fi.*, f.booking_id, f.status AS folio_status, b.b_id, b.booking_ref
+       FROM "FOLIO_ITEM" fi
        JOIN "FOLIO" f ON f.folio_id = fi.folio_id
+       JOIN "BOOKING" b ON b.booking_id = f.booking_id
        WHERE fi.item_id = $1`,
-      [Number(req.params.itemId)]
+      [itemId]
     );
-    if (!owner.rows.length) { res.status(404); return next(new Error("Item not found")); }
-    await assertBookingInScope(req, res, owner.rows[0].booking_id);
-    const item = await pool.query(
-      'SELECT description, amount FROM "FOLIO_ITEM" WHERE item_id = $1', [Number(req.params.itemId)]);
+    if (!item || (req.params.id && Number(req.params.id) !== Number(item.booking_id))) {
+      res.status(404); return next(new Error("Item not found"));
+    }
+    await assertBookingInScope(req, res, item.booking_id);
+    if (item.folio_status !== "open") { res.status(409); return next(new Error("This bill is already closed")); }
+
+    const reason = String(req.body?.reason ?? "").trim();
+    if (reason.length < 3) { res.status(400); return next(new Error("Say why this charge is being removed — it goes in the Activity Log.")); }
+    if (reason.length > 200) { res.status(400); return next(new Error("That reason is too long (200 characters).")); }
+
+    const manager = [ROLES.BRANCH_ADMIN, ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(Number(req.user?.role_id));
+    let approver;
+    if (manager) {
+      const pin = await checkDeletePin(req, item.b_id);
+      if (!pin.ok) { res.status(pin.status); return next(new Error(pin.message)); }
+      approver = pin.pinSet ? pin.approver : null;
+    } else {
+      const ok = await requireApproval(req, { pin: req.body?.pin, b_id: item.b_id, what: "remove a charge from a guest's bill" });
+      if (!ok.ok) { res.status(ok.status); return next(new Error(ok.message)); }
+      approver = ok.approver;
+    }
 
     const { rowCount } = await pool.query(
       `DELETE FROM "FOLIO_ITEM" fi USING "FOLIO" f
        WHERE fi.item_id=$1 AND fi.folio_id=f.folio_id AND f.status='open'`,
-      [Number(req.params.itemId)]
+      [itemId]
     );
-    if (!rowCount) { res.status(404); return next(new Error("Item not found, or its folio is already closed")); }
-    logActivity(req, { action: "delete", entity: "folio_item", entity_id: req.params.itemId,
-      summary: `Removed "${item.rows[0]?.description ?? "an item"}" (${item.rows[0]?.amount ?? "?"}) from booking #${owner.rows[0].booking_id}` });
-    res.status(204).send();
+    if (!rowCount) { res.status(404); return next(new Error("Item not found, or its bill is already closed")); }
+    logActivity(req, {
+      action: "delete", entity: "folio_item", entity_id: itemId, b_id: item.b_id,
+      summary: `Removed "${item.description}" (LKR ${Number(item.amount).toFixed(2)}) from booking ${item.booking_ref} — ${reason}. `
+             + (approver ? `Approved by ${approver.name || "manager"}` : "No PIN set at the property"),
+      details: { reason, booking_id: item.booking_id, booking_ref: item.booking_ref,
+                 item: { source: item.source, description: item.description, qty: item.qty, unit_price: item.unit_price, amount: item.amount, item_date: item.item_date },
+                 approved_by: approver?.u_id ?? null, approver: approver?.name ?? null },
+    });
+    res.json({ success: true, removed: itemId });
   } catch (err) { next(err); }
 }
 

@@ -1016,8 +1016,10 @@ export const postFolioItem = async (id, payload) => {
   const res = await api.post(`/hotel/bookings/${id}/folio/items`, payload);
   return res.data;
 };
-export const deleteFolioItem = async (id, itemId) => {
-  await api.delete(`/hotel/bookings/${id}/folio/items/${itemId}`);
+/** Take a charge off a guest's bill: a reason always, and a PIN. */
+export const deleteFolioItem = async (id, itemId, { reason, pin }) => {
+  const res = await api.post(`/hotel/bookings/${id}/folio/items/${itemId}/delete`, { reason, pin });
+  return res.data;
 };
 export const addBookingPayment = async (id, payload) => {
   const res = await api.post(`/hotel/bookings/${id}/payments`, payload);
