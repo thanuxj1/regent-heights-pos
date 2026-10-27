@@ -81,4 +81,36 @@ await t("nor can it read them by asking for tenant A's branch", async () => {
   ok(res.status >= 400 || Number(res.data?.imported?.total ?? 0) === 0, `got ${res.status}`);
 });
 
+section("a day a sheet covers is the sheet's");
+await t("a system sale on a sheet's restaurant day is not added; on any other day it is", async () => {
+  const { stamp } = await ctx();
+  const cat = await api(owner, "POST", "/categories", { cat_name: `${stamp}_SheetDay` });
+  status(cat, 201);
+  const pro = await api(owner, "POST", "/products", { pro_name: "ZZQA Sheet Tea", pro_qty: 100, pro_price: 500, cat_id: cat.data.cat_id, com_id: A.com_id });
+  status(pro, 201);
+  const bp = await api(owner, "POST", "/branch_products", {
+    B_id: A.b_id, pro_id: pro.data.pro_id, pro_name: "ZZQA Sheet Tea", pro_shortname: "Tea", pro_image: "placeholder.png",
+    pro_des: "t", cat_id: cat.data.cat_id, pro_price: 500, pro_quantity: 100,
+  });
+  status(bp, 201);
+  const sell = async (tag, day) => {
+    const res = await api(A.cashier.token, "POST", "/orders/with-items", {
+      order: {
+        or_tax: 0, or_totalcost: 500, or_totalCostWtax: 500, or_status: "pending", or_type: "takeaway",
+        u_id: A.cashier.u_id, b_id: A.b_id, client_ref: `${stamp.toLowerCase()}-sheet-${tag}`, payment_method: "cash",
+      },
+      items: [{ Bpro_id: bp.data.Bpro_id, pro_quantity: 1, unit_price: 500 }],
+    });
+    status(res, 201);
+    // A trial sale from before go-live: dated back onto the sheet's days.
+    await pool.query(`UPDATE "ORDER" SET or_date = $2 WHERE or_id = $1`, [res.data.data.or_id, day]);
+  };
+  await sell("covered", "2025-03-01");   // the sheet has restaurant figures that day
+  await sell("uncovered", "2025-03-03"); // no sheet that day
+  const s = await summary(owner, A.b_id, "2025-03-01", "2025-03-03");
+  eq(s.revenue.restaurant, 6045 + 500, "the sheet's restaurant, plus only the uncovered day's sale");
+  eq(s.revenue.hotel, 15809.7, "hotel untouched");
+  eq(s.daily.map((d) => `${d.day} ${d.restaurant}`).join(", "), "2025-03-01 4170, 2025-03-02 1875, 2025-03-03 500");
+});
+
 await finish("t30-imported-sales.mjs");

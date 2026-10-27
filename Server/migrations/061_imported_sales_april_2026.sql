@@ -1,12 +1,12 @@
 -- April 2026, from the property's "SALES SUMMARY - 30th OF APRIL 2026" sheet.
 --
--- 30 days, LKR 1,805,728.7 in all: hotel 1,255,392.7
--- (room revenue, basis guest meal, transport, laundry), restaurant
--- 550,336 (restaurant, café, rice & curry). Every day's columns add up to
--- its total and every column to the sheet's TOTAL row. Days with nothing in a
--- column have no row; the sheet's empty 1 May line is left out.
+-- 30 days with sales, LKR 1,805,728.70 in all: hotel 1,255,392.70, restaurant 550,336.00.
+-- Room revenue 1,161,608.00, Basis guest meal 71,000.00, Restaurant 119,396.00, Café 388,415.00, Rice & curry 42,525.00, Transport 4,600.00, Laundry 18,184.70.
+-- Every day's columns add up to its total and every column to the sheet's
+-- total row. Blank cells and days with nothing in them have no row.
 --
--- A day the live system already has sales or guest charges for is skipped, so
+-- The sheet is the record for each day it covers: Reports leaves out whatever
+-- the system itself holds for that day (trial entries before go-live), so
 -- nothing is counted twice. See 060_imported_sales.sql.
 INSERT INTO "IMPORTED_SALES" (b_id, sale_date, department, line, amount, source)
 SELECT b."B_id", v.sale_date, v.department, v.line, v.amount, 'Sales summary, April 2026'
@@ -138,10 +138,4 @@ CROSS JOIN (VALUES
   (DATE '2026-04-30', 'hotel', 'Laundry', 18184.7)
 ) AS v (sale_date, department, line, amount)
 WHERE b."B_name" ILIKE 'Regent Heights%'
-  AND NOT EXISTS (SELECT 1 FROM "ORDER" o WHERE o.b_id = b."B_id" AND o.or_date = v.sale_date AND o.or_status <> 'cancelled')
-  AND NOT EXISTS (
-    SELECT 1 FROM "FOLIO_ITEM" fi
-    JOIN "FOLIO" f ON f.folio_id = fi.folio_id
-    JOIN "BOOKING" bk ON bk.booking_id = f.booking_id
-    WHERE bk.b_id = b."B_id" AND fi.item_date = v.sale_date)
 ON CONFLICT (b_id, sale_date, line) DO NOTHING;

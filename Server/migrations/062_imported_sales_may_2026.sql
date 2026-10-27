@@ -1,0 +1,96 @@
+-- May 2026, from the property's "SALES SUMMARY - 31st OF MAY 2026" sheet.
+--
+-- 31 days with sales, LKR 720,278.82 in all: hotel 394,621.82, restaurant 325,657.00.
+-- Room revenue 334,365.00, Basis guest meal 58,000.00, Restaurant 12,595.00, Café 187,741.00, Rice & curry 125,321.00, Transport 0.00, Laundry 2,256.82.
+-- Every day's columns add up to its total and every column to the sheet's
+-- total row. Blank cells and days with nothing in them have no row.
+--
+-- The sheet is the record for each day it covers: Reports leaves out whatever
+-- the system itself holds for that day (trial entries before go-live), so
+-- nothing is counted twice. See 060_imported_sales.sql.
+INSERT INTO "IMPORTED_SALES" (b_id, sale_date, department, line, amount, source)
+SELECT b."B_id", v.sale_date, v.department, v.line, v.amount, 'Sales summary, May 2026'
+FROM "Branch" b
+CROSS JOIN (VALUES
+  (DATE '2026-05-01', 'hotel', 'Room revenue', 28150),
+  (DATE '2026-05-01', 'hotel', 'Basis guest meal', 1000),
+  (DATE '2026-05-01', 'restaurant', 'Restaurant', 9295),
+  (DATE '2026-05-01', 'restaurant', 'Café', 11480),
+  (DATE '2026-05-01', 'restaurant', 'Rice & curry', 2650),
+  (DATE '2026-05-02', 'hotel', 'Room revenue', 28150),
+  (DATE '2026-05-02', 'hotel', 'Basis guest meal', 1000),
+  (DATE '2026-05-02', 'restaurant', 'Café', 4350),
+  (DATE '2026-05-03', 'hotel', 'Room revenue', 28150),
+  (DATE '2026-05-03', 'hotel', 'Basis guest meal', 1000),
+  (DATE '2026-05-03', 'restaurant', 'Café', 1320),
+  (DATE '2026-05-03', 'hotel', 'Laundry', 2256.82),
+  (DATE '2026-05-04', 'hotel', 'Room revenue', 68830),
+  (DATE '2026-05-04', 'hotel', 'Basis guest meal', 4000),
+  (DATE '2026-05-04', 'restaurant', 'Restaurant', 2805),
+  (DATE '2026-05-04', 'restaurant', 'Café', 1535),
+  (DATE '2026-05-04', 'restaurant', 'Rice & curry', 3050),
+  (DATE '2026-05-05', 'hotel', 'Room revenue', 28150),
+  (DATE '2026-05-05', 'hotel', 'Basis guest meal', 1000),
+  (DATE '2026-05-05', 'restaurant', 'Café', 3520),
+  (DATE '2026-05-05', 'restaurant', 'Rice & curry', 3100),
+  (DATE '2026-05-06', 'restaurant', 'Café', 1100),
+  (DATE '2026-05-07', 'restaurant', 'Café', 3375),
+  (DATE '2026-05-07', 'restaurant', 'Rice & curry', 3812),
+  (DATE '2026-05-08', 'restaurant', 'Café', 13700),
+  (DATE '2026-05-08', 'restaurant', 'Rice & curry', 3943),
+  (DATE '2026-05-09', 'restaurant', 'Café', 8150),
+  (DATE '2026-05-09', 'restaurant', 'Rice & curry', 4482),
+  (DATE '2026-05-10', 'restaurant', 'Café', 10006),
+  (DATE '2026-05-10', 'restaurant', 'Rice & curry', 4482),
+  (DATE '2026-05-11', 'restaurant', 'Café', 7355),
+  (DATE '2026-05-11', 'restaurant', 'Rice & curry', 4700),
+  (DATE '2026-05-12', 'restaurant', 'Café', 5050),
+  (DATE '2026-05-12', 'restaurant', 'Rice & curry', 750),
+  (DATE '2026-05-13', 'restaurant', 'Café', 13826),
+  (DATE '2026-05-13', 'restaurant', 'Rice & curry', 4768),
+  (DATE '2026-05-14', 'restaurant', 'Café', 2224),
+  (DATE '2026-05-14', 'restaurant', 'Rice & curry', 3288),
+  (DATE '2026-05-15', 'restaurant', 'Café', 5760),
+  (DATE '2026-05-15', 'restaurant', 'Rice & curry', 3288),
+  (DATE '2026-05-16', 'hotel', 'Room revenue', 15625),
+  (DATE '2026-05-16', 'hotel', 'Basis guest meal', 2000),
+  (DATE '2026-05-16', 'restaurant', 'Café', 1130),
+  (DATE '2026-05-16', 'restaurant', 'Rice & curry', 2838),
+  (DATE '2026-05-17', 'hotel', 'Room revenue', 25710),
+  (DATE '2026-05-17', 'hotel', 'Basis guest meal', 12000),
+  (DATE '2026-05-17', 'restaurant', 'Café', 21270),
+  (DATE '2026-05-17', 'restaurant', 'Rice & curry', 1788),
+  (DATE '2026-05-18', 'restaurant', 'Café', 1300),
+  (DATE '2026-05-18', 'restaurant', 'Rice & curry', 3732),
+  (DATE '2026-05-19', 'restaurant', 'Café', 8475),
+  (DATE '2026-05-19', 'restaurant', 'Rice & curry', 2100),
+  (DATE '2026-05-20', 'restaurant', 'Café', 4610),
+  (DATE '2026-05-20', 'restaurant', 'Rice & curry', 4844),
+  (DATE '2026-05-21', 'restaurant', 'Café', 550),
+  (DATE '2026-05-21', 'restaurant', 'Rice & curry', 1088),
+  (DATE '2026-05-22', 'restaurant', 'Café', 11960),
+  (DATE '2026-05-22', 'restaurant', 'Rice & curry', 3400),
+  (DATE '2026-05-23', 'restaurant', 'Café', 350),
+  (DATE '2026-05-23', 'restaurant', 'Rice & curry', 4244),
+  (DATE '2026-05-24', 'restaurant', 'Café', 9100),
+  (DATE '2026-05-24', 'restaurant', 'Rice & curry', 3324),
+  (DATE '2026-05-25', 'hotel', 'Room revenue', 111600),
+  (DATE '2026-05-25', 'hotel', 'Basis guest meal', 36000),
+  (DATE '2026-05-25', 'restaurant', 'Restaurant', 495),
+  (DATE '2026-05-25', 'restaurant', 'Café', 8930),
+  (DATE '2026-05-25', 'restaurant', 'Rice & curry', 2448),
+  (DATE '2026-05-26', 'restaurant', 'Café', 600),
+  (DATE '2026-05-26', 'restaurant', 'Rice & curry', 4036),
+  (DATE '2026-05-27', 'restaurant', 'Café', 5735),
+  (DATE '2026-05-27', 'restaurant', 'Rice & curry', 2900),
+  (DATE '2026-05-28', 'restaurant', 'Café', 8100),
+  (DATE '2026-05-28', 'restaurant', 'Rice & curry', 36130),
+  (DATE '2026-05-29', 'restaurant', 'Café', 4700),
+  (DATE '2026-05-29', 'restaurant', 'Rice & curry', 3818),
+  (DATE '2026-05-30', 'restaurant', 'Café', 4350),
+  (DATE '2026-05-30', 'restaurant', 'Rice & curry', 3468),
+  (DATE '2026-05-31', 'restaurant', 'Café', 3830),
+  (DATE '2026-05-31', 'restaurant', 'Rice & curry', 2850)
+) AS v (sale_date, department, line, amount)
+WHERE b."B_name" ILIKE 'Regent Heights%'
+ON CONFLICT (b_id, sale_date, line) DO NOTHING;

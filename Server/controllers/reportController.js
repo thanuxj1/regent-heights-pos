@@ -10,6 +10,12 @@ const todayStr = () => hotelToday();
 const daysAgo = (n) => hotelDay(-n);
 // A DATE column reaches Node as a Date at local midnight. Its UTC date is the day
 // before whenever the server is ahead of UTC — every daily bar sat a day early.
+// A day an old summary sheet covers (IMPORTED_SALES) is the sheet's: the sheet
+// records every side for that day, an empty column meaning nothing taken, so
+// anything the system holds for it — trial entries made before go-live — is
+// left out of the revenue figures and nothing is counted twice.
+const SHEET_DAY = (day, branch) =>
+  `SELECT 1 FROM "IMPORTED_SALES" i WHERE i.b_id = ${branch} AND i.sale_date = ${day}`;
 const dayOf = (v) => {
   const x = new Date(v);
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
@@ -39,7 +45,8 @@ export async function getSummary(req, res, next) {
          FROM "FOLIO_ITEM" fi
          JOIN "FOLIO" f   ON f.folio_id = fi.folio_id
          JOIN "BOOKING" b ON b.booking_id = f.booking_id
-         WHERE b.b_id = $1 AND fi.item_date BETWEEN $2::date AND $3::date`,
+         WHERE b.b_id = $1 AND fi.item_date BETWEEN $2::date AND $3::date
+           AND NOT EXISTS (${SHEET_DAY("fi.item_date", "b.b_id")})`,
         [b_id, from, to]
       ),
 
@@ -68,7 +75,8 @@ export async function getSummary(req, res, next) {
            AND (
              (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND o.or_date BETWEEN $2::date AND $3::date)
              OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date BETWEEN $2::date AND $3::date)
-           )`,
+           )
+           AND NOT EXISTS (${SHEET_DAY("COALESCE(cs.settled_date, o.or_date)", "o.b_id")})`,
         [b_id, from, to]
       ),
 
@@ -95,6 +103,7 @@ export async function getSummary(req, res, next) {
          JOIN "FOLIO" f   ON f.folio_id = fi.folio_id
          JOIN "BOOKING" b ON b.booking_id = f.booking_id
          WHERE b.b_id = $1 AND fi.item_date BETWEEN $2::date AND $3::date
+           AND NOT EXISTS (${SHEET_DAY("fi.item_date", "b.b_id")})
          GROUP BY day ORDER BY day`,
         [b_id, from, to]
       ),
@@ -108,6 +117,7 @@ export async function getSummary(req, res, next) {
              (NOT (o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND o.or_date BETWEEN $2::date AND $3::date)
              OR ((o.payment_method = 'credit' OR (o.or_type = 'delivery' AND o.payment_method = 'cod')) AND cs.settled_date BETWEEN $2::date AND $3::date)
            )
+           AND NOT EXISTS (${SHEET_DAY("COALESCE(cs.settled_date, o.or_date)", "o.b_id")})
          GROUP BY day ORDER BY day`,
         [b_id, from, to]
       ),
@@ -256,7 +266,7 @@ export async function getSummary(req, res, next) {
     const wasteTotal = num(waste.rows[0].total);
     const outTotal = expTotal + supTotal + wasteTotal;
     const commTotal = num(commissions.rows[0].total);
-    const revenue  = hotelRev + restRev;
+    const revenue  = +(hotelRev + restRev).toFixed(2);
 
     const spanDays = Math.max(
       Math.round((new Date(to) - new Date(from)) / 86400000) + 1, 1
