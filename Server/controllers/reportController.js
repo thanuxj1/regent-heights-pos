@@ -205,14 +205,40 @@ export async function getSummary(req, res, next) {
       ),
     ]);
 
+    // Days from before go-live, typed in from the old summary sheets (migration
+    // 060). Revenue only — they carry no orders, nights or costs.
+    const importedLines = await pool.query(
+      `SELECT department, line, SUM(amount) AS total
+       FROM "IMPORTED_SALES"
+       WHERE b_id = $1 AND sale_date BETWEEN $2::date AND $3::date
+       GROUP BY department, line ORDER BY department, total DESC`,
+      [b_id, from, to]
+    );
+    const importedDaily = await pool.query(
+      `SELECT sale_date AS day,
+              SUM(amount) FILTER (WHERE department = 'hotel') AS hotel,
+              SUM(amount) FILTER (WHERE department = 'restaurant') AS restaurant
+       FROM "IMPORTED_SALES"
+       WHERE b_id = $1 AND sale_date BETWEEN $2::date AND $3::date
+       GROUP BY day ORDER BY day`,
+      [b_id, from, to]
+    );
+    const importedOf = (dep) => importedLines.rows
+      .filter(r => r.department === dep).reduce((n, r) => n + num(r.total), 0);
+    const importedHotel = +importedOf("hotel").toFixed(2);
+    const importedRest = +importedOf("restaurant").toFixed(2);
+
     // Merge the three daily series onto one timeline
     const dayMap = {};
-    const put = (rows, key) => rows.forEach(r => {
+    const put = (rows, key, col = "total") => rows.forEach(r => {
       const d = dayOf(r.day);
-      (dayMap[d] ||= { day: d, hotel: 0, restaurant: 0, expenses: 0 })[key] += num(r.total);
+      (dayMap[d] ||= { day: d, hotel: 0, restaurant: 0, expenses: 0 })[key] += num(r[col]);
     });
     put(hotelDaily.rows, "hotel");
     put(restDaily.rows, "restaurant");
+    put(importedDaily.rows, "hotel", "hotel");
+    put(importedDaily.rows, "restaurant", "restaurant");
+    importedDaily.rows.forEach(r => { dayMap[dayOf(r.day)].imported = true; });
     put(expDaily.rows, "expenses");
     put(supplierDaily.rows, "expenses");
     put(wasteDaily.rows, "expenses");
@@ -221,8 +247,9 @@ export async function getSummary(req, res, next) {
       .sort((a, b) => a.day.localeCompare(b.day))
       .map(d => ({ ...d, revenue: d.hotel + d.restaurant, profit: d.hotel + d.restaurant - d.expenses }));
 
-    const hotelRev = num(hotel.rows[0].total);
-    const restRev  = num(restaurant.rows[0].total);
+    const liveHotelRev = num(hotel.rows[0].total);
+    const hotelRev = +(liveHotelRev + importedHotel).toFixed(2);
+    const restRev  = +(num(restaurant.rows[0].total) + importedRest).toFixed(2);
     const deliveryCharges = num(restaurant.rows[0].delivery_charges);
     const expTotal = num(expenses.rows[0].total);
     const supTotal = num(suppliers.rows[0].total);
@@ -294,7 +321,7 @@ export async function getSummary(req, res, next) {
     const restCostTotal = restCosts.food_and_drink_bought + restCosts.food_wasted + restCosts.raw_materials_packaging_delivery;
     const byDepartment = {
       hotel: {
-        revenue: hotelRev, costs: hotelCosts, cost_total: +hotelCostTotal.toFixed(2),
+        revenue: hotelRev, imported: importedHotel, costs: hotelCosts, cost_total: +hotelCostTotal.toFixed(2),
         profit: +(hotelRev - hotelCostTotal).toFixed(2),
       },
       restaurant: {
@@ -303,7 +330,8 @@ export async function getSummary(req, res, next) {
         cod_orders: num(restaurant.rows[0].cod_orders),
         credit_received: num(restaurant.rows[0].credit_received),
         credit_orders: num(restaurant.rows[0].credit_orders),
-        paid_at_till: +(restRev - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        paid_at_till: +(restRev - importedRest - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        imported: importedRest,
         costs: restCosts, cost_total: +restCostTotal.toFixed(2),
         profit: +(restRev - restCostTotal).toFixed(2),
       },
@@ -328,6 +356,15 @@ export async function getSummary(req, res, next) {
       // delivery_charges is a part of restaurant, not an addition to it — total
       // is hotel + restaurant exactly as before.
       revenue: { hotel: hotelRev, restaurant: restRev, delivery_charges: deliveryCharges, total: revenue },
+      // Already inside the revenue figures above: the part of them that came
+      // from the old summary sheets, line by line as the sheets named them.
+      imported: {
+        total: +(importedHotel + importedRest).toFixed(2),
+        hotel: importedHotel,
+        restaurant: importedRest,
+        days: importedDaily.rows.length,
+        by_line: importedLines.rows.map(r => ({ department: r.department, line: r.line, total: num(r.total) })),
+      },
       expenses: {
         total: +outTotal.toFixed(2),
         recorded: expTotal,
@@ -349,8 +386,10 @@ export async function getSummary(req, res, next) {
         rooms_sold: roomsSold,
         rooms_available: roomsAvailable,
         occupancy_pct: roomsAvailable ? +((roomsSold / roomsAvailable) * 100).toFixed(1) : 0,
-        adr: roomsSold ? +(hotelRev / roomsSold).toFixed(2) : 0,     // average daily rate
-        revpar: roomsAvailable ? +(hotelRev / roomsAvailable).toFixed(2) : 0,
+        // Live figures only: the old sheets have money but no room-nights, so
+        // their revenue would inflate the rate.
+        adr: roomsSold ? +(liveHotelRev / roomsSold).toFixed(2) : 0,     // average daily rate
+        revpar: roomsAvailable ? +(liveHotelRev / roomsAvailable).toFixed(2) : 0,
       },
       restaurant_orders: num(restaurant.rows[0].orders),
       receivables: {

@@ -85,6 +85,8 @@ export function downloadProfitReportPdf({ data, payables, from, to, propertyName
 
     section("2. HOTEL"),
     line("Revenue", d.hotel.revenue, "Room charges, meals and room service posted to guests' bills."),
+    ...(d.hotel.imported > 0 ? [line("  of which from the old sales reports", d.hotel.imported,
+      `${(data.imported?.by_line || []).filter((l) => l.department === "hotel").map((l) => `${l.line} ${fmt(l.total)}`).join(", ")}. Days before the system went live, typed in from the daily summary sheets.`)] : []),
     sub("Costs that belong to the hotel"),
     line("  Agent commissions", d.hotel.costs.commissions, "Paid or owed to travel agents for bookings they brought."),
     line("  Hotel supplies bought", d.hotel.costs.supplies_bought, "Cleaning products and other items the hotel uses itself, as paid to suppliers."),
@@ -99,6 +101,8 @@ export function downloadProfitReportPdf({ data, payables, from, to, propertyName
     line("  of which cash on delivery received", d.restaurant.cod_received ?? 0,
       `${d.restaurant.cod_orders ?? 0} delivery order(s) whose cash a rider handed over in this period. Counted on the day the cash arrived, not the day the order went out.`),
     line("  of which delivery charges", d.restaurant.delivery_charges ?? 0, "Already inside the revenue above, shown so it can be seen."),
+    ...(d.restaurant.imported > 0 ? [line("  of which from the old sales reports", d.restaurant.imported,
+      `${(data.imported?.by_line || []).filter((l) => l.department === "restaurant").map((l) => `${l.line} ${fmt(l.total)}`).join(", ")}. Days before the system went live, typed in from the daily summary sheets.`)] : []),
     sub("Costs that belong to the restaurant"),
     line("  Food and drink bought", d.restaurant.costs.food_and_drink_bought, "Ingredients and goods for resale, as paid to suppliers."),
     line("  Food wasted", d.restaurant.costs.food_wasted, "Ingredients thrown away or lost, valued at their cost."),

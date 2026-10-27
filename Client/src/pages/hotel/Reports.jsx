@@ -191,6 +191,10 @@ export default function Reports() {
       [],
       title("Summary"),
       line("Total revenue", money(data.revenue.total), "Hotel + restaurant"),
+      ...(data.imported?.total > 0 ? [
+        line("  of which from the old sales reports", money(data.imported.total), `${data.imported.days} day(s) before the system went live, typed in from the daily summary sheets`),
+        ...data.imported.by_line.map(l => line(`    ${l.department === "hotel" ? "Hotel" : "Restaurant"}: ${l.line}`, money(l.total))),
+      ] : []),
       line("Total costs", money(totalCosts), "Everything paid out"),
       line("NET PROFIT", money(data.profit.net), `Revenue minus costs — ${pct(data.profit.margin_pct)} of revenue`),
       [],
@@ -364,6 +368,36 @@ export default function Reports() {
                     )}
                   </div>
 
+                  {/* Days from before go-live: inside the bars above, shown line by
+                      line as the old summary sheets named them. */}
+                  {data.imported?.total > 0 && (
+                    <div style={{ marginTop: 18, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: 14 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#92400E", marginBottom: 4 }}>
+                        From the old sales reports: {money(data.imported.total)}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#A16207", marginBottom: 8 }}>
+                        {data.imported.days} day(s) before the system went live, typed in from the daily summary sheets.
+                        Already included in the figures above; daily totals only, with no orders or guests behind them.
+                      </div>
+                      {[["hotel", "Hotel"], ["restaurant", "Restaurant"]].map(([dep, label]) => {
+                        const lines = data.imported.by_line.filter(l => l.department === dep);
+                        if (!lines.length) return null;
+                        return (
+                          <div key={dep} style={{ marginBottom: 6 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, color: "#78350F" }}>
+                              <span>{label}</span><span>{money(data.imported[dep])}</span>
+                            </div>
+                            {lines.map(l => (
+                              <div key={l.line} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#92400E", paddingLeft: 10 }}>
+                                <span>{l.line}</span><span>{money(l.total)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {/* Who earned what: each side's own costs, then the costs nobody can
                       assign to one side, then the total that matches Net Profit above. */}
                   <div style={{ marginTop: 24, background: "#F8FAFC", borderRadius: 10, padding: 16 }}>
@@ -482,7 +516,13 @@ export default function Reports() {
                       <tbody>
                         {[...data.daily].reverse().map(d => (
                           <tr key={d.day} style={{ borderTop: "1px solid #F1F5F9" }}>
-                            <td style={{ ...td, fontWeight: 600, color: "#1E293B" }}>{dmy(d.day)}</td>
+                            <td style={{ ...td, fontWeight: 600, color: "#1E293B" }}>
+                              {dmy(d.day)}
+                              {d.imported && (
+                                <span title="From the old sales reports" style={{ marginLeft: 6, fontSize: 10, fontWeight: 600,
+                                  color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "1px 6px" }}>old report</span>
+                              )}
+                            </td>
                             <td style={td}>{money(d.hotel)}</td>
                             <td style={td}>{money(d.restaurant)}</td>
                             <td style={{ ...td, fontWeight: 600, color: "#065F46" }}>{money(d.revenue)}</td>
