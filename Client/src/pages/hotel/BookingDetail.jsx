@@ -89,6 +89,7 @@ export default function BookingDetail() {
     try {
       await deleteFolioItem(id, removingItem.item.item_id, { reason, pin: removingItem.pin });
       setRemovingItem(null);
+      setError("");
       load();
     } catch (err) {
       setRemovingItem((d) => d && { ...d, busy: false, pin: "",
@@ -104,6 +105,7 @@ export default function BookingDetail() {
     try {
       await removeBookingPayment(id, removingPay.payment.bp_id, { reason, pin: removingPay.pin });
       setRemovingPay(null);
+      setError(""); // e.g. an old "balance must be settled" from a check-out tried before this
       load();
     } catch (err) {
       setRemovingPay((d) => d && { ...d, busy: false, pin: "",
@@ -797,8 +799,8 @@ export default function BookingDetail() {
           </div>
         </div>
       )}
-      {showCharge   && <ChargeModal  onClose={() => setShowCharge(false)}  onSave={async (p) => { await postFolioItem(id, p); setShowCharge(false); load(); }} />}
-      {showPayment  && <PaymentModal balance={balance} onClose={() => setShowPayment(false)} onSave={async (p) => { await addBookingPayment(id, p); setShowPayment(false); load(); }} />}
+      {showCharge   && <ChargeModal  onClose={() => setShowCharge(false)}  onSave={async (p) => { await postFolioItem(id, p); setShowCharge(false); setError(""); load(); }} />}
+      {showPayment  && <PaymentModal balance={balance} onClose={() => setShowPayment(false)} onSave={async (p) => { await addBookingPayment(id, p); setShowPayment(false); setError(""); load(); }} />}
       {removingItem && (
         <div style={modalWrap}>
           <form onSubmit={confirmRemoveItem} style={modalBox(420)}>
