@@ -10,6 +10,7 @@ import {
   getSupplierLedger,
   getSupplierHistory,
   getSpendTrend,
+  getDeliveryBook,
 } from "../controllers/supplierLedgerController.js";
 import {
   requireAuth,
@@ -30,6 +31,8 @@ router.use(requireAuth);
 
 router.get("/ledger", buying, getSupplierLedger);
 router.get("/spend-trend", buying, getSpendTrend);
+// What the Record a delivery page fills itself in from.
+router.get("/delivery-book", buying, getDeliveryBook);
 router.get("/:id/history", buying, getSupplierHistory);
 
 router.get("/",       buying, getSuppliers);

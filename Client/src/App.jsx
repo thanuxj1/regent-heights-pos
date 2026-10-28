@@ -61,7 +61,7 @@ const BranchProfileRouter = () => {
 
   return <BranchProfile />;
 };
-const AddRawMaterials = lazy(() => import('./pages/branch-admin/AddRawMaterials'));
+const RecordDelivery = lazy(() => import('./pages/branch-admin/RecordDelivery'));
 const WasteTracking = lazy(() => import('./pages/branch-admin/WasteTracking'));
 const DeliveryCod = lazy(() => import('./pages/branch-admin/DeliveryCod'));
 const CreditSales = lazy(() => import('./pages/branch-admin/CreditSales'));
@@ -389,7 +389,7 @@ function App() {
         path="/branch-admin/raw-ingredient"
         element={
           <ProtectedRoute allowedRoles={[1, 2]} orCapability={CAP.PURCHASE_ORDERS}>
-            <AddRawMaterials />
+            <RecordDelivery />
           </ProtectedRoute>
         }
       />

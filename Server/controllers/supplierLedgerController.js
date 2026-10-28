@@ -1,5 +1,6 @@
 import pool from "../config/database.js";
 import { ROLES } from "../middleware/authMiddleware.js";
+import { hotelToday } from "../utils/hotelTime.js";
 
 // ─── GET /api/suppliers/ledger ────────────────────────────────────────────────
 // Returns all suppliers with their total purchases, total payments, and balance
@@ -169,3 +170,111 @@ export async function getSpendTrend(req, res, next) {
 // report or an export. Removed. The client now records every payment through
 // POST /api/supplier-payments (createSupplierPayment), which requires a real
 // po_id and validates it against what that order actually still owes.
+
+// ─── GET /api/suppliers/delivery-book ─────────────────────────────────────────
+// What the Record a delivery page needs to fill itself in, for every supplier
+// of the caller's property: what is owed, when they last delivered, whether
+// they usually come on this weekday, how they are usually paid, and the items
+// they usually bring (from their last three deliveries, with the quantity and
+// price of the latest one). All of it from past purchase orders: nothing to set
+// up. ?b_id= for platform staff.
+export async function getDeliveryBook(req, res, next) {
+  try {
+    const { role_id, com_id } = req.user;
+    const b_id = role_id === ROLES.SUPER_ADMIN ? Number(req.query.b_id) || null : req.user.b_id;
+    if (!b_id) { res.status(400); throw new Error("b_id is required"); }
+
+    const sups = await pool.query(
+      `WITH purchases AS (
+         SELECT po.sup_id, COALESCE(SUM(pi.price), 0) AS total
+           FROM purchase_order po JOIN purchase_item pi ON po.po_id = pi.po_id
+          WHERE po.status = 'received' GROUP BY po.sup_id
+       ), payments AS (
+         SELECT sp.sup_id, COALESCE(SUM(sp.amount), 0) AS total FROM supplier_payment sp GROUP BY sp.sup_id
+       )
+       SELECT s.sup_id, s.sup_name, s.sup_contact,
+              COALESCE(pu.total, 0) - COALESCE(pa.total, 0) AS balance_due
+         FROM "SUPPLIER" s
+         LEFT JOIN purchases pu ON pu.sup_id = s.sup_id
+         LEFT JOIN payments pa ON pa.sup_id = s.sup_id
+        WHERE ($1::int IS NULL OR s."Com_id" = $1)
+        ORDER BY s.sup_name`,
+      [role_id === ROLES.SUPER_ADMIN ? null : com_id],
+    );
+
+    // Their deliveries to this property, newest first.
+    const recv = `
+      SELECT po.po_id, po.sup_id, COALESCE(po.received_date, po.order_date) AS d,
+             ROW_NUMBER() OVER (PARTITION BY po.sup_id ORDER BY COALESCE(po.received_date, po.order_date) DESC, po.po_id DESC) AS rn
+        FROM purchase_order po
+       WHERE po.status = 'received' AND po.b_id = $1`;
+    const pos = await pool.query(
+      `SELECT r.po_id, r.sup_id, r.d, r.rn,
+              (SELECT COALESCE(SUM(pi.price), 0) FROM purchase_item pi WHERE pi.po_id = r.po_id) AS total,
+              (SELECT COALESCE(SUM(sp.amount), 0) FROM supplier_payment sp WHERE sp.po_id = r.po_id) AS paid
+         FROM (${recv}) r WHERE r.rn <= 8`,
+      [b_id],
+    );
+    const lines = await pool.query(
+      `SELECT r.sup_id, r.rn, pi.rm_id, pi.pro_id, pi.qty, pi.unit_price,
+              COALESCE(rm.rm_name, p.pro_name) AS name
+         FROM (${recv}) r
+         JOIN purchase_item pi ON pi.po_id = r.po_id
+         LEFT JOIN "Raw_Material" rm ON rm.rm_id = pi.rm_id
+         LEFT JOIN "Product" p ON p.pro_id = pi.pro_id
+        WHERE r.rn <= 3
+        ORDER BY r.rn, pi.pi_id`,
+      [b_id],
+    );
+
+    const weekday = new Date(`${hotelToday()}T12:00:00Z`).getUTCDay();
+    const dayOf = (d) => new Date(`${hotelToday(new Date(d))}T12:00:00Z`).getUTCDay();
+
+    const book = sups.rows.map((s) => {
+      const mine = pos.rows.filter((p) => p.sup_id === s.sup_id).sort((a, b) => a.rn - b.rn);
+
+      // Usually today: the weekday they come on most, at least twice.
+      const days = {};
+      for (const p of mine) days[dayOf(p.d)] = (days[dayOf(p.d)] || 0) + 1;
+      const top = Object.entries(days).sort((a, b) => b[1] - a[1])[0];
+      const usuallyToday = Boolean(top && Number(top[0]) === weekday && top[1] >= 2);
+
+      // How they are usually paid, from the last five deliveries.
+      const ways = { F: 0, P: 0, L: 0 };
+      for (const p of mine.slice(0, 5)) {
+        const total = Number(p.total), paid = Number(p.paid);
+        ways[paid >= total - 0.5 && total > 0 ? "F" : paid > 0 ? "P" : "L"] += 1;
+      }
+      const habit = mine.length ? Object.entries(ways).sort((a, b) => b[1] - a[1])[0][0] : null;
+
+      // Usual items: anything in the last three deliveries, most often first.
+      const items = new Map();
+      for (const l of lines.rows.filter((x) => x.sup_id === s.sup_id)) {
+        const key = l.rm_id ? `rm:${l.rm_id}` : `pro:${l.pro_id}`;
+        const it = items.get(key);
+        if (it) it.times += 1;
+        else items.set(key, {
+          kind: l.rm_id ? "rm" : "pro", id: l.rm_id || l.pro_id, name: l.name,
+          last_qty: Number(l.qty), last_price: Number(l.unit_price), times: 1, first_rn: Number(l.rn),
+        });
+      }
+      const usual = [...items.values()]
+        .sort((a, b) => b.times - a.times || a.first_rn - b.first_rn)
+        .slice(0, 15)
+        .map(({ first_rn: _r, ...it }) => it);
+
+      return {
+        sup_id: s.sup_id, sup_name: s.sup_name, sup_contact: s.sup_contact,
+        balance_due: Number(s.balance_due), deliveries: mine.length,
+        last_delivery: mine[0]?.d ?? null, usually_today: usuallyToday, habit, usual,
+      };
+    });
+
+    book.sort((a, b) => Number(b.usually_today) - Number(a.usually_today)
+      || (b.last_delivery ? new Date(b.last_delivery).getTime() : 0) - (a.last_delivery ? new Date(a.last_delivery).getTime() : 0)
+      || a.sup_name.localeCompare(b.sup_name));
+    res.json(book);
+  } catch (err) {
+    next(err);
+  }
+}
