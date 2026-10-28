@@ -8,6 +8,7 @@ import {
 } from "../utils/socket.js";
 import { requireApproval, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hasKitchenScreen } from "../utils/kitchenScreen.js";
+import { isOutsideLine, readOutsideLine } from "../utils/outsideItem.js";
 
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 // The hotel's day, not GMT's. See utils/hotelTime.js.
@@ -215,7 +216,7 @@ export async function getGuestHistory(req, res, next) {
     if (restaurant.rows.length) {
       const oi = await pool.query(
         `SELECT oi.order_id, oi.pro_quantity, oi.unit_price, oi.total_price,
-                bp.pro_name
+                COALESCE(bp.pro_name, oi.item_name) AS pro_name
          FROM "ORDER_ITEM" oi
          LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"
          WHERE oi.order_id = ANY($1::int[])`,
@@ -293,9 +294,21 @@ export async function createRoomServiceOrder(req, res, next) {
     if (!Array.isArray(items) || !items.length) {
       res.status(400); return next(new Error("At least one item is required"));
     }
+    // An outside item (bought elsewhere, sold on) names no product; what it is
+    // and what it cost travel on the line itself.
+    const outside = new Map();
     for (const [n, i] of items.entries()) {
       const q = Number(i?.pro_quantity ?? 1);
-      if (!Number.isInteger(Number(i?.Bpro_id)) || !Number.isInteger(q) || q <= 0 || q > 999) {
+      if (isOutsideLine(i)) {
+        const o = readOutsideLine(i);
+        const p = Number(i.unit_price);
+        if (o.error || !Number.isFinite(p) || p < 0) {
+          res.status(400);
+          return next(new Error(`Item ${n + 1}: ${o.error || "needs a price"}`));
+        }
+        outside.set(i, o);
+      }
+      if ((!outside.has(i) && !Number.isInteger(Number(i?.Bpro_id))) || !Number.isInteger(q) || q <= 0 || q > 999) {
         res.status(400);
         return next(new Error(`Item ${n + 1}: needs a product and a whole quantity between 1 and 999`));
       }
@@ -371,6 +384,16 @@ export async function createRoomServiceOrder(req, res, next) {
     const lines = [];
     for (const i of priced) {
       const unit = num(i.unit_price);
+      const out = outside.get(items[priced.indexOf(i)]);
+      if (out) {
+        // Bought for this order: takes nothing from stock.
+        await client.query(
+          `INSERT INTO "ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost, item_name, bought_from)
+           VALUES (NULL,$1,$2,$3,$4,$5,$6,$7)`,
+          [i.qty, unit, +(i.qty * unit).toFixed(2), order.or_id, out.cost, out.name, out.from]
+        );
+        continue;
+      }
       const line = await client.query(
         `INSERT INTO "ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost)
          VALUES ($1,$2,$3,$4,$5, (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1)) RETURNING "orderItem_id"`,

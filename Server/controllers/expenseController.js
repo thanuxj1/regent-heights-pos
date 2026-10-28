@@ -76,7 +76,8 @@ export async function getExpenseSummary(req, res, next) {
     const cod = inYear("b_id");
 
     const [monthly, byCategory, hotel, restaurant, suppliers, commissions, waste, codOutstanding,
-           hotelMonthly, restaurantMonthly, supplierMonthly, commissionMonthly, wasteMonthly] = await Promise.all([
+           hotelMonthly, restaurantMonthly, supplierMonthly, commissionMonthly, wasteMonthly,
+           outsideMonthly] = await Promise.all([
       pool.query(
         `SELECT to_char(exp_date,'YYYY-MM') AS month, exp_category, SUM(exp_amount) AS total
            FROM "EXPENSE"
@@ -180,12 +181,21 @@ export async function getExpenseSummary(req, res, next) {
            JOIN "Raw_Material" rm ON rm.rm_id = w.rm_id
           WHERE EXTRACT(YEAR FROM w.recorded_at) = $1${w.where}
           GROUP BY 1`, w.params),
+      // Outside items (migration 075): bought elsewhere and sold on. What they
+      // cost is money out on the day they were sold.
+      pool.query(
+        `SELECT to_char(o.or_date, 'YYYY-MM') AS month, COALESCE(SUM(oi.pro_quantity * oi.unit_cost), 0) AS total
+           FROM "ORDER_ITEM" oi
+           JOIN "ORDER" o ON o.or_id = oi.order_id
+          WHERE oi."Bpro_id" IS NULL AND oi.item_name IS NOT NULL AND o.or_status <> 'cancelled'
+            AND EXTRACT(YEAR FROM o.or_date) = $1${o.where}
+          GROUP BY 1`, o.params),
     ]);
 
     // One row per month that had anything in it.
     const byMonth = {};
     const addTo = (rows, key) => rows.forEach((r) => {
-      (byMonth[r.month] ||= { month: r.month, hotel: 0, restaurant: 0, expenses: 0, suppliers: 0, commission: 0, waste: 0 })[key] += Number(r.total);
+      (byMonth[r.month] ||= { month: r.month, hotel: 0, restaurant: 0, expenses: 0, suppliers: 0, commission: 0, waste: 0, outside: 0 })[key] += Number(r.total);
     });
     addTo(hotelMonthly.rows, "hotel");
     addTo(restaurantMonthly.rows, "restaurant");
@@ -193,15 +203,17 @@ export async function getExpenseSummary(req, res, next) {
     addTo(supplierMonthly.rows, "suppliers");
     addTo(commissionMonthly.rows, "commission");
     addTo(wasteMonthly.rows, "waste");
+    addTo(outsideMonthly.rows, "outside");
     const monthlyTotals = Object.values(byMonth).sort((a, b) => (a.month < b.month ? -1 : 1)).map((m) => {
       const revenue = m.hotel + m.restaurant;
-      const out = m.expenses + m.suppliers + m.commission + m.waste;
+      const out = m.expenses + m.suppliers + m.commission + m.waste + m.outside;
       return { ...m, revenue: +revenue.toFixed(2), out: +out.toFixed(2), net: +(revenue - out).toFixed(2) };
     });
 
     const totalExpenses = byCategory.rows.reduce((sum, r) => sum + Number(r.total), 0);
     const supplierPayments = Number(suppliers.rows[0].t);
     const wasteTotal = Number(waste.rows[0].t);
+    const outsideTotal = +outsideMonthly.rows.reduce((n, r) => n + Number(r.total), 0).toFixed(2);
     const hotelRevenue = Number(hotel.rows[0].t);
     const restaurantRevenue = Number(restaurant.rows[0].t);
     // Credit sales given this year and not yet paid: owed to the house, not revenue.
@@ -218,7 +230,8 @@ export async function getExpenseSummary(req, res, next) {
       totalExpenses,
       supplierPayments,
       wasteTotal,
-      moneyOut: +(totalExpenses + supplierPayments + wasteTotal).toFixed(2),
+      outsideTotal,
+      moneyOut: +(totalExpenses + supplierPayments + wasteTotal + outsideTotal).toFixed(2),
       revenue: { hotel: hotelRevenue, restaurant: restaurantRevenue },
       totalRevenue: +(hotelRevenue + restaurantRevenue).toFixed(2),
       commissionPending: Number(commissions.rows[0].pending),

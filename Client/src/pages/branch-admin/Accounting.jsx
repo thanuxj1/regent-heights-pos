@@ -32,6 +32,7 @@ const EXTRA_CAT = {
   supplier_payments: { label:"Paid to suppliers", icon:"🚛" },
   agent_commission:  { label:"Agent commission",  icon:"🤝" },
   waste:             { label:"Waste / spoilage",  icon:"🗑️" },
+  outside_items:     { label:"Outside items bought", icon:"🛍️" },
 };
 
 function fmt(v) { return Number(v||0).toLocaleString("en-LK", { minimumFractionDigits:2, maximumFractionDigits:2 }); }
@@ -147,7 +148,10 @@ export default function Accounting() {
   // Wasted raw materials, priced at each item's current unit cost — money out
   // the same as an expense, just never typed in on this page.
   const wasteTotal    = Number(summary.wasteTotal || 0);
-  const moneyOut      = totalExpenses + supplierPayments + commissionTotal + wasteTotal;
+  // What outside items cost (bought elsewhere and sold on at the till) — rung
+  // up with the sale, never typed in here.
+  const outsideTotal  = Number(summary.outsideTotal || 0);
+  const moneyOut      = totalExpenses + supplierPayments + commissionTotal + wasteTotal + outsideTotal;
   const totalRevenue  = Number(summary.totalRevenue  || 0);
   const netProfit     = totalRevenue - moneyOut;
   const commPending   = Number(summary.commissionPending || 0);
@@ -162,13 +166,14 @@ export default function Accounting() {
     if (supplierPayments > 0) rows.push({ exp_category:"supplier_payments", total: supplierPayments });
     if (commissionTotal > 0)  rows.push({ exp_category:"agent_commission",  total: commissionTotal });
     if (wasteTotal > 0)       rows.push({ exp_category:"waste",             total: wasteTotal });
+    if (outsideTotal > 0)     rows.push({ exp_category:"outside_items",     total: outsideTotal });
     rows.sort((a, b) => Number(b.total) - Number(a.total));
     return rows.map(r => ({
       ...r,
       cat: catOf(r.exp_category) || EXTRA_CAT[r.exp_category] || { label: r.exp_category, icon:"🏷️" },
       pct: moneyOut > 0 ? (Number(r.total) / moneyOut * 100).toFixed(1) : 0,
     }));
-  }, [summary, moneyOut, supplierPayments, commissionTotal, wasteTotal, allCats]);
+  }, [summary, moneyOut, supplierPayments, commissionTotal, wasteTotal, outsideTotal, allCats]);
 
   // Money out per month — expenses, supplier payments and commission together, so
   // the bars add up to the "Money out" figure above them.
@@ -329,6 +334,7 @@ export default function Accounting() {
                       ["Paid to suppliers", `(${fmt(supplierPayments)})`, "#DC2626"],
                       ["Agent commission", `(${fmt(commissionTotal)})`, "#92400E"],
                       ["Waste / spoilage", `(${fmt(wasteTotal)})`, "#DC2626"],
+                      ...(outsideTotal > 0 ? [["Outside items bought", `(${fmt(outsideTotal)})`, "#DC2626"]] : []),
                       ["Net Profit", fmt(netProfit), netProfit>=0?"#1565C0":"#DC2626"],
                     ].map(([k,v,c], i, arr) => (
                       <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom: i<arr.length-1?"1px solid #E2E8F0":"2px solid #CBD5E1", fontWeight: i===arr.length-1?700:400, color:"#1E293B", fontSize:13 }}>

@@ -255,6 +255,23 @@ export async function getSummary(req, res, next) {
     const refundsTotal = +refundDaily.rows.reduce((n, r) => n + num(r.total), 0).toFixed(2);
     const refundCount = refundDaily.rows.reduce((n, r) => n + r.n, 0);
 
+    // Outside items (migration 075): bought elsewhere and sold on. What they
+    // cost is money out on the day they were sold — the hotel's if the order
+    // went on a guest's bill, the restaurant's otherwise.
+    const outsideDaily = await pool.query(
+      `SELECT o.or_date AS day,
+              SUM(oi.pro_quantity * oi.unit_cost) AS total,
+              COALESCE(SUM(oi.pro_quantity * oi.unit_cost) FILTER (WHERE o.folio_id IS NOT NULL), 0) AS hotel
+       FROM "ORDER_ITEM" oi
+       JOIN "ORDER" o ON o.or_id = oi.order_id
+       WHERE o.b_id = $1 AND oi."Bpro_id" IS NULL AND oi.item_name IS NOT NULL
+         AND o.or_status <> 'cancelled' AND o.or_date BETWEEN $2::date AND $3::date
+       GROUP BY 1`,
+      [b_id, from, to]
+    );
+    const outsideTotal = +outsideDaily.rows.reduce((n, r) => n + num(r.total), 0).toFixed(2);
+    const outsideHotel = +outsideDaily.rows.reduce((n, r) => n + num(r.hotel), 0).toFixed(2);
+
     // Merge the three daily series onto one timeline
     const dayMap = {};
     const put = (rows, key, col = "total") => rows.forEach(r => {
@@ -273,6 +290,7 @@ export async function getSummary(req, res, next) {
     put(expDaily.rows, "expenses");
     put(supplierDaily.rows, "expenses");
     put(wasteDaily.rows, "expenses");
+    put(outsideDaily.rows, "expenses");
 
     const daily = Object.values(dayMap)
       .sort((a, b) => a.day.localeCompare(b.day))
@@ -285,7 +303,7 @@ export async function getSummary(req, res, next) {
     const expTotal = num(expenses.rows[0].total);
     const supTotal = num(suppliers.rows[0].total);
     const wasteTotal = num(waste.rows[0].total);
-    const outTotal = expTotal + supTotal + wasteTotal;
+    const outTotal = expTotal + supTotal + wasteTotal + outsideTotal;
     const commTotal = num(commissions.rows[0].total);
     const revenue  = +(hotelRev + restRev).toFixed(2);
 
@@ -343,14 +361,18 @@ export async function getSummary(req, res, next) {
       commissions: +(commTotal + hotelExpCommission).toFixed(2),
       supplies_bought: +hotelSupplies.toFixed(2),
       supplies_wasted: +hotelWaste.toFixed(2),
+      outside_items: outsideHotel,
     };
-    const hotelCostTotal = hotelCosts.commissions + hotelCosts.supplies_bought + hotelCosts.supplies_wasted;
+    const hotelCostTotal = hotelCosts.commissions + hotelCosts.supplies_bought + hotelCosts.supplies_wasted
+      + hotelCosts.outside_items;
     const restCosts = {
       food_and_drink_bought: +(supTotal - hotelSupplies).toFixed(2),
       food_wasted: +(wasteTotal - hotelWaste).toFixed(2),
       raw_materials_packaging_delivery: +restExpenses.toFixed(2),
+      outside_items: +(outsideTotal - outsideHotel).toFixed(2),
     };
-    const restCostTotal = restCosts.food_and_drink_bought + restCosts.food_wasted + restCosts.raw_materials_packaging_delivery;
+    const restCostTotal = restCosts.food_and_drink_bought + restCosts.food_wasted + restCosts.raw_materials_packaging_delivery
+      + restCosts.outside_items;
     const byDepartment = {
       hotel: {
         revenue: hotelRev, imported: importedHotel, costs: hotelCosts, cost_total: +hotelCostTotal.toFixed(2),
@@ -405,10 +427,12 @@ export async function getSummary(req, res, next) {
         supplier_payments: supTotal,
         commissions: commTotal,
         waste: wasteTotal,
+        outside_items: outsideTotal,
         by_category: [
           ...expByCat.rows,
           ...(supTotal > 0 ? [{ exp_category: "supplier_payments", total: supTotal }] : []),
           ...(wasteTotal > 0 ? [{ exp_category: "waste", total: wasteTotal }] : []),
+          ...(outsideTotal > 0 ? [{ exp_category: "outside_items", total: outsideTotal }] : []),
         ].sort((a, b) => Number(b.total) - Number(a.total)),
       },
       profit: {
@@ -452,9 +476,9 @@ export async function getSummary(req, res, next) {
  */
 async function productProfitRows(b_id, from, to) {
   const { rows } = await pool.query(
-    `SELECT COALESCE(p.pro_id::text, 'b' || bp."Bpro_id"::text) AS key,
-            COALESCE(p.pro_name, bp.pro_name, 'Unknown item') AS name,
-            c.cat_name AS category,
+    `SELECT COALESCE(p.pro_id::text, 'b' || bp."Bpro_id"::text, 'o:' || oi.item_name) AS key,
+            COALESCE(p.pro_name, bp.pro_name, oi.item_name, 'Unknown item') AS name,
+            COALESCE(c.cat_name, CASE WHEN oi.item_name IS NOT NULL AND oi."Bpro_id" IS NULL THEN 'Outside items' END) AS category,
             SUM(oi.pro_quantity)::numeric AS units,
             SUM(COALESCE(oi.total_price, oi.pro_quantity * oi.unit_price, 0)) AS sales,
             SUM(oi.pro_quantity * COALESCE(oi.unit_cost, NULLIF(p.cost_price, 0), 0)) AS cost,
@@ -477,7 +501,7 @@ async function productProfitRows(b_id, from, to) {
   // Dishes handed back in the range, by the same key: off their units and
   // sales. What they cost to make stays — they were made.
   const { rows: back } = await pool.query(
-    `SELECT COALESCE(p.pro_id::text, 'b' || bp."Bpro_id"::text) AS key,
+    `SELECT COALESCE(p.pro_id::text, 'b' || bp."Bpro_id"::text, 'o:' || oi.item_name) AS key,
             SUM(ri.qty)::numeric AS units, SUM(ri.amount) AS sales
      FROM "ORDER_REFUND_ITEM" ri
      JOIN "ORDER_REFUND" r ON r.refund_id = ri.refund_id

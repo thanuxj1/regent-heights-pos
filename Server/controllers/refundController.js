@@ -35,7 +35,7 @@ async function loadRefundable(db, req, id, { lock = false } = {}) {
   const { rows: lines } = await db.query(
     `SELECT oi."orderItem_id", oi."Bpro_id", oi.pro_quantity, oi.unit_price,
             COALESCE(oi.total_price, oi.pro_quantity * oi.unit_price) AS line_total,
-            COALESCE(bp.pro_name, 'Item') AS name,
+            COALESCE(bp.pro_name, oi.item_name, 'Item') AS name,
             COALESCE((SELECT SUM(ri.qty) FROM "ORDER_REFUND_ITEM" ri WHERE ri."orderItem_id" = oi."orderItem_id"), 0) AS refunded_qty
      FROM "ORDER_ITEM" oi
      LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"

@@ -18,6 +18,7 @@ import { hotelToday } from "../utils/hotelTime.js";
 import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
 import { hasKitchenScreen } from "../utils/kitchenScreen.js";
 import { soldOrder } from "../utils/sales.js";
+import { isOutsideLine, readOutsideLine } from "../utils/outsideItem.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -628,12 +629,14 @@ export const updateOrder = async (req, res) => {
     if (or_status === "completed") {
       const priced = await pool.query(
         // Same COALESCE as the menu and the creation-time check: the promotion
-        // usually lives on Product, not on Branch_Product.
-        `SELECT COALESCE(SUM(oi.pro_quantity * bp." Pro_Price"
-                             * (1 - COALESCE(bp.discount_pct, pr.discount_pct, 0) / 100.0)), 0) AS expected,
+        // usually lives on Product, not on Branch_Product. An outside item has
+        // no menu price; what it was rung up at is its price.
+        `SELECT COALESCE(SUM(CASE WHEN oi."Bpro_id" IS NULL THEN oi.pro_quantity * oi.unit_price
+                                  ELSE oi.pro_quantity * bp." Pro_Price"
+                                       * (1 - COALESCE(bp.discount_pct, pr.discount_pct, 0) / 100.0) END), 0) AS expected,
                 COUNT(*) AS lines
          FROM "ORDER_ITEM" oi
-         JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"
+         LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = oi."Bpro_id"
          LEFT JOIN "Product" pr ON pr.pro_id = bp.pro_id
          WHERE oi.order_id = $1`,
         [id],
@@ -1191,8 +1194,15 @@ export const createOrderWithItems = async (req, res) => {
   const costError = validateCosts(order.or_tax ?? 0, order.or_totalcost, order.or_totalCostWtax, deliveryCharge);
   if (costError) return res.status(400).json({ success: false, error: costError });
 
+  // An outside item (bought elsewhere, sold on) names no product; what it is
+  // and what it cost travel on the line itself.
+  const outside = new Map();
   for (const [i, it] of items.entries()) {
-    if (!it?.Bpro_id) {
+    if (isOutsideLine(it)) {
+      const o = readOutsideLine(it);
+      if (o.error) return res.status(400).json({ success: false, error: `Line ${i + 1}: ${o.error}` });
+      outside.set(it, o);
+    } else if (!it?.Bpro_id) {
       return res.status(400).json({ success: false, error: `Line ${i + 1}: no product` });
     }
     const q = validateItemQuantity(it.pro_quantity);
@@ -1204,7 +1214,7 @@ export const createOrderWithItems = async (req, res) => {
   // Every line must be a product of this branch. Without it a queued sale could
   // name any Bpro_id in the database and quietly move another property's stock.
   // The prices come back too — the till is not the authority on what things cost.
-  const ids = [...new Set(items.map((it) => Number(it.Bpro_id)))];
+  const ids = [...new Set(items.filter((it) => !outside.has(it)).map((it) => Number(it.Bpro_id)))];
   const owned = await pool.query(
     // Priced exactly as the menu endpoint prices it, including the COALESCE.
     // A promotion lives on Product and is only sometimes overridden on
@@ -1236,8 +1246,10 @@ export const createOrderWithItems = async (req, res) => {
     Number(r.Bpro_id),
     Number(r.pro_price) * (1 - Number(r.discount_pct ?? 0) / 100),
   ]));
+  // An outside item has no menu price: what the cashier charged is its price.
   const lineSubtotal = items.reduce(
-    (sum, it) => sum + priceOf.get(Number(it.Bpro_id)) * Number(it.pro_quantity), 0);
+    (sum, it) => sum + (outside.has(it) ? Number(it.unit_price) : priceOf.get(Number(it.Bpro_id)))
+      * Number(it.pro_quantity), 0);
 
   const discountPct = Math.min(100, Math.max(0, Number(order.discount_pct ?? 0)));
   const serviceFee = Math.max(0, Number(order.service_fee ?? 0));
@@ -1354,21 +1366,29 @@ export const createOrderWithItems = async (req, res) => {
     for (const it of items) {
       const qty = Number(it.pro_quantity);
       const unit = Number(it.unit_price);
-      const line = await client.query(
-        `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost)
-         VALUES ($1,$2,$3,$4,$5, (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1)) RETURNING *`,
-        [it.Bpro_id, qty, unit, Number((qty * unit).toFixed(2)), created.or_id],
-      );
+      const out = outside.get(it);
+      const line = out
+        ? await client.query(
+          `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost, item_name, bought_from)
+           VALUES (NULL,$1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+          [qty, unit, Number((qty * unit).toFixed(2)), created.or_id, out.cost, out.name, out.from],
+        )
+        : await client.query(
+          `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost)
+           VALUES ($1,$2,$3,$4,$5, (SELECT NULLIF(p.cost_price, 0) FROM "Branch_Product" bp JOIN "Product" p ON p.pro_id = bp.pro_id WHERE bp."Bpro_id" = $1)) RETURNING *`,
+          [it.Bpro_id, qty, unit, Number((qty * unit).toFixed(2)), created.or_id],
+        );
       lines.push(line.rows[0]);
     }
 
     // The sale's ingredients, taken together and recorded against each line.
     // Never refused for stock: if the count says there is not enough, it is the
     // count that is wrong. It goes below zero and the manager is told to recount.
+    // An outside item was bought for this sale and takes nothing from stock.
     const stock = await takeStock(client, {
       b_id,
       order_id: created.or_id,
-      lines: lines.map((l) => ({
+      lines: lines.filter((l) => l.Bpro_id != null).map((l) => ({
         bpro_id: Number(l.Bpro_id), qty: Number(l.pro_quantity), order_item_id: l.orderItem_id,
       })),
       u_id: req.user?.u_id ?? null,
@@ -1606,7 +1626,7 @@ export const deleteOrderWithPin = async (req, res) => {
       `SELECT record_id, commission_amount FROM "COMMISSION_RECORD" WHERE order_id = $1`, [id])).rows;
 
     const items = (await client.query(
-      `SELECT COALESCE(bp.pro_name, 'Item') AS name, i.pro_quantity AS qty
+      `SELECT COALESCE(bp.pro_name, i.item_name, 'Item') AS name, i.pro_quantity AS qty
          FROM "ORDER_ITEM" i LEFT JOIN "Branch_Product" bp ON bp."Bpro_id" = i."Bpro_id"
         WHERE i.order_id = $1 ORDER BY i."orderItem_id"`, [id])).rows;
     await returnStock(client, { order_id: id, u_id: req.user?.u_id ?? null });

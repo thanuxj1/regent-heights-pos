@@ -26,6 +26,7 @@ const CAT_LABEL = {
   commission: "Commission", maintenance: "Maintenance", marketing: "Marketing",
   delivery: "Delivery", food_packets: "Food Packets", other: "Other",
   waste: "Wasted raw materials",
+  outside_items: "Outside items bought",
 };
 
 export default function Reports() {
@@ -219,6 +220,7 @@ export default function Reports() {
       line("  Agent commissions", money(d.hotel.costs.commissions)),
       line("  Hotel supplies bought", money(d.hotel.costs.supplies_bought), "Cleaning products and other consumables, as paid"),
       line("  Hotel supplies wasted", money(d.hotel.costs.supplies_wasted)),
+      ...(d.hotel.costs.outside_items > 0 ? [line("  Outside items bought", money(d.hotel.costs.outside_items), "Bought elsewhere for guests and put on their bill")] : []),
       line("Hotel costs", money(d.hotel.cost_total)),
       line("HOTEL PROFIT (before whole-property costs)", money(d.hotel.profit)),
       [],
@@ -232,6 +234,7 @@ export default function Reports() {
       line("  Food and drink bought", money(d.restaurant.costs.food_and_drink_bought), "Ingredients and resale products, as paid to suppliers"),
       line("  Food wasted", money(d.restaurant.costs.food_wasted)),
       line("  Raw materials, packaging, delivery costs", money(d.restaurant.costs.raw_materials_packaging_delivery), "Recorded expenses"),
+      ...(d.restaurant.costs.outside_items > 0 ? [line("  Outside items bought", money(d.restaurant.costs.outside_items), "Bought elsewhere and sold on at the till")] : []),
       line("Restaurant costs", money(d.restaurant.cost_total)),
       line("RESTAURANT PROFIT (before whole-property costs)", money(d.restaurant.profit)),
       line("Dish profit (food sold vs what it cost to make)", money(data.product_profit?.profit ?? 0), `${pct(data.product_profit?.margin_pct ?? 0)} margin — see Product Profit`),

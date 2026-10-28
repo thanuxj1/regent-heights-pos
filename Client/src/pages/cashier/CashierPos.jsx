@@ -129,6 +129,10 @@ const CashierPos = () => {
   const [chargeRoomId, setChargeRoomId] = useState("");
   const [successNote, setSuccessNote] = useState("");
   const [roomPickerOpen, setRoomPickerOpen] = useState(false);
+  // An outside item: bought elsewhere for this customer and sold on. null when
+  // the box is closed.
+  const [outsideForm, setOutsideForm] = useState(null);
+  const [outsideError, setOutsideError] = useState("");
   const [roomQuery, setRoomQuery] = useState("");
   // The cart survives a reload. A till gets closed by accident, the browser
   // crashes, the network drops mid-sale — none of that should cost a cashier a
@@ -731,6 +735,54 @@ const CashierPos = () => {
   };
 
   /**
+   * Outside items: something the property does not stock, bought elsewhere and
+   * sold on — different every time, so not a menu product. The cashier names
+   * it, prices it and says what it cost; the cost counts as money out in the
+   * reports. In the cart it carries a made-up negative id so the quantity and
+   * remove buttons work on it like any line; on the wire it has no product.
+   */
+  const openOutside = () => {
+    setOutsideError("");
+    setOutsideForm({ name: "", price: "", cost: "", from: "", qty: "1" });
+  };
+  const addOutside = () => {
+    const f = outsideForm;
+    const name = f.name.trim().replace(/\s+/g, " ");
+    const price = Number(f.price);
+    const cost = Number(f.cost);
+    const qty = Number(f.qty);
+    if (!name) return setOutsideError("What is it? Write the item's name.");
+    if (f.price === "" || !Number.isFinite(price) || price < 0) return setOutsideError("Write what the customer pays for one.");
+    if (f.cost === "" || !Number.isFinite(cost) || cost < 0) return setOutsideError("Write what one cost to buy (0 if it cost nothing).");
+    if (!Number.isInteger(qty) || qty < 1 || qty > 999) return setOutsideError("The quantity is a whole number from 1 to 999.");
+    setCart((currentCart) => [
+      ...currentCart,
+      {
+        Bpro_id: -Date.now(),
+        pro_name: name,
+        unitPrice: Number(price.toFixed(2)),
+        originalPrice: null,
+        discountPct: 0,
+        taxGroup: 0,
+        qty,
+        outside: { name, cost: Number(cost.toFixed(2)), from: f.from.trim() },
+      },
+    ]);
+    setOutsideForm(null);
+  };
+
+  /** A cart line as the server takes it: a menu product, or an outside item. */
+  const saleLine = (item) => (item.outside
+    ? {
+        item_name: item.outside.name,
+        unit_cost: item.outside.cost,
+        bought_from: item.outside.from || null,
+        pro_quantity: item.qty,
+        unit_price: item.unitPrice,
+      }
+    : { Bpro_id: item.Bpro_id, pro_quantity: item.qty, unit_price: item.unitPrice });
+
+  /**
    * Send the order to the kitchen and print the ticket.
    *
    * Created as `pending` so it lands in the kitchen's Pending column exactly
@@ -810,11 +862,7 @@ const CashierPos = () => {
           ...customerFields(),
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         },
-        items: cart.map((item) => ({
-          Bpro_id: item.Bpro_id,
-          pro_quantity: item.qty,
-          unit_price: item.unitPrice,
-        })),
+        items: cart.map(saleLine),
       });
 
       const orderId = orderResponse?.data?.or_id;
@@ -870,7 +918,10 @@ const CashierPos = () => {
     for (const item of cart) {
       const match = existingItems.find(
         (line) =>
-          Number(line.Bpro_id) === Number(item.Bpro_id) &&
+          (item.outside
+            ? line.Bpro_id == null && line.item_name === item.outside.name
+              && Math.abs(Number(line.unit_cost) - item.outside.cost) < 0.005
+            : Number(line.Bpro_id) === Number(item.Bpro_id)) &&
           !keep.has(line.orderItem_id) &&
           unchanged(line, item),
       );
@@ -883,12 +934,7 @@ const CashierPos = () => {
     // row, and sending them at once only makes them queue behind each other.
     for (const line of toRemove) await deleteOrderItem(line.orderItem_id);
     for (const item of toAdd) {
-      await createOrderItem({
-        Bpro_id: item.Bpro_id,
-        pro_quantity: item.qty,
-        unit_price: item.unitPrice,
-        order_id: orderId,
-      });
+      await createOrderItem({ ...saleLine(item), order_id: orderId });
     }
   };
 
@@ -1010,11 +1056,7 @@ const CashierPos = () => {
           res = await createRoomServiceOrder({
             room_id: Number(chargeRoomId),
             tax_pct: Number((effectiveTaxRate * 100).toFixed(2)),
-            items: cart.map((item) => ({
-              Bpro_id: item.Bpro_id,
-              pro_quantity: item.qty,
-              unit_price: item.unitPrice,
-            })),
+            items: cart.map(saleLine),
           });
         }
         // printKotAtTill(order, items, meta) — three arguments. Passing one
@@ -1152,11 +1194,7 @@ const CashierPos = () => {
             payment_method: tenderOf(effectivePaymentMethod), ...creditFields(effectivePaymentMethod), ...customerFields(),
             ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
           },
-          items: cart.map((item) => ({
-            Bpro_id: item.Bpro_id,
-            pro_quantity: item.qty,
-            unit_price: item.unitPrice,
-          })),
+          items: cart.map(saleLine),
         };
 
         try {
@@ -1295,7 +1333,18 @@ const CashierPos = () => {
       setLoadingWaiterOrders(true);
       const items = await getOrderItemsByOrderId(ao.or_id);
       
-      const newCart = items.map((item) => {
+      const newCart = items.map((item, n) => {
+        // An outside item has no product: give it a cart id of its own.
+        if (item.Bpro_id == null && item.item_name) {
+          return {
+            Bpro_id: -(Date.now() + n),
+            pro_name: item.item_name,
+            unitPrice: Number(item.unit_price || 0),
+            qty: Number(item.pro_quantity || 1),
+            taxGroup: 0,
+            outside: { name: item.item_name, cost: Number(item.unit_cost || 0), from: item.bought_from || "" },
+          };
+        }
         const matchedProduct = products.find((p) => p.Bpro_id === item.Bpro_id);
         return {
           Bpro_id: item.Bpro_id,
@@ -1796,6 +1845,14 @@ const CashierPos = () => {
             </div>
 
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5">
+              <button
+                type="button"
+                onClick={openOutside}
+                title="Something you don't stock, bought elsewhere for this customer"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-[13px] font-semibold text-amber-800 transition hover:bg-amber-100"
+              >
+                <FaPlus className="h-2.5 w-2.5" /> Outside item
+              </button>
               {cart.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-[13px] text-slate-500">
                   Tap a product on the left to start the order.
@@ -1805,7 +1862,17 @@ const CashierPos = () => {
                   {cart.map((item) => (
                     <div key={item.Bpro_id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <div className="flex items-center justify-between gap-2">
-                        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">{item.pro_name}</h3>
+                        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">
+                          {item.pro_name}
+                          {item.outside && (
+                            <span
+                              className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-amber-800"
+                              title={`Outside item — cost LKR ${item.outside.cost.toFixed(2)}${item.outside.from ? ` from ${item.outside.from}` : ""}`}
+                            >
+                              Outside
+                            </span>
+                          )}
+                        </h3>
                         <span className="text-[13px] font-semibold tracking-tight text-slate-900">
                           LKR {(item.unitPrice * item.qty).toFixed(2)}
                         </span>
@@ -2262,6 +2329,54 @@ const CashierPos = () => {
 
       {/* Held Orders Modal */}
       {/* Hold Order — Table Number Prompt */}
+      {outsideForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-800 mb-1">Outside item</h2>
+            <p className="text-sm text-slate-500 mb-4">
+              Something you don't stock, bought elsewhere for this customer. What it cost counts as money out in the reports.
+            </p>
+            {[
+              ["name", "What is it?", "e.g. Panadol, Dunhill, birthday cake", "text"],
+              ["price", "Customer pays (each, LKR)", "0.00", "number"],
+              ["cost", "It cost us (each, LKR)", "0.00", "number"],
+              ["qty", "Quantity", "1", "number"],
+              ["from", "Bought from (optional)", "e.g. Pharmacy, Keells", "text"],
+            ].map(([k, label, ph, type], i) => (
+              <label key={k} className="block mb-3">
+                <span className="mb-1 block text-xs font-semibold text-slate-600">{label}</span>
+                <input
+                  type={type}
+                  inputMode={type === "number" ? "decimal" : undefined}
+                  min={type === "number" ? 0 : undefined}
+                  value={outsideForm[k]}
+                  onChange={(e) => setOutsideForm((f) => ({ ...f, [k]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") addOutside(); }}
+                  placeholder={ph}
+                  autoFocus={i === 0}
+                  className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-[#0A5BAE] focus:ring-1 focus:ring-[#0A5BAE]"
+                />
+              </label>
+            ))}
+            {outsideError && <p className="mb-3 text-sm text-rose-600">{outsideError}</p>}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setOutsideForm(null)}
+                className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addOutside}
+                className="flex-1 rounded-xl bg-[#0A5BAE] py-2.5 text-sm font-semibold text-white hover:bg-[#094f96]"
+              >
+                Add to order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showHoldTableModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">

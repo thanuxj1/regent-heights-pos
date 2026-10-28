@@ -193,7 +193,7 @@ const InvoicePreview = () => {
                           <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">-{item.discountPct}%</span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-slate-500">{item.Bpro_id}</td>
+                      <td className="px-3 py-2.5 text-slate-500">{item.Bpro_id > 0 ? item.Bpro_id : "Outside"}</td>
                       <td className="px-3 py-2.5 text-slate-900">
                         LKR {Number(item.unitPrice).toFixed(2)}
                         {item.originalPrice && (

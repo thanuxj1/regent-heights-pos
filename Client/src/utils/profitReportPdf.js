@@ -91,6 +91,7 @@ export function downloadProfitReportPdf({ data, payables, from, to, propertyName
     line("  Agent commissions", d.hotel.costs.commissions, "Paid or owed to travel agents for bookings they brought."),
     line("  Hotel supplies bought", d.hotel.costs.supplies_bought, "Cleaning products and other items the hotel uses itself, as paid to suppliers."),
     line("  Hotel supplies wasted", d.hotel.costs.supplies_wasted, "Hotel supplies thrown away or lost, valued at their cost."),
+    ...(d.hotel.costs.outside_items > 0 ? [line("  Outside items bought", d.hotel.costs.outside_items, "Things the hotel does not stock, bought elsewhere for guests and put on their bill.")] : []),
     total("Total hotel costs", d.hotel.cost_total),
     key("HOTEL PROFIT", d.hotel.profit, "Hotel revenue minus hotel costs, before property-wide costs (section 4)."),
 
@@ -109,6 +110,7 @@ export function downloadProfitReportPdf({ data, payables, from, to, propertyName
     line("  Food and drink bought", d.restaurant.costs.food_and_drink_bought, "Ingredients and goods for resale, as paid to suppliers."),
     line("  Food wasted", d.restaurant.costs.food_wasted, "Ingredients thrown away or lost, valued at their cost."),
     line("  Raw materials, packaging and delivery costs", d.restaurant.costs.raw_materials_packaging_delivery, "Expenses recorded under those headings."),
+    ...(d.restaurant.costs.outside_items > 0 ? [line("  Outside items bought", d.restaurant.costs.outside_items, "Things the restaurant does not stock, bought elsewhere and sold on at the till.")] : []),
     total("Total restaurant costs", d.restaurant.cost_total),
     key("RESTAURANT PROFIT", d.restaurant.profit, "Restaurant revenue minus restaurant costs, before property-wide costs (section 4)."),
     line("For information: dish profit", data.product_profit?.profit ?? 0,

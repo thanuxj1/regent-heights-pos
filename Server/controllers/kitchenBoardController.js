@@ -94,7 +94,7 @@ export async function getKitchenBoard(req, res) {
               TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')) AS placed_by,
               FLOOR(EXTRACT(EPOCH FROM (NOW() - o.status_changed_at)) / 60)::int AS minutes_in_status,
               COALESCE((
-                SELECT json_agg(json_build_object('name', COALESCE(bp.pro_name, 'Item'),
+                SELECT json_agg(json_build_object('name', COALESCE(bp.pro_name, i.item_name, 'Item'),
                                                   'qty', i.pro_quantity)
                                 ORDER BY i."orderItem_id")
                   FROM "ORDER_ITEM" i

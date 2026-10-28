@@ -1,6 +1,7 @@
 import pool from "../config/database.js";
 import { emitSocketEvent, emitOrderEvent, getKitchenSocketRoom } from "../utils/socket.js";
 import { takeStock, returnStock, isStockProblem, noteShortfall } from "../utils/inventory.js";
+import { isOutsideLine, readOutsideLine } from "../utils/outsideItem.js";
 
 // ─────────────────────────────────────────────
 // CONSTANTS
@@ -138,7 +139,10 @@ export const getOrderItemsByOrderId = async (req, res) => {
          oi.unit_price,
          oi.total_price,
          oi.order_id,
-         bp.pro_name,
+         COALESCE(bp.pro_name, oi.item_name) AS pro_name,
+         oi.item_name,
+         oi.unit_cost,
+         oi.bought_from,
          bp." Pro_Price" AS branch_price
        FROM public."ORDER_ITEM" oi
        LEFT JOIN public."Branch_Product" bp
@@ -190,10 +194,13 @@ export const createOrderItem = async (req, res) => {
   const client = await pool.connect();
   try {
     const { Bpro_id, pro_quantity, unit_price, order_id } = req.body;
+    // An outside item (bought elsewhere, sold on) names no product.
+    const outside = isOutsideLine(req.body) ? readOutsideLine(req.body) : null;
+    if (outside?.error) return res.status(400).json({ success: false, error: outside.error });
 
     // ── Required fields ──
     const missing = [];
-    if (Bpro_id === undefined || Bpro_id === null) missing.push("Bpro_id");
+    if (!outside && (Bpro_id === undefined || Bpro_id === null)) missing.push("Bpro_id");
     if (pro_quantity === undefined || pro_quantity === null)
       missing.push("pro_quantity");
     if (unit_price === undefined || unit_price === null)
@@ -233,8 +240,8 @@ export const createOrderItem = async (req, res) => {
       return res.status(400).json({ success: false, error: statusError });
 
     // ── FK: branch product must exist ──
-    const bProduct = await fetchBranchProduct(Bpro_id);
-    if (!bProduct) {
+    const bProduct = outside ? null : await fetchBranchProduct(Bpro_id);
+    if (!outside && !bProduct) {
       return res
         .status(404)
         .json({ success: false, error: "Branch product not found" });
@@ -244,6 +251,18 @@ export const createOrderItem = async (req, res) => {
     const qty = parseInt(pro_quantity, 10);
     const price = parseFloat(unit_price);
     const total_price = parseFloat((price * qty).toFixed(2));
+
+    if (outside) {
+      // Bought for this order: takes nothing from stock.
+      const result = await pool.query(
+        `INSERT INTO public."ORDER_ITEM" ("Bpro_id", pro_quantity, unit_price, total_price, order_id, unit_cost, item_name, bought_from)
+         VALUES (NULL, $1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [qty, price, total_price, parsedOrderId, outside.cost, outside.name, outside.from],
+      );
+      emitOrderEvent("order:items", { or_id: parsedOrderId, b_id: order.b_id });
+      return res.status(201).json({ success: true, data: result.rows[0] });
+    }
 
     await client.query("BEGIN");
 
@@ -343,6 +362,12 @@ export const updateOrderItem = async (req, res) => {
     }
 
     const oldItem = existing.rows[0];
+    if (oldItem["Bpro_id"] == null) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false, error: "An outside item cannot be changed — remove it and add it again",
+      });
+    }
 
     // ── Numeric / range validation ──
     const qtyError = validateQuantity(pro_quantity);
