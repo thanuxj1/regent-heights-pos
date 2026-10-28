@@ -1933,6 +1933,16 @@ const CashierPos = () => {
                     {selectedProductCount} item{selectedProductCount === 1 ? "" : "s"}
                   </span>
                 </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={openOutside}
+                  aria-label="Outside item"
+                  title="Outside item — something you don't stock, bought elsewhere for this customer"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white transition hover:bg-white/20"
+                >
+                  <FaShoppingBag className="h-3.5 w-3.5" />
+                </button>
                 <button
                   type="button"
                   onClick={() => setCart([])}
@@ -1943,6 +1953,7 @@ const CashierPos = () => {
                 >
                   <FaTrashAlt className="h-3.5 w-3.5" />
                 </button>
+                </div>
               </div>
             </div>
 
@@ -1957,14 +1968,6 @@ const CashierPos = () => {
                   </button>
                 </div>
               )}
-              <button
-                type="button"
-                onClick={openOutside}
-                title="Something you don't stock, bought elsewhere for this customer"
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-[13px] font-semibold text-amber-800 transition hover:bg-amber-100"
-              >
-                <FaPlus className="h-2.5 w-2.5" /> Outside item
-              </button>
               {cart.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-[13px] text-slate-500">
                   Tap a product on the left to start the order.
