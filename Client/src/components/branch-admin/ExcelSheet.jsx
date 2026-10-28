@@ -1,5 +1,5 @@
 // components/branch-admin/ExcelSheet.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { parsePastedRows } from "./PurchaseSheet";
 
 /**
@@ -16,7 +16,9 @@ import { parsePastedRows } from "./PurchaseSheet";
  *   Ctrl+Delete removes the line · Tab or Enter on the empty last line → onFinish
  *
  * Item names complete as they are typed (grey text and a list of matches; Tab
- * or Enter takes it with its unit and last price). The rows are the page's own;
+ * or Enter takes it with its unit and last price). The unit is chosen from a
+ * list (type, or Alt+↓); anything that is not a unit is refused. Quantity and
+ * price take numbers only. The rows are the page's own;
  * every change goes back through the callbacks, so validation, drafts and
  * saving are untouched.
  */
@@ -27,6 +29,15 @@ const clean = (v) => String(v).replace(/,/g, "").replace(/(rs\.?|lkr)/gi, "").re
 const fmt = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const show = (n) => String(Number(Number(n).toFixed(3)));
 const lower = (s) => String(s ?? "").trim().toLowerCase();
+const onlyNumber = (v) => String(v).replace(/,/g, "").replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
+// commit() / setValue() give this back when the text is not a unit.
+const BAD = "bad";
+// Shown beside each unit in the list, and searched too ("kilo" finds kg).
+const UNIT_HINT = {
+  kg: "kilograms", g: "grams", mg: "milligrams", l: "litres", ml: "millilitres",
+  pcs: "pieces", units: "units", dozen: "dozens", box: "boxes", pack: "packets",
+  bag: "bags, sacks", bottle: "bottles", can: "cans, tins",
+};
 
 const STYLES = `
 .xs{display:flex;flex-direction:column;min-height:0;background:#fff;border:1px solid #E4E8EE;border-radius:14px;box-shadow:0 1px 2px rgba(11,18,32,.04),0 10px 30px rgba(11,18,32,.04);overflow:hidden}
@@ -64,10 +75,16 @@ const STYLES = `
 .xs-ghost>span:first-child{color:transparent}
 .xs-ghost>span:last-child{color:#A0AABA}
 .xs-in{position:relative;width:100%;height:100%;box-sizing:border-box;border:0;padding:0 12px;background:transparent;font:inherit;color:#0B1220;outline:none}
-.xs-sugg{position:absolute;left:-1px;top:44px;width:440px;z-index:6;background:#fff;border:1px solid #C9D2DE;border-radius:0 0 12px 12px;box-shadow:0 16px 40px rgba(11,18,32,.18);overflow:hidden}
+.xs-sugg{position:fixed;width:440px;z-index:6;background:#fff;border:1px solid #C9D2DE;border-radius:12px;box-shadow:0 16px 40px rgba(11,18,32,.18);overflow:hidden}
 .xs-opt{width:100%;border:0;background:#fff;padding:9px 12px;display:flex;align-items:center;gap:10px;font:500 14px Inter,system-ui,sans-serif;color:#0B1220;cursor:pointer;text-align:left}
 .xs-opt.is-on{background:#EEF3FE}
 .xs-opt-meta{font-size:12px;color:#64748B;white-space:nowrap}
+.xs-units{width:250px}
+.xs-opt-list{max-height:262px;overflow-y:auto}
+.xs-opt-bad{padding:8px 12px;background:#FEF2F2;border-bottom:1px solid #FECDCA;color:#B42318;font-size:12.5px;font-weight:500}
+.xs-opt-empty{padding:10px 12px;font-size:13px;color:#64748B}
+.xs-tip{position:fixed;z-index:6;white-space:nowrap;padding:6px 10px;border-radius:0 0 8px 8px;background:#B42318;color:#fff;font-size:12px;font-weight:500;box-shadow:0 6px 16px rgba(11,18,32,.18)}
+.xs-caret{margin-left:auto;flex:none;width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#1D4ED8;background:#E8EFFE;cursor:pointer}
 .xs-opt-hint{padding:6px 12px;border-top:1px solid #EEF1F5;font-size:11px;color:#64748B}
 .xs-total{height:44px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;font:600 14px Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#0B1220;background:#FAFBFC}
 .xs-detail{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;padding:10px 14px;border-top:1px solid #E4E8EE;background:#FBFCFD;font-size:13px;color:#475569;flex:none}
@@ -109,6 +126,8 @@ export default function ExcelSheet({
   const [mode, setMode] = useState("ready"); // ready | enter | edit
   const [draft, setDraft] = useState("");
   const [sugIdx, setSugIdx] = useState(0);
+  const [note, setNote] = useState(""); // what was wrong with the last thing typed
+  const [pop, setPop] = useState(null);   // where the list under the cell goes
   const tabStart = useRef(null);
   const history = useRef([]);
   const gridRef = useRef(null);
@@ -138,6 +157,26 @@ export default function ExcelSheet({
       gridRef.current?.focus({ preventScroll: true });
     }
   });
+  useEffect(() => {
+    gridRef.current?.querySelector(".xs-opt.is-on")?.scrollIntoView({ block: "nearest" });
+  }, [sugIdx, mode]);
+  // Lists and notes float over the page, under the cell (above it near the
+  // bottom of the screen), so the sheet's own scrolling box never cuts them off.
+  useLayoutEffect(() => {
+    if (mode === "ready" && !note) { setPop(null); return undefined; }
+    const place = () => {
+      const cell = gridRef.current?.querySelector(`[data-cell="${sel.r}-${sel.c}"]`);
+      if (!cell) return;
+      const b = cell.getBoundingClientRect();
+      const up = b.bottom + 340 > window.innerHeight && b.top > 340;
+      setPop(up ? { left: b.left - 1, bottom: window.innerHeight - b.top } : { left: b.left - 1, top: b.bottom });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [mode, note, sel.r, sel.c, rows.length]);
+  const popStyle = pop || { display: "none" };
   // Keep the selected cell in view.
   useEffect(() => {
     gridRef.current?.querySelector(`[data-cell="${sel.r}-${sel.c}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -162,6 +201,19 @@ export default function ExcelSheet({
       .slice(0, 6);
   };
 
+  // Units for the list: those starting with the text first, then the rest that
+  // contain it (in the unit or its name). Nothing typed: every unit.
+  const unitMatches = (text) => {
+    const t = lower(text);
+    if (!t) return units;
+    const starts = units.filter((u) => u.startsWith(t));
+    return [...starts, ...units.filter((u) => !starts.includes(u) && (u.includes(t) || (UNIT_HINT[u] || "").includes(t)))];
+  };
+  const unitFor = (text) => {
+    const t = lower(text);
+    return units.includes(t) ? t : units.find((u) => u.startsWith(t)) || null;
+  };
+
   const remember = () => {
     history.current.push(rows.map((x) => ({ ...x })));
     if (history.current.length > 80) history.current.shift();
@@ -177,8 +229,10 @@ export default function ExcelSheet({
     }
     if (key === "unit") {
       if (locked(row, key)) return null;
-      const t = lower(value);
-      onPatch(row.key, { unit: units.includes(t) ? t : (units.find((u) => t && u.startsWith(t)) || t) });
+      if (!lower(value)) { onPatch(row.key, { unit: "" }); return null; }
+      const u = unitFor(value);
+      if (!u) { setNote(`“${String(value).trim()}” isn't a unit`); return BAD; }
+      onPatch(row.key, { unit: u });
       return null;
     }
     onPatch(row.key, key === "qty" ? { qty: clean(value) } : { unit_price: clean(value) });
@@ -192,6 +246,7 @@ export default function ExcelSheet({
     setMode("ready");
     setDraft("");
     setSugIdx(0);
+    setNote("");
     wantGrid.current = true;
   };
   // One step across, wrapping onto the next or previous line.
@@ -212,6 +267,16 @@ export default function ExcelSheet({
   const commit = (takeSuggestion) => {
     const row = rows[sel.r];
     const key = cols[sel.c];
+    if (key === "unit") {
+      // Only a unit from the list: the highlighted one, or exactly what was typed.
+      if (!lower(draft)) { remember(); onPatch(row.key, { unit: "" }); return null; }
+      const list = unitMatches(draft);
+      const u = units.includes(lower(draft)) ? lower(draft) : list[Math.min(sugIdx, list.length - 1)];
+      if (!u) { setNote(`“${draft.trim()}” isn't a unit — pick one from the list`); return BAD; }
+      remember();
+      onPatch(row.key, { unit: u });
+      return null;
+    }
     remember();
     if (key === "name" && takeSuggestion) {
       const s = suggestions(draft);
@@ -244,6 +309,7 @@ export default function ExcelSheet({
       wantGrid.current = true;
       return;
     }
+    if (e.altKey && k === "ArrowDown" && key === "unit") { e.preventDefault(); startEdit("enter", ""); return; }
     if (k.startsWith("Arrow")) {
       e.preventDefault();
       tabStart.current = null;
@@ -277,7 +343,18 @@ export default function ExcelSheet({
     if (k === "F2") { e.preventDefault(); startEdit("edit", valueOf(row, key)); return; }
     if (k === "Delete") { e.preventDefault(); if (!locked(row, key)) { remember(); setValue(row, key, ""); } return; }
     if (k === "Backspace") { e.preventDefault(); startEdit("enter", ""); return; }
-    if (k.length === 1 && !ctrl && !e.altKey) { e.preventDefault(); startEdit("enter", k); }
+    if (k.length === 1 && !ctrl && !e.altKey) {
+      e.preventDefault();
+      if (key === "unit" && !/[a-z]/i.test(k)) {
+        // A number in the unit: open the list instead, and say why.
+        startEdit("enter", "");
+        setNote("Units are words — pick one from the list");
+        return;
+      }
+      if ((key === "qty" || key === "price") && !/[0-9.]/.test(k)) { setNote(`${NAMES[key]} takes numbers only`); return; }
+      setNote("");
+      startEdit("enter", k);
+    }
   };
 
   const onEditKey = (e) => {
@@ -285,9 +362,9 @@ export default function ExcelSheet({
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = cols[sel.c];
-    const sugg = key === "name" ? suggestions(draft) : [];
-    if (ctrl && k === "Enter") { e.preventDefault(); commit(true); setMode("ready"); wantGrid.current = true; setTimeout(() => onSave?.(), 0); return; }
-    if (k === "Escape") { e.preventDefault(); setMode("ready"); setDraft(""); wantGrid.current = true; return; }
+    const sugg = key === "name" ? suggestions(draft) : key === "unit" ? unitMatches(draft) : [];
+    if (ctrl && k === "Enter") { e.preventDefault(); if (commit(true) === BAD) return; setMode("ready"); wantGrid.current = true; setTimeout(() => onSave?.(), 0); return; }
+    if (k === "Escape") { e.preventDefault(); setMode("ready"); setDraft(""); setNote(""); wantGrid.current = true; return; }
     if ((k === "ArrowDown" || k === "ArrowUp") && sugg.length) {
       e.preventDefault();
       setSugIdx((i) => (i + (k === "ArrowDown" ? 1 : -1) + sugg.length) % sugg.length);
@@ -296,6 +373,7 @@ export default function ExcelSheet({
     if (k === "Tab") {
       e.preventDefault();
       const picked = commit(true);
+      if (picked === BAD) return;
       if (tabStart.current == null) tabStart.current = sel.c;
       // A known item brings its unit: straight on to the quantity.
       if (picked && !e.shiftKey && cols[sel.c + 1] === "unit") select(sel.r, sel.c + 2);
@@ -304,7 +382,7 @@ export default function ExcelSheet({
     }
     if (k === "Enter") {
       e.preventDefault();
-      commit(true);
+      if (commit(true) === BAD) return;
       const back = tabStart.current ?? sel.c;
       tabStart.current = null;
       select(sel.r + (e.shiftKey ? -1 : 1), back);
@@ -314,7 +392,7 @@ export default function ExcelSheet({
       // Enter mode: an arrow finishes the cell and moves, as in Excel. Edit mode
       // (F2): left and right move inside the text.
       e.preventDefault();
-      commit(key === "name" && k === "ArrowRight");
+      if (commit(key === "name" && k === "ArrowRight") === BAD) return;
       tabStart.current = null;
       select(sel.r + (k === "ArrowDown" ? 1 : k === "ArrowUp" ? -1 : 0), sel.c + (k === "ArrowRight" ? 1 : k === "ArrowLeft" ? -1 : 0));
     }
@@ -342,11 +420,11 @@ export default function ExcelSheet({
   const filledRows = rows.filter((x) => nameOf(x) || x.qty !== "" || x.unit_price !== "");
   const sum = filledRows.reduce((s, x) => s + num(x.qty) * num(x.unit_price), 0);
   const errorList = rows.flatMap((x, i) => (errors[x.key] ? [`Line ${i + 1}: ${Object.values(errors[x.key]).join(" · ")}`] : []));
-  const sugg = editing && selKey === "name" ? suggestions(draft) : [];
+  const sugg = !editing ? [] : selKey === "name" ? suggestions(draft) : selKey === "unit" ? unitMatches(draft) : [];
   const si = Math.min(sugIdx, Math.max(sugg.length - 1, 0));
   let ghost = "";
   if (editing && selKey === "name" && sugg[si] && lower(sugg[si].name).startsWith(lower(draft))) ghost = sugg[si].name.slice(draft.length);
-  if (editing && selKey === "unit") { const u = units.find((w) => draft && w.startsWith(lower(draft))); if (u) ghost = u.slice(draft.length); }
+  if (editing && selKey === "unit" && draft && sugg[si]?.startsWith(lower(draft))) ghost = sugg[si].slice(draft.length);
   const stockOf = (m) => num(isProduct ? (m.pro_qty ?? m.stock_qty) : m.stock_qty);
   const unitOf = (row, m) => (isProduct ? "pcs" : (m ? m.unit : row.unit) || "");
 
@@ -403,7 +481,18 @@ export default function ExcelSheet({
                 if (key === "unit" && m) cls += " is-muted";
                 if (key === "price" && text !== "") text = fmt(text);
                 if (key === "name" && !name && r === rows.length - 1 && !isSel) { text = "Type an item…"; cls += " is-ph"; }
+                const unitPick = key === "unit" && isSel && !editing && !m;
+                if (unitPick && !text) { text = "kg, pcs…"; cls += " is-ph"; }
                 let chip = null;
+                if (unitPick) {
+                  chip = (
+                    <span
+                      className="xs-caret"
+                      title="Choose a unit (Alt+↓)"
+                      onMouseDown={(ev) => { ev.preventDefault(); ev.stopPropagation(); startEdit("enter", ""); }}
+                    >▾</span>
+                  );
+                }
                 if (key === "name" && name) {
                   if (m && (m.stock_qty != null || m.pro_qty != null)) {
                     const have = stockOf(m);
@@ -440,15 +529,58 @@ export default function ExcelSheet({
                           inputMode={numeric ? "decimal" : undefined}
                           aria-label={`Line ${r + 1} ${NAMES[key]}`}
                           value={draft}
-                          onChange={(ev) => { setDraft(ev.target.value); setSugIdx(0); }}
+                          onChange={(ev) => {
+                            let v = ev.target.value;
+                            if (key === "unit") {
+                              const only = v.replace(/[^a-zA-Z]/g, "");
+                              setNote(only === v ? "" : "Units are words — pick one from the list");
+                              v = only;
+                            } else if (numeric) {
+                              const only = onlyNumber(v);
+                              setNote(only === v.replace(/,/g, "") ? "" : `${NAMES[key]} takes numbers only`);
+                              v = only;
+                            }
+                            setDraft(v);
+                            setSugIdx(0);
+                          }}
                           onKeyDown={onEditKey}
-                          onBlur={() => { if (mode !== "ready") { commit(false); setMode("ready"); } }}
+                          // Leaving the cell with something that is not a unit drops it.
+                          onBlur={() => { if (mode !== "ready") { commit(false); setMode("ready"); setNote(""); } }}
                         />
                       </div>
                     )}
                     {isSel && <><div className="xs-sel" /><div className="xs-handle" /></>}
+                    {isEdit && key === "unit" && (
+                      <div className="xs-sugg xs-units" role="listbox" aria-label="Units" style={popStyle}>
+                        {note && <div className="xs-opt-bad" role="alert">{note}</div>}
+                        <div className="xs-opt-list">
+                          {sugg.length ? sugg.map((u, j) => (
+                            <button
+                              key={u}
+                              type="button"
+                              tabIndex={-1}
+                              role="option"
+                              aria-selected={j === si}
+                              className={`xs-opt${j === si ? " is-on" : ""}`}
+                              onMouseDown={(ev) => {
+                                ev.preventDefault();
+                                remember();
+                                onPatch(row.key, { unit: u });
+                                setMode("ready");
+                                select(r, c + 1);
+                              }}
+                            >
+                              <span style={{ flex: 1, fontWeight: 600 }}>{u}</span>
+                              <span className="xs-opt-meta">{UNIT_HINT[u]}</span>
+                            </button>
+                          )) : <div className="xs-opt-empty">No unit matches “{draft}”</div>}
+                        </div>
+                        <div className="xs-opt-hint">↑ ↓ choose · Tab or Enter takes it · Esc cancels</div>
+                      </div>
+                    )}
+                    {isSel && note && !(isEdit && key === "unit") && <div className="xs-tip" role="alert" style={popStyle}>{note}</div>}
                     {isEdit && key === "name" && sugg.length > 0 && (
-                      <div className="xs-sugg" role="listbox" aria-label="Matching items">
+                      <div className="xs-sugg" role="listbox" aria-label="Matching items" style={popStyle}>
                         {sugg.map((s, j) => (
                           <button
                             key={s.key}
