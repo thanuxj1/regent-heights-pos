@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Carrot, Package, SprayCan, Plus, Truck, Wallet, CircleAlert, LoaderCircle } from "lucide-react";
-import PurchaseItemRow from "../../components/branch-admin/PurchaseItemRow";
+import { Carrot, Package, SprayCan, Truck, Wallet, CircleAlert, LoaderCircle } from "lucide-react";
+import PurchaseSheet from "../../components/branch-admin/PurchaseSheet";
 import ItemPicker from "../../components/branch-admin/ItemPicker";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
@@ -88,6 +88,43 @@ const STYLES = `
 .ai-keys{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 12px;font-size:12px;color:#667085}
 .ai-keys kbd{display:inline-block;min-width:18px;padding:1px 5px;margin:0 2px;border:1px solid #D0D5DD;border-bottom-width:2px;border-radius:5px;background:#F9FAFB;font:600 11px/1.4 inherit;color:#344054;text-align:center}
 .ai-picker-new.is-active{background:#EFF4FF}
+.ai-main{display:flex;flex-direction:column;gap:20px;min-width:0}
+.ps-scroll{overflow-x:auto}
+.ps-grid{width:100%;min-width:560px;border-collapse:collapse;table-layout:fixed;font-size:14px}
+.ps-grid th{padding:7px 8px;border:1px solid #E4E7EC;background:#F8FAFC;font-size:11px;font-weight:600;color:#667085;text-transform:uppercase;letter-spacing:.03em;text-align:left}
+.ps-grid td{border:1px solid #E4E7EC;padding:0;height:36px;position:relative;background:#fff}
+.ps-grid tr.is-active td{background:#FAFCFF}
+.ps-grid td.ps-rn{background:#F8FAFC;color:#98A2B3;font-size:12px;text-align:center}
+.ps-grid tr.is-active td.ps-rn{background:#EFF4FF;color:#1565C0;font-weight:600}
+.ps-num{text-align:right;font-variant-numeric:tabular-nums}
+.ps-in{width:100%;height:36px;border:0;padding:0 8px;background:transparent;font:400 14px/36px inherit;font-family:inherit;color:#101828;outline:none;box-sizing:border-box;position:relative;z-index:1}
+.ps-in:focus{box-shadow:inset 0 0 0 2px #1565C0;background:transparent}
+.ps-td.is-invalid{background:#FEF3F2 !important}
+.ps-in.is-invalid{box-shadow:inset 0 0 0 1px #F04438}
+.ps-ghostwrap{position:relative;display:block;flex:1;min-width:0}
+.ps-ghost{position:absolute;inset:0;padding:0 8px;font:400 14px/36px inherit;font-family:inherit;color:#98A2B3;white-space:pre;overflow:hidden;pointer-events:none}
+.ps-ghost>span{color:transparent}
+.ps-namecell{display:flex;align-items:center}
+.ps-new{flex:none;margin-right:6px;padding:1px 7px;border-radius:999px;background:#EFF8FF;color:#175CD3;font-size:11px;font-weight:600}
+.ps-fixed{display:block;padding:0 8px;line-height:36px;color:#667085}
+.ps-total{padding:0 8px !important;color:#344054;font-weight:500}
+.ps-del{text-align:center}
+.ps-x{border:0;background:none;color:#98A2B3;cursor:pointer;padding:6px;border-radius:6px;display:inline-flex}
+.ps-x:hover{color:#D92D20;background:#FEF3F2}
+.ps-sugg{position:absolute;top:100%;left:-1px;min-width:300px;z-index:40;background:#fff;border:1px solid #D0D5DD;border-radius:0 0 10px 10px;box-shadow:0 8px 24px rgba(16,24,40,.14)}
+.ps-opt{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;cursor:pointer;font-size:13.5px}
+.ps-opt.is-on{background:#EFF4FF;color:#1565C0}
+.ps-meta{color:#98A2B3;font-size:12px;white-space:nowrap}
+.ps-opt-hint{padding:6px 10px;border-top:1px solid #F2F4F7;font-size:11.5px;color:#98A2B3}
+.ps-grid tfoot td{border:0;height:40px}
+.ps-foot-label{text-align:right;padding-right:10px !important;font-weight:600;color:#475467}
+.ps-foot{padding:0 8px !important;font-weight:700;font-size:15px;border-top:2px solid #101828 !important}
+.ps-detail{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-top:10px;padding:9px 12px;background:#F8FAFC;border:1px solid #E4E7EC;border-radius:10px;font-size:13px;color:#475467}
+.ps-detail label{display:inline-flex;align-items:center;gap:6px}
+.ps-mini{width:76px;height:30px;padding:0 8px;border:1px solid #D0D5DD;border-radius:7px;font:400 13px/1 inherit;font-family:inherit}
+.ps-cat{width:150px}
+.ps-detail select.ps-mini{width:auto;min-width:110px}
+.ps-errors{margin:10px 0 0;padding:8px 12px 8px 28px;background:#FEF3F2;border:1px solid #FECDCA;border-radius:10px;color:#B42318;font-size:12.5px}
 .ai-card-blurb{margin:0 0 14px;color:#667085;font-size:13px}
 .ai-side{display:flex;flex-direction:column;gap:20px;position:sticky;top:16px}
 .ai-colhead,.ai-grid{display:grid;gap:8px;align-items:start}
@@ -194,7 +231,6 @@ const AddRawMaterials = () => {
     };
   });
   const rows = rowsByType[itemType];
-  const [focusKey, setFocusKey] = useState(reorderFrom ? rowsByType[reorderFrom.itemType || "ingredient"][0].key : null);
 
   // Consume the reorder prefill once — a later refresh or back-navigation to
   // this same history entry shouldn't keep re-triggering it.
@@ -423,28 +459,56 @@ const AddRawMaterials = () => {
     if (hit) pickItem(row, { key: hit.pro_id, name: hit.pro_name, raw: hit });
   };
 
+  // Rows pasted from Excel: written over the sheet from the line pasted into,
+  // each matched to an item already stocked (its unit and last price come
+  // with it) or left as a new item to check.
+  const pasteRows = (startKey, lines) => {
+    updateRows((list) => {
+      const out = [...list];
+      let at = out.findIndex((r) => r.key === startKey);
+      if (at < 0) at = out.length - 1;
+      let fresh = 0;
+      for (const l of lines) {
+        const keep = out[at]?.key ?? nextKey();
+        let row;
+        if (itemType === "product") {
+          const hit = buyableProducts.find((pr) => lower(pr.pro_name) === lower(l.name));
+          if (!hit) fresh += 1;
+          row = {
+            ...blankProduct(), key: keep,
+            pro_id: hit ? String(hit.pro_id) : "", pro_name: hit ? hit.pro_name : l.name,
+            qty: l.qty === "" ? "" : String(l.qty),
+            unit_price: l.price !== "" ? String(l.price) : (Number(hit?.cost_price) > 0 ? String(hit.cost_price) : ""),
+          };
+        } else {
+          const m = materialsByName.get(lower(l.name));
+          const known = m && categoryOf(m) === itemType;
+          if (!known) fresh += 1;
+          row = {
+            ...blankMaterial(), key: keep,
+            rm_name: known ? m.rm_name : l.name,
+            unit: known ? m.unit : (l.unit || ""),
+            qty: l.qty === "" ? "" : String(l.qty),
+            unit_price: l.price !== "" ? String(l.price) : (known && Number(m.last_price) > 0 ? String(m.last_price) : ""),
+          };
+        }
+        out[at] = row;
+        at += 1;
+      }
+      setTimeout(() => showToast(
+        `Pasted ${lines.length} line${lines.length === 1 ? "" : "s"}` +
+        (fresh ? ` — ${fresh} not in your items yet (marked "new"), check their names` : ""),
+        fresh ? "warning" : "success"), 0);
+      return out;
+    });
+  };
+
   const focusRowName = (key) => {
     document.querySelector(`[data-row="${key}"] input[role="combobox"]`)?.focus();
   };
 
-  const addRow = () => {
-    // There is normally an empty line waiting at the bottom already.
-    const last = rows[rows.length - 1];
-    if (last && !isFilled(last, itemType)) {
-      focusRowName(last.key);
-      return;
-    }
-    const fresh = blankFor(itemType);
-    updateRows((list) => [...list, fresh]);
-    setFocusKey(fresh.key);
-  };
 
-  // Enter in the price box moves on to the next line's name.
-  const goNext = (key) => {
-    const next = rows[rows.findIndex((r) => r.key === key) + 1];
-    if (next) focusRowName(next.key);
-    else addRow();
-  };
+
 
   // Like a spreadsheet: once the last line has something in it, a fresh empty one
   // appears beneath, so a long list never needs the Add button.
@@ -534,7 +598,6 @@ const AddRawMaterials = () => {
 
   const switchTab = (type) => {
     setItemType(type);
-    setFocusKey(null);
   };
 
   const dirtyTabs = useMemo(
@@ -676,7 +739,7 @@ const AddRawMaterials = () => {
 
   const focusFirstError = () => {
     setTimeout(() => {
-      const el = document.querySelector(".ai-input.is-invalid");
+      const el = document.querySelector(".ai-input.is-invalid, .ps-in.is-invalid");
       if (el) {
         el.scrollIntoView({ block: "center", behavior: "smooth" });
         el.focus?.({ preventScroll: true });
@@ -730,7 +793,10 @@ const AddRawMaterials = () => {
     }
   };
   useEffect(() => {
-    if (!reorderFrom) setTimeout(() => document.getElementById("ai-supplier")?.querySelector("input")?.focus(), 0);
+    // Arriving from "Reorder", the item is already on the first line: its quantity is next.
+    setTimeout(() => (reorderFrom
+      ? document.querySelector("[data-row] [data-col=\"qty\"]")
+      : document.getElementById("ai-supplier")?.querySelector("input"))?.focus(), 0);
     // Only on arrival.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -900,7 +966,6 @@ const AddRawMaterials = () => {
       });
 
       setRowsByType((prev) => ({ ...prev, [itemType]: [blankFor(itemType)] }));
-      setFocusKey(null);
       setPaymentAmount("");
       setAttempted(false);
       fetchSuppliers();
@@ -918,11 +983,9 @@ const AddRawMaterials = () => {
   // --- render ---
   const tab = TABS[itemType];
   const TabIcon = tab.icon;
-  const isProduct = itemType === "product";
   const rowErrors = shown(validation.rowErrors);
   const supErr = shown(validation.supplierErrors);
   const payErr = validation.payment;
-  const listSizeClass = isProduct ? "is-product" : "is-material";
 
   return (
     <div style={{ display: "flex", background: "#F9FAFB", minHeight: "100vh" }}>
@@ -1008,82 +1071,8 @@ const AddRawMaterials = () => {
           </div>
 
           <div className="ai-layout">
-            {/* Items */}
-            <section className="ai-card ai-items" role="tabpanel" aria-label={tab.label}>
-              <div className="ai-card-head">
-                <h2 className="ai-card-title"><TabIcon size={18} aria-hidden="true" />{tab.title}</h2>
-              </div>
-              <p className="ai-card-blurb">{tab.blurb}</p>
-              <div className="ai-keys" aria-label="Keyboard">
-                <span><kbd>Enter</kbd> next box</span>
-                <span><kbd>↑</kbd><kbd>↓</kbd> choose</span>
-                <span><kbd>Enter</kbd> on an empty line → payment</span>
-                <span><kbd>F</kbd> pay in full</span>
-                <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> save</span>
-              </div>
-
-              {draftRestored && (
-                <div className="ai-notice" role="status">
-                  <span>We restored the purchase you were working on.</span>
-                  <button type="button" className="ai-link" onClick={discardDraft}>Start over</button>
-                </div>
-              )}
-
-              {attempted && validation.errorCount > 0 && (
-                <div className="ai-banner" role="alert">
-                  <CircleAlert size={16} aria-hidden="true" />
-                  {validation.general
-                    ? validation.general
-                    : `Please fix the ${validation.errorCount === 1 ? "highlighted field" : `${validation.errorCount} highlighted fields`} to save.`}
-                </div>
-              )}
-
-              <div className={`ai-colhead ${listSizeClass}`} aria-hidden="true">
-                <span>Item</span>
-                {!isProduct && <span>Unit</span>}
-                <span>Quantity</span>
-                <span>{isProduct ? "Cost price" : "Unit price"}</span>
-                <span>Total</span>
-                <span />
-              </div>
-
-              {rows.map((row) => (
-                <PurchaseItemRow
-                  key={row.key}
-                  kind={itemType}
-                  row={row}
-                  match={matchFor(row)}
-                  items={pickerItems}
-                  units={VALID_UNITS}
-                  categories={categories}
-                  errors={rowErrors[row.key] || {}}
-                  autoFocus={focusKey === row.key}
-                  onPatch={(patch) => patchRow(row.key, patch)}
-                  onNameChange={(text) => changeName(row, text)}
-                  onPick={(item) => pickItem(row, item)}
-                  onCommit={(text) => commitName(row, text)}
-                  onRemove={() => removeRow(row.key)}
-                  onNext={() => goNext(row.key)}
-                  onFinish={focusPaid}
-                />
-              ))}
-
-              <button type="button" className="ai-add" onClick={addRow}>
-                <Plus size={16} aria-hidden="true" /> Add another item
-              </button>
-
-              {filledCount > 5 && (
-                <div className="ai-stickybar">
-                  <span><b>{filledCount}</b> items · <b>{money(totalCents)}</b></span>
-                  <button type="button" className="ai-primary ai-primary-sm" onClick={handleSubmit} disabled={isSaving}>
-                    {isSaving ? "Saving…" : "Save purchase"}
-                  </button>
-                </div>
-              )}
-            </section>
-
-            {/* Supplier + summary */}
-            <aside className="ai-side">
+            <div className="ai-main">
+            {/* Supplier first: typed once, above the lines */}
               <section className="ai-card">
                 <div className="ai-card-head">
                   <h2 className="ai-card-title"><Truck size={18} aria-hidden="true" />Supplier</h2>
@@ -1144,6 +1133,69 @@ const AddRawMaterials = () => {
                   </div>
                 )}
               </section>
+
+            {/* Items */}
+            <section className="ai-card ai-items" role="tabpanel" aria-label={tab.label}>
+              <div className="ai-card-head">
+                <h2 className="ai-card-title"><TabIcon size={18} aria-hidden="true" />{tab.title}</h2>
+              </div>
+              <p className="ai-card-blurb">{tab.blurb}</p>
+              <div className="ai-keys" aria-label="Keyboard">
+                <span><kbd>Tab</kbd>/<kbd>Enter</kbd> next cell</span>
+                <span><kbd>↑</kbd><kbd>↓</kbd> line above / below</span>
+                <span><kbd>Ctrl</kbd>+<kbd>V</kbd> paste rows from Excel</span>
+                <span><kbd>Ctrl</kbd>+<kbd>Del</kbd> remove line</span>
+                <span><kbd>Enter</kbd> on an empty line → payment</span>
+                <span><kbd>F</kbd> pay in full</span>
+                <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> save</span>
+              </div>
+
+              {draftRestored && (
+                <div className="ai-notice" role="status">
+                  <span>We restored the purchase you were working on.</span>
+                  <button type="button" className="ai-link" onClick={discardDraft}>Start over</button>
+                </div>
+              )}
+
+              {attempted && validation.errorCount > 0 && (
+                <div className="ai-banner" role="alert">
+                  <CircleAlert size={16} aria-hidden="true" />
+                  {validation.general
+                    ? validation.general
+                    : `Please fix the ${validation.errorCount === 1 ? "highlighted field" : `${validation.errorCount} highlighted fields`} to save.`}
+                </div>
+              )}
+
+
+              <PurchaseSheet
+                kind={itemType}
+                rows={rows}
+                items={pickerItems}
+                units={VALID_UNITS}
+                categories={categories}
+                errors={rowErrors}
+                matchFor={matchFor}
+                onNameChange={(key, text) => { const r = rows.find((x) => x.key === key); if (r) changeName(r, text); }}
+                onPick={(key, item) => { const r = rows.find((x) => x.key === key); if (r) pickItem(r, item); }}
+                onPatch={patchRow}
+                onRemove={removeRow}
+                onPaste={pasteRows}
+                onFinish={focusPaid}
+              />
+
+              {filledCount > 5 && (
+                <div className="ai-stickybar">
+                  <span><b>{filledCount}</b> items · <b>{money(totalCents)}</b></span>
+                  <button type="button" className="ai-primary ai-primary-sm" onClick={handleSubmit} disabled={isSaving}>
+                    {isSaving ? "Saving…" : "Save purchase"}
+                  </button>
+                </div>
+              )}
+            </section>
+            </div>
+
+            {/* Summary and payment */}
+            <aside className="ai-side">
 
               <section className="ai-card">
                 <div className="ai-card-head">
