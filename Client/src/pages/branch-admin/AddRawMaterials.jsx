@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Carrot, Package, SprayCan, Truck, Wallet, CircleAlert, LoaderCircle } from "lucide-react";
-import PurchaseSheet from "../../components/branch-admin/PurchaseSheet";
+import { LoaderCircle } from "lucide-react";
+import ExcelSheet from "../../components/branch-admin/ExcelSheet";
 import ItemPicker from "../../components/branch-admin/ItemPicker";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
@@ -21,19 +21,16 @@ const MAX_MIN_STOCK = 99_999.999;
 const TABS = {
   ingredient: {
     label: "Ingredients",
-    icon: Carrot,
     title: "Incoming ingredients",
     blurb: "Food and drink ingredients your recipes use. Stock goes up as soon as you save.",
   },
   product: {
-    label: "Resale Products",
-    icon: Package,
+    label: "Resale products",
     title: "Incoming resale products",
     blurb: "Things you buy ready-made and sell as they are, like bottled drinks. They go into the storeroom; put them on the menu from Menu / Products.",
   },
   supply: {
-    label: "Hotel Supplies",
-    icon: SprayCan,
+    label: "Hotel supplies",
     title: "Incoming hotel supplies",
     blurb: "Consumables the hotel uses itself, like cleaning products. These aren't sold to guests.",
   },
@@ -69,143 +66,100 @@ const isFilled = (row, type) =>
 const isNumber = (v) => v !== "" && Number.isFinite(Number(v));
 
 const STYLES = `
-.ai-page{padding:28px 32px 56px;max-width:1180px;margin:0 auto;font-family:'Inter',system-ui,sans-serif;color:#101828}
-.ai-top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:20px}
-.ai-top h1{margin:0;font-size:24px;font-weight:700}
-.ai-sub{margin:4px 0 0;color:#667085;font-size:14px}
-.ai-tabs{display:inline-flex;background:#F1F5F9;border-radius:12px;padding:4px;gap:2px;max-width:100%;overflow-x:auto}
-.ai-tab{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border:0;border-radius:9px;background:transparent;color:#64748B;font:600 13px/1 inherit;font-family:inherit;cursor:pointer;transition:background .15s,color .15s;white-space:nowrap}
-.ai-tab:hover{color:#1565C0}
-.ai-tab[aria-selected="true"]{background:#fff;color:#1565C0;box-shadow:0 1px 4px rgba(16,24,40,.12)}
-.ai-tab:focus-visible,.ai-link:focus-visible,.ai-chip:focus-visible,.ai-add:focus-visible,.ai-icon-btn:focus-visible,.ai-primary:focus-visible{outline:2px solid #1565C0;outline-offset:2px}
-.ai-dot{width:7px;height:7px;border-radius:50%;background:#F79009}
-.ai-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start}
-.ai-card{background:#fff;border:1px solid #E4E7EC;border-radius:16px;box-shadow:0 1px 3px rgba(16,24,40,.06);padding:18px}
-.ai-items{container-type:inline-size}
-.ai-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
-.ai-card-title{display:flex;align-items:center;gap:10px;margin:0;font-size:16px;font-weight:600;color:#001F3F}
-.ai-card-title svg{color:#1565C0;flex:none}
-.ai-keys{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 12px;font-size:12px;color:#667085}
-.ai-keys kbd{display:inline-block;min-width:18px;padding:1px 5px;margin:0 2px;border:1px solid #D0D5DD;border-bottom-width:2px;border-radius:5px;background:#F9FAFB;font:600 11px/1.4 inherit;color:#344054;text-align:center}
-.ai-picker-new.is-active{background:#EFF4FF}
-.ai-main{display:flex;flex-direction:column;gap:20px;min-width:0}
-.ps-scroll{overflow-x:auto}
-.ps-grid{width:100%;min-width:560px;border-collapse:collapse;table-layout:fixed;font-size:14px}
-.ps-grid th{padding:7px 8px;border:1px solid #E4E7EC;background:#F8FAFC;font-size:11px;font-weight:600;color:#667085;text-transform:uppercase;letter-spacing:.03em;text-align:left}
-.ps-grid td{border:1px solid #E4E7EC;padding:0;height:36px;position:relative;background:#fff}
-.ps-grid tr.is-active td{background:#FAFCFF}
-.ps-grid td.ps-rn{background:#F8FAFC;color:#98A2B3;font-size:12px;text-align:center}
-.ps-grid tr.is-active td.ps-rn{background:#EFF4FF;color:#1565C0;font-weight:600}
-.ps-num{text-align:right;font-variant-numeric:tabular-nums}
-.ps-in{width:100%;height:36px;border:0;padding:0 8px;background:transparent;font:400 14px/36px inherit;font-family:inherit;color:#101828;outline:none;box-sizing:border-box;position:relative;z-index:1}
-.ps-in:focus{box-shadow:inset 0 0 0 2px #1565C0;background:transparent}
-.ps-td.is-invalid{background:#FEF3F2 !important}
-.ps-in.is-invalid{box-shadow:inset 0 0 0 1px #F04438}
-.ps-ghostwrap{position:relative;display:block;flex:1;min-width:0}
-.ps-ghost{position:absolute;inset:0;padding:0 8px;font:400 14px/36px inherit;font-family:inherit;color:#98A2B3;white-space:pre;overflow:hidden;pointer-events:none}
-.ps-ghost>span{color:transparent}
-.ps-namecell{display:flex;align-items:center}
-.ps-new{flex:none;margin-right:6px;padding:1px 7px;border-radius:999px;background:#EFF8FF;color:#175CD3;font-size:11px;font-weight:600}
-.ps-fixed{display:block;padding:0 8px;line-height:36px;color:#667085}
-.ps-total{padding:0 8px !important;color:#344054;font-weight:500}
-.ps-del{text-align:center}
-.ps-x{border:0;background:none;color:#98A2B3;cursor:pointer;padding:6px;border-radius:6px;display:inline-flex}
-.ps-x:hover{color:#D92D20;background:#FEF3F2}
-.ps-sugg{position:absolute;top:100%;left:-1px;min-width:300px;z-index:40;background:#fff;border:1px solid #D0D5DD;border-radius:0 0 10px 10px;box-shadow:0 8px 24px rgba(16,24,40,.14)}
-.ps-opt{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;cursor:pointer;font-size:13.5px}
-.ps-opt.is-on{background:#EFF4FF;color:#1565C0}
-.ps-meta{color:#98A2B3;font-size:12px;white-space:nowrap}
-.ps-opt-hint{padding:6px 10px;border-top:1px solid #F2F4F7;font-size:11.5px;color:#98A2B3}
-.ps-grid tfoot td{border:0;height:40px}
-.ps-foot-label{text-align:right;padding-right:10px !important;font-weight:600;color:#475467}
-.ps-foot{padding:0 8px !important;font-weight:700;font-size:15px;border-top:2px solid #101828 !important}
-.ps-detail{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-top:10px;padding:9px 12px;background:#F8FAFC;border:1px solid #E4E7EC;border-radius:10px;font-size:13px;color:#475467}
-.ps-detail label{display:inline-flex;align-items:center;gap:6px}
-.ps-mini{width:76px;height:30px;padding:0 8px;border:1px solid #D0D5DD;border-radius:7px;font:400 13px/1 inherit;font-family:inherit}
-.ps-cat{width:150px}
-.ps-detail select.ps-mini{width:auto;min-width:110px}
-.ps-errors{margin:10px 0 0;padding:8px 12px 8px 28px;background:#FEF3F2;border:1px solid #FECDCA;border-radius:10px;color:#B42318;font-size:12.5px}
-.ai-card-blurb{margin:0 0 14px;color:#667085;font-size:13px}
-.ai-side{display:flex;flex-direction:column;gap:20px;position:sticky;top:16px}
-.ai-colhead,.ai-grid{display:grid;gap:8px;align-items:start}
-.is-material .ai-grid,.ai-colhead.is-material{grid-template-columns:minmax(130px,1fr) 80px 84px 96px 100px 28px}
-.is-product .ai-grid,.ai-colhead.is-product{grid-template-columns:minmax(130px,1fr) 96px 100px 100px 28px}
-.ai-colhead{padding:8px 0;border-bottom:1px solid #E4E7EC;font-size:11px;font-weight:600;color:#667085;text-transform:uppercase;letter-spacing:.03em}
-.ai-row{padding:14px 0;border-bottom:1px solid #F2F4F7}
-.ai-cell{min-width:0}
-.ai-mlabel{display:none;font-size:11px;font-weight:600;color:#667085;text-transform:uppercase;margin-bottom:4px}
-.ai-input{width:100%;height:40px;padding:0 10px;border:1px solid #D0D5DD;border-radius:8px;font:400 14px/1 inherit;font-family:inherit;color:#101828;background:#fff;box-sizing:border-box;transition:border-color .15s,box-shadow .15s}
-.ai-input::placeholder{color:#98A2B3}
-.ai-input:focus{outline:none;border-color:#1565C0;box-shadow:0 0 0 3px rgba(21,101,192,.15)}
-.ai-input:disabled{background:#F2F4F7;color:#667085;cursor:not-allowed}
-.ai-input.is-invalid{border-color:#D92D20;background:#FFFBFA}
-.ai-input.is-invalid:focus{box-shadow:0 0 0 3px rgba(217,45,32,.15)}
-select.ai-input{padding-right:6px}
-.ai-err{display:block;margin-top:4px;font-size:12px;color:#D92D20}
-.ai-total{height:40px;display:flex;align-items:center;font-weight:600;font-size:14px;white-space:nowrap}
-.ai-icon-btn{height:40px;width:28px;display:flex;align-items:center;justify-content:center;border:0;background:none;color:#98A2B3;border-radius:8px;cursor:pointer}
-.ai-icon-btn:hover{color:#D92D20;background:#FEF3F2}
-.ai-hint{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:12.5px;color:#475467}
-.ai-tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
-.ai-tag.is-existing{background:#ECFDF3;color:#067647}
-.ai-tag.is-new{background:#EFF8FF;color:#175CD3}
-.ai-link{background:none;border:0;padding:0;color:#1565C0;font:500 12.5px/1.4 inherit;font-family:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
-.ai-yield{margin-top:6px}
-.ai-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;padding:10px 12px;background:#EFF8FF;border:1px solid #B2DDFF;border-radius:10px;color:#175CD3;font-size:13px}
-.ai-stickybar{position:sticky;bottom:0;z-index:20;display:flex;justify-content:space-between;align-items:center;gap:12px;margin:16px -18px -18px;padding:12px 18px;background:rgba(255,255,255,.96);border-top:1px solid #E4E7EC;border-radius:0 0 16px 16px;font-size:14px}
-.ai-primary-sm{width:auto;height:40px;margin:0;padding:0 22px;font-size:14px}
-.ai-yield-body{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;padding:10px 12px;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:10px;font-size:13px;color:#475467}
-.ai-inline{display:inline-flex;align-items:center;gap:6px;color:#475467}
-.ai-min{width:76px;height:32px;padding:0 8px}
-.ai-sell{width:100px;height:32px;padding:0 8px}
-.ai-cat{width:170px;height:32px;padding:0 8px}
-.ai-yield-unit{width:130px}
-.ai-yield-amt{width:110px}
-.ai-picker{position:relative}
-.ai-picker-list{position:absolute;top:calc(100% + 4px);left:0;right:0;min-width:260px;z-index:30;background:#fff;border:1px solid #E4E7EC;border-radius:10px;box-shadow:0 8px 24px rgba(16,24,40,.14);max-height:280px;overflow-y:auto}
-.ai-picker-opt{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #F2F4F7}
-.ai-picker-opt.is-active{background:#EFF6FF}
-.ai-code{font:700 11px/1 ui-monospace,Consolas,monospace;color:#1565C0;background:#DBEAFE;border-radius:4px;padding:3px 6px;min-width:36px;text-align:center}
-.ai-picker-name{flex:1;font-size:14px;font-weight:500;color:#1D2939;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ai-picker-meta{font-size:12px;color:#667085;white-space:nowrap}
-.ai-picker-new{padding:9px 12px;font-size:12.5px;color:#475467;background:#F9FAFB}
-.ai-add{width:100%;margin-top:12px;padding:12px;border:1.5px dashed #B2CCFF;background:#F5F9FF;color:#1565C0;font:600 14px/1 inherit;font-family:inherit;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
-.ai-add:hover{background:#EFF6FF;border-color:#84ADFF}
-.ai-banner{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:10px 12px;background:#FEF3F2;border:1px solid #FECDCA;border-radius:10px;color:#B42318;font-size:13px}
-.ai-label{display:block;margin-bottom:6px;font-size:13px;font-weight:600;color:#344054}
-.ai-field{margin-bottom:14px}
-.ai-field:last-child{margin-bottom:0}
-.ai-help{margin:6px 0 0;font-size:12px;color:#667085;line-height:1.45}
-.ai-sum-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;font-size:14px;color:#475467}
-.ai-sum-total{margin-top:6px;padding-top:12px;border-top:1px solid #E4E7EC;font-size:20px;font-weight:700;color:#101828}
-.ai-owed{color:#B54708;font-weight:600}
-.ai-chips{display:flex;gap:8px;margin-top:8px}
-.ai-chip{padding:6px 12px;border:1px solid #D0D5DD;background:#fff;border-radius:999px;font:500 12.5px/1 inherit;font-family:inherit;color:#344054;cursor:pointer}
-.ai-chip:hover:not(:disabled){border-color:#1565C0;color:#1565C0}
-.ai-chip:disabled{opacity:.5;cursor:not-allowed}
-.ai-primary{width:100%;height:46px;margin-top:16px;border:0;border-radius:10px;background:#1565C0;color:#fff;font:600 15px/1 inherit;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
-.ai-primary:hover:not(:disabled){background:#0F4F9A}
-.ai-primary:disabled{opacity:.65;cursor:not-allowed}
+.ai-shell{display:flex;background:#F2F4F7;min-height:100vh;font-family:'Inter',system-ui,sans-serif;color:#0B1220}
+.ai-body{flex:1;min-width:0;margin-left:var(--sidebar-w,240px)}
+.ai-page{display:flex;gap:22px;align-items:flex-start;padding:22px 28px 32px;max-width:1480px;margin:0 auto;box-sizing:border-box}
+.ai-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
+.ai-side{width:330px;flex:none;display:flex;flex-direction:column;gap:14px;position:sticky;top:16px}
+.ai-top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.ai-top h1{margin:0;font-size:24px;font-weight:650;letter-spacing:-.02em}
+.ai-sub{margin:4px 0 0;color:#64748B;font-size:13.5px;max-width:560px}
+.ai-tabs{display:inline-flex;gap:2px;padding:3px;background:#E6EAF0;border-radius:11px;max-width:100%;overflow-x:auto}
+.ai-tab{height:34px;padding:0 14px;border:0;border-radius:8px;background:transparent;color:#64748B;font:600 13px/1 inherit;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.ai-tab:hover{color:#0B1220}
+.ai-tab[aria-selected="true"]{background:#fff;color:#0B1220;box-shadow:0 1px 2px rgba(11,18,32,.12)}
+.ai-count{min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:#1D4ED8;color:#fff;font-size:11px;display:inline-flex;align-items:center;justify-content:center}
+.ai-tab:focus-visible,.ai-link:focus-visible,.ai-seg button:focus-visible,.ai-pills:focus-visible,.ai-save:focus-visible,.ai-ghost:focus-visible{outline:2px solid #1D4ED8;outline-offset:2px}
+.ai-supbar{display:flex;align-items:center;gap:14px;padding:12px 14px;background:#fff;border:1px solid #E4E8EE;border-radius:14px;box-shadow:0 1px 2px rgba(11,18,32,.04)}
+.ai-supbar.is-invalid{border-color:#F04438;background:#FFFBFA}
+.ai-supchip{width:40px;height:40px;border-radius:11px;background:#EEF1F5;color:#94A3B8;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex:none}
+.ai-supchip.is-on{background:#1D4ED8;color:#fff}
+.ai-supfield{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ai-supfield .ai-input{height:34px;border:0;padding:0;font-weight:600;font-size:16px;background:transparent;box-shadow:none}
+.ai-supfield .ai-input:focus{box-shadow:none}
+.ai-supfield .ai-input.is-invalid{background:transparent}
+.ai-label-sm{font-size:11px;font-weight:600;color:#64748B;letter-spacing:.05em;text-transform:uppercase}
+.ai-owedbefore{display:flex;flex-direction:column;align-items:flex-end;padding-left:14px;border-left:1px solid #EEF1F5;font-size:11px;color:#64748B;white-space:nowrap}
+.ai-owedbefore b{font-size:14px;color:#0B1220}
+.ai-owedbefore b.is-owed{color:#B45309}
+.ai-suplink{white-space:nowrap}
+.ai-newsup{flex:1;min-width:0;display:flex;gap:10px;flex-wrap:wrap}
+.ai-newsup-f{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:0}
+.ai-newsup-f.ai-w-name{flex:2 1 200px}
+.ai-input{width:100%;height:40px;padding:0 10px;border:1px solid #D5DBE4;border-radius:9px;font:400 14px/1 inherit;font-family:inherit;color:#0B1220;background:#fff;box-sizing:border-box}
+.ai-input-sm{height:36px;font-size:13.5px}
+.ai-input::placeholder{color:#A0AABA}
+.ai-input:focus{outline:none;border-color:#1D4ED8;box-shadow:0 0 0 3px rgba(29,78,216,.14)}
+.ai-input.is-invalid{border-color:#F04438;background:#FFFBFA}
+.ai-err{display:block;font-size:12.5px;color:#B42318}
+.ai-link{background:none;border:0;padding:0;color:#1D4ED8;font:600 13px/1.4 inherit;font-family:inherit;cursor:pointer}
+.ai-link:hover{text-decoration:underline}
+.ai-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:12px;color:#1E40AF;font-size:13px}
+.ai-banner{padding:10px 14px;background:#FEF2F2;border:1px solid #FECDCA;border-radius:12px;color:#B42318;font-size:13px}
+.ai-help{margin:0;font-size:12px;color:#64748B;line-height:1.5}
+.ai-center{text-align:center}
+.ai-totalcard{background:#0B1220;color:#fff;border-radius:16px;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.ai-totalcard-top{display:flex;justify-content:space-between;font-size:12px;color:#94A3B8}
+.ai-totalcard-big{font-size:32px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,.1)}
+.ai-totalcard-line{display:flex;justify-content:space-between;font-size:13px;color:#94A3B8}
+.ai-totalcard-line b{color:#fff;font-variant-numeric:tabular-nums}
+.ai-totalcard-line b.is-owed{color:#FBBF24}
+.ai-totalcard-line b.is-clear{color:#4ADE80}
+.ai-paycard{background:#fff;border:1px solid #E4E8EE;border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:14px}
+.ai-seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:3px;background:#EEF1F5;border-radius:11px}
+.ai-seg button{height:36px;border:0;border-radius:8px;background:transparent;font:600 13px Inter,system-ui,sans-serif;color:#64748B;cursor:pointer}
+.ai-seg button.is-on{background:#fff;color:#0B1220;box-shadow:0 1px 2px rgba(11,18,32,.12)}
+.ai-seg button:disabled{opacity:.5;cursor:not-allowed}
+.ai-paid{display:flex;flex-direction:column;gap:6px}
+.ai-moneyfield{display:flex;align-items:center;height:46px;border:1px solid #D5DBE4;border-radius:11px;padding:0 14px;gap:8px;background:#fff}
+.ai-moneyfield:focus-within{border-color:#1D4ED8;box-shadow:0 0 0 3px rgba(29,78,216,.14)}
+.ai-moneyfield.is-invalid{border-color:#F04438}
+.ai-moneyfield>span{font-size:12px;font-weight:600;color:#94A3B8}
+.ai-moneyfield input{flex:1;min-width:0;border:0;outline:none;text-align:right;font:600 17px Inter,system-ui,sans-serif;color:#0B1220;background:transparent}
+.ai-methods{display:flex;flex-direction:column;gap:6px}
+.ai-methods.is-off .ai-pills{opacity:.45}
+.ai-pills{display:flex;flex-wrap:wrap;gap:6px;border-radius:10px}
+.ai-pills button{height:32px;padding:0 12px;border-radius:999px;border:1px solid #D5DBE4;background:#fff;color:#334155;font:600 12.5px Inter,system-ui,sans-serif;cursor:pointer}
+.ai-pills button.is-on{background:#0B1220;border-color:#0B1220;color:#fff}
+.ai-pills button:disabled{cursor:not-allowed}
+.ai-save{height:52px;border:0;border-radius:12px;background:#1D4ED8;color:#fff;font:600 15px Inter,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;width:100%}
+.ai-save:hover:not(:disabled){background:#1E40AF}
+.ai-save:disabled{opacity:.65;cursor:wait}
+.ai-save kbd{font:600 11px ui-monospace,Consolas,monospace;padding:2px 6px;border-radius:5px;background:rgba(255,255,255,.18)}
+.ai-ghost{height:44px;padding:0 18px;border-radius:11px;border:1px solid #D5DBE4;background:#fff;color:#334155;font:600 14px Inter,system-ui,sans-serif;cursor:pointer}
 .ai-spin{animation:ai-spin .8s linear infinite}
 @keyframes ai-spin{to{transform:rotate(360deg)}}
-@container (max-width:520px){
-  .ai-colhead{display:none}
-  .ai-mlabel{display:block}
-  .is-material .ai-grid,.is-product .ai-grid{grid-template-columns:1fr 1fr}
-  .ai-c-name{grid-column:1 / -1}
-  .ai-c-del{grid-column:2;justify-self:end}
-}
-@media (max-width:1260px){
-  .ai-layout{grid-template-columns:minmax(0,1fr)}
-  .ai-side{position:static}
-}
-@media (max-width:640px){
-  .ai-page{padding:20px 16px 48px}
-}
-@media (prefers-reduced-motion:reduce){
-  .ai-spin{animation:none}
-  .ai-input,.ai-tab{transition:none}
-}
+.ai-modal-back{position:fixed;inset:0;background:rgba(11,18,32,.45);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(3px)}
+.ai-modal{background:#fff;padding:28px;border-radius:18px;width:100%;max-width:440px;box-shadow:0 24px 60px rgba(11,18,32,.25);text-align:center;display:flex;flex-direction:column;gap:10px}
+.ai-modal h3{margin:0;font-size:20px}
+.ai-modal p{margin:0 0 8px;font-size:14px;color:#475569;line-height:1.5}
+.ai-modal-tick{width:52px;height:52px;border-radius:50%;background:#ECFDF3;color:#067647;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;align-self:center}
+.ai-modal-actions{display:flex;gap:10px}
+.ai-modal-actions .ai-ghost{flex:1;height:48px}
+.ai-modal-actions .ai-save{flex:2;height:48px}
+.ai-picker{position:relative}
+.ai-picker-list{position:absolute;top:calc(100% + 6px);left:-54px;min-width:420px;z-index:30;background:#fff;border:1px solid #D5DBE4;border-radius:12px;box-shadow:0 16px 40px rgba(11,18,32,.16);max-height:300px;overflow-y:auto}
+.ai-picker-opt{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid #F2F4F7}
+.ai-picker-opt.is-active{background:#EEF3FE}
+.ai-code{display:none}
+.ai-picker-name{flex:1;font-size:14px;font-weight:500;color:#0B1220;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-picker-meta{font-size:12px;color:#64748B;white-space:nowrap}
+.ai-picker-new{padding:10px 14px;font-size:13px;color:#1D4ED8;background:#fff;cursor:pointer}
+.ai-picker-new.is-active{background:#EEF3FE}
+@media (max-width:1440px){.ai-side{width:300px}.ai-page{padding:20px 20px 28px;gap:18px}}
+@media (max-width:1180px){.ai-page{flex-direction:column}.ai-side{width:100%;position:static}}
+@media (max-width:640px){.ai-page{padding:16px}.ai-supbar{flex-wrap:wrap}}
+@media (prefers-reduced-motion:reduce){.ai-spin{animation:none}}
 `;
 
 const AddRawMaterials = () => {
@@ -248,6 +202,10 @@ const AddRawMaterials = () => {
   // What is typed in the supplier box (keyboard-only entry, see afterSupplier).
   const [supplierText, setSupplierText] = useState("");
   const [branches, setBranches] = useState([]);
+  // { sup_id: balance due } — shown beside the chosen supplier.
+  const [balances, setBalances] = useState({});
+  // Select a cell in the sheet (the first mistake, when saving is refused).
+  const [jump, setJump] = useState(null);
 
   const [paymentByType, setPaymentByType] = useState({ ingredient: "", product: "", supply: "" });
   const paymentAmount = paymentByType[itemType];
@@ -260,6 +218,12 @@ const AddRawMaterials = () => {
   const [attempted, setAttempted] = useState(false);
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
   const [isSaving, setIsSaving] = useState(false);
+  // Set at once, unlike isSaving: a second Ctrl+Enter in the same moment must
+  // not save the purchase twice.
+  const savingNow = useRef(false);
+  // The newest handleSubmit, for the sheet: Ctrl+Enter while typing in a cell
+  // saves after that cell is put in, so it needs the save that can see it.
+  const submitRef = useRef(null);
   // A dismissible confirmation after save — optional, never blocks the next
   // line item from being typed the way a required modal would.
   const [receipt, setReceipt] = useState(null);
@@ -297,6 +261,15 @@ const AddRawMaterials = () => {
     setToast({ show: true, message, type });
   };
   const closeToast = useCallback(() => setToast((t) => ({ ...t, show: false })), []);
+
+  const fetchBalances = async () => {
+    try {
+      const res = await fetchWithAuth("/api/suppliers/ledger", { method: "GET" });
+      if (!res.ok) return;
+      const rows = await res.json().catch(() => []);
+      setBalances(Object.fromEntries((Array.isArray(rows) ? rows : []).map((x) => [x.sup_id, Number(x.balance_due) || 0])));
+    } catch { /* the balance is only shown, never needed */ }
+  };
 
   const fetchSuppliers = async () => {
     try {
@@ -380,6 +353,7 @@ const AddRawMaterials = () => {
     fetchProducts();
     fetchMaterials();
     fetchCategories();
+    fetchBalances();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -503,9 +477,7 @@ const AddRawMaterials = () => {
     });
   };
 
-  const focusRowName = (key) => {
-    document.querySelector(`[data-row="${key}"] input[role="combobox"]`)?.focus();
-  };
+  const focusSheet = () => document.getElementById("ai-sheet")?.focus();
 
 
 
@@ -738,12 +710,17 @@ const AddRawMaterials = () => {
   const shown = (obj) => (attempted ? obj : {});
 
   const focusFirstError = () => {
+    // A line with a mistake: select that cell in the sheet.
+    const firstRow = rows.find((r) => validation.rowErrors[r.key]);
+    if (firstRow) {
+      const e = validation.rowErrors[firstRow.key];
+      const col = e.name ? "name" : e.unit ? "unit" : e.qty ? "qty" : e.unit_price ? "price" : "name";
+      setJump({ key: firstRow.key, col, tick: Date.now() });
+      return;
+    }
     setTimeout(() => {
-      const el = document.querySelector(".ai-input.is-invalid, .ps-in.is-invalid");
-      if (el) {
-        el.scrollIntoView({ block: "center", behavior: "smooth" });
-        el.focus?.({ preventScroll: true });
-      }
+      const el = document.querySelector(".ai-input.is-invalid, .ai-moneyfield.is-invalid input");
+      if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); el.focus?.({ preventScroll: true }); }
     }, 0);
   };
 
@@ -761,11 +738,8 @@ const AddRawMaterials = () => {
     () => existingSuppliers.map((s) => ({ key: s.sup_id, code: "", name: s.sup_name || "", meta: s.sup_contact || "", raw: s })),
     [existingSuppliers],
   );
-  const focusFirstLine = () => {
-    const first = rows.find((r) => !isFilled(r, itemType)) || rows[0];
-    // At once, not after a tick: a fast typist's next letter must land here.
-    if (first) focusRowName(first.key);
-  };
+  // At once, not after a tick: a fast typist's next letter must land here.
+  const focusFirstLine = () => focusSheet();
   const afterSupplier = () => {
     const text = supplierText.trim();
     if (!text) return;
@@ -790,12 +764,15 @@ const AddRawMaterials = () => {
       e.preventDefault();
       if (Number(paymentAmount) > 0) document.getElementById("ai-method")?.focus();
       else handleSubmit();
+    } else if (e.key === "l" || e.key === "L") {
+      e.preventDefault();
+      setPaymentAmount("");
     }
   };
   useEffect(() => {
     // Arriving from "Reorder", the item is already on the first line: its quantity is next.
     setTimeout(() => (reorderFrom
-      ? document.querySelector("[data-row] [data-col=\"qty\"]")
+      ? document.getElementById("ai-sheet")
       : document.getElementById("ai-supplier")?.querySelector("input"))?.focus(), 0);
     // Only on arrival.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -803,7 +780,7 @@ const AddRawMaterials = () => {
 
   // --- saving ---
   const handleSubmit = async () => {
-    if (isSaving) return;
+    if (isSaving || savingNow.current) return;
     setAttempted(true);
     if (validation.errorCount > 0) {
       focusFirstError();
@@ -819,6 +796,7 @@ const AddRawMaterials = () => {
       return;
     }
 
+    savingNow.current = true;
     setIsSaving(true);
     const made = { po: null, materials: [], products: [] };
 
@@ -968,7 +946,9 @@ const AddRawMaterials = () => {
       setRowsByType((prev) => ({ ...prev, [itemType]: [blankFor(itemType)] }));
       setPaymentAmount("");
       setAttempted(false);
+      setDraftRestored(false);
       fetchSuppliers();
+      fetchBalances();
       fetchMaterials();
       fetchProducts();
     } catch (err) {
@@ -976,292 +956,242 @@ const AddRawMaterials = () => {
       await undo();
       showToast(`${err.message || "Something went wrong"} — nothing was saved.`, "error");
     } finally {
+      savingNow.current = false;
       setIsSaving(false);
     }
   };
+  submitRef.current = handleSubmit;
 
   // --- render ---
   const tab = TABS[itemType];
-  const TabIcon = tab.icon;
   const rowErrors = shown(validation.rowErrors);
   const supErr = shown(validation.supplierErrors);
   const payErr = validation.payment;
+  const owedBefore = !isNewSupplier && supplier.sup_id ? Number(balances[supplier.sup_id] || 0) : 0;
+  const supChosen = Boolean(supplier.sup_id) || (isNewSupplier && supplier.sup_name.trim());
+  const supInitials = (supplier.sup_name || supplierText || "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  const fullyPaid = totalCents > 0 && paidCents === totalCents;
+  const nothingPaid = totalCents > 0 && paidCents === 0;
+  const methodIndex = Math.max(0, PAY_METHODS.findIndex(([v]) => v === paymentMethod));
 
   return (
-    <div style={{ display: "flex", background: "#F9FAFB", minHeight: "100vh" }}>
+    <div className="ai-shell">
       <style>{STYLES}</style>
       <Sidebar />
       {toast.show && <ToastMessage message={toast.message} type={toast.type} onClose={closeToast} />}
       {receipt && (
-        <div style={{
-          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex",
-          alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)",
-        }}>
-          <div style={{
-            background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px",
-            boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center",
-          }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>{receipt.paidThisTime > 0 ? "✅" : "📦"}</div>
-            <h3 style={{ margin: "0 0 6px 0", color: "#101828" }}>
-              {receipt.paidThisTime > 0 ? "Purchase saved & paid" : "Purchase saved"}
-            </h3>
-            <p style={{ fontSize: "14px", color: "#667085", margin: "0 0 20px" }}>
+        <div className="ai-modal-back">
+          <div className="ai-modal" role="dialog" aria-modal="true" aria-labelledby="ai-modal-title">
+            <div className="ai-modal-tick" aria-hidden="true">✓</div>
+            <h3 id="ai-modal-title">{receipt.paidThisTime > 0 ? "Purchase saved and paid" : "Purchase saved"}</h3>
+            <p>
               Order #{receipt.poId} from {receipt.supplierName} — {money(receipt.orderTotal * 100)}.
               {receipt.paidThisTime > 0
                 ? receipt.paidThisTime >= receipt.orderTotal - 0.005 ? " Paid in full." : ` ${money((receipt.orderTotal - receipt.paidThisTime) * 100)} still owed.`
                 : " Nothing paid yet — on credit."}
             </p>
-            <div style={{ display: "flex", gap: "12px" }}>
-              <button autoFocus onClick={() => {
+            <div className="ai-modal-actions">
+              <button type="button" className="ai-ghost" onClick={() => printSupplierInvoice(receipt)}>Print</button>
+              <button type="button" className="ai-save" autoFocus onClick={() => {
                 setReceipt(null);
                 setTimeout(() => document.getElementById("ai-supplier")?.querySelector("input")?.focus(), 0);
-              }} style={{
-                flex: 1, padding: "10px 16px", borderRadius: 10, border: "1px solid #D0D5DD",
-                background: "#fff", color: "#344054", fontWeight: 600, cursor: "pointer",
-              }}>
-                Done
-              </button>
-              <button onClick={() => printSupplierInvoice(receipt)} style={{
-                flex: 1, padding: "10px 16px", borderRadius: 10, border: "none",
-                background: "#155EEF", color: "#fff", fontWeight: 600, cursor: "pointer",
-              }}>
-                🖨️ Print
-              </button>
+              }}>Done · Enter</button>
             </div>
           </div>
         </div>
       )}
-      <div style={{ flex: 1, minWidth: 0, marginLeft: "var(--sidebar-w, 240px)" }}>
+      <div className="ai-body">
         <Header title="Inventory Items" role="Branch Admin" />
         <main
           className="ai-page"
           onKeyDown={(e) => {
+            // The sheet handles its own Ctrl+Enter and marks it handled.
+            if (e.defaultPrevented) return;
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
               e.preventDefault();
               handleSubmit();
             }
           }}
         >
-          <div className="ai-top">
-            <div>
-              <h1>Add Inventory Items</h1>
-              <p className="ai-sub">Record what you bought from a supplier. Stock goes up when you save.</p>
+          <div className="ai-main">
+            <div className="ai-top">
+              <div>
+                <h1>Add inventory items</h1>
+                <p className="ai-sub">{tab.blurb}</p>
+              </div>
+              <div className="ai-tabs" role="tablist" aria-label="What are you adding?">
+                {Object.entries(TABS).map(([type, t]) => {
+                  const n = rowsByType[type].filter((r) => isFilled(r, type)).length;
+                  return (
+                    <button key={type} type="button" role="tab" aria-selected={itemType === type ? "true" : "false"} className="ai-tab" onClick={() => switchTab(type)}>
+                      {t.label}
+                      {n > 0 && <span className="ai-count" aria-label={`${n} unsaved`}>{n}</span>}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <div className="ai-tabs" role="tablist" aria-label="What are you adding?">
-              {Object.entries(TABS).map(([type, t]) => {
-                const Icon = t.icon;
-                return (
-                  <button
-                    key={type}
-                    type="button"
-                    role="tab"
-                    aria-selected={itemType === type ? "true" : "false"}
-                    className="ai-tab"
-                    onClick={() => switchTab(type)}
-                  >
-                    <Icon size={16} aria-hidden="true" />
-                    {t.label}
-                    {dirtyTabs[type] && itemType !== type && (
-                      <span className="ai-dot" title="Has items you haven't saved" aria-label="has unsaved items" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+
+            {draftRestored && (
+              <div className="ai-notice" role="status">
+                <span>We kept the purchase you were typing.</span>
+                <button type="button" className="ai-link" onClick={discardDraft}>Start over</button>
+              </div>
+            )}
+
+            <section className={`ai-supbar${supErr.sup_id || supErr.sup_name ? " is-invalid" : ""}`} aria-label="Supplier">
+              <div className={`ai-supchip${supChosen ? " is-on" : ""}`} aria-hidden="true">{isNewSupplier ? "+" : (supChosen ? supInitials : "?")}</div>
+              {!isNewSupplier ? (
+                <div className="ai-supfield" id="ai-supplier">
+                  <span className="ai-label-sm">Supplier</span>
+                  <ItemPicker
+                    value={supplierText}
+                    items={supplierItems}
+                    placeholder="Type to find a supplier, or a new name"
+                    ariaLabel="Supplier"
+                    invalid={Boolean(supErr.sup_id)}
+                    newLabel="supplier"
+                    onChange={(text) => {
+                      setSupplierText(text);
+                      const known = existingSuppliers.find((s) => lower(s.sup_name) === lower(text.trim()));
+                      setSupplier(known || { sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
+                    }}
+                    onPick={(item) => { chooseSupplier(String(item.key)); focusFirstLine(); }}
+                    onEnter={afterSupplier}
+                  />
+                </div>
+              ) : (
+                <div className="ai-newsup">
+                  {[
+                    ["sup_name", "New supplier", "text", "e.g. Fresh Farm Traders", "ai-w-name"],
+                    ["sup_contact", "Phone (optional)", "tel", "0771234567", ""],
+                    ["sup_email", "Email (optional)", "email", "orders@…", ""],
+                    ["sup_address", "Address (optional)", "text", "Kandy", ""],
+                  ].map(([field, label, type, placeholder, cls]) => (
+                    <label key={field} className={`ai-newsup-f ${cls}`} htmlFor={`sup-${field}`}>
+                      <span className="ai-label-sm">{label}</span>
+                      <input
+                        id={`sup-${field}`}
+                        className={`ai-input ai-input-sm${supErr[field] ? " is-invalid" : ""}`}
+                        type={type}
+                        placeholder={placeholder}
+                        value={supplier[field] || ""}
+                        onChange={(e) => setSupplier({ ...supplier, [field]: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); focusFirstLine(); } }}
+                        title={supErr[field] || undefined}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+              {!isNewSupplier && supplier.sup_id && (
+                <div className="ai-owedbefore">
+                  <span>Owed before this</span>
+                  <b className={owedBefore > 0 ? "is-owed" : ""}>{owedBefore > 0 ? money(cents(owedBefore)) : "Nothing"}</b>
+                </div>
+              )}
+              <button
+                type="button"
+                className="ai-link ai-suplink"
+                onClick={() => {
+                  setIsNewSupplier((n) => !n);
+                  setSupplier({ sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
+                  setSupplierText("");
+                }}
+              >
+                {isNewSupplier ? "Choose existing" : "+ New supplier"}
+              </button>
+            </section>
+            {(supErr.sup_id || supErr.sup_name || supErr.sup_contact || supErr.sup_email || supErr.sup_address) && (
+              <span className="ai-err" role="alert">{supErr.sup_id || supErr.sup_name || supErr.sup_contact || supErr.sup_email || supErr.sup_address}</span>
+            )}
+
+            {attempted && validation.general && <div className="ai-banner" role="alert">{validation.general}</div>}
+
+            <ExcelSheet
+              kind={itemType}
+              rows={rows}
+              items={pickerItems}
+              units={VALID_UNITS}
+              categories={categories}
+              errors={rowErrors}
+              matchFor={matchFor}
+              onNameChange={(key, text) => { const r = rows.find((x) => x.key === key); if (r) changeName(r, text); }}
+              onPick={(key, item) => { const r = rows.find((x) => x.key === key); if (r) pickItem(r, item); }}
+              onPatch={patchRow}
+              onRemove={removeRow}
+              onPaste={pasteRows}
+              onRestore={(snapshot) => updateRows(() => snapshot)}
+              onFinish={focusPaid}
+              onSave={() => submitRef.current?.()}
+              jumpTo={jump}
+              startCol={reorderFrom ? (itemType === "product" ? 1 : 2) : 0}
+            />
           </div>
 
-          <div className="ai-layout">
-            <div className="ai-main">
-            {/* Supplier first: typed once, above the lines */}
-              <section className="ai-card">
-                <div className="ai-card-head">
-                  <h2 className="ai-card-title"><Truck size={18} aria-hidden="true" />Supplier</h2>
-                  <button
-                    type="button"
-                    className="ai-link"
-                    onClick={() => {
-                      setIsNewSupplier((n) => !n);
-                      setSupplier({ sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
-                    }}
-                  >
-                    {isNewSupplier ? "Choose existing" : "+ New supplier"}
-                  </button>
-                </div>
-
-                {!isNewSupplier ? (
-                  <div>
-                    <div id="ai-supplier">
-                      <ItemPicker
-                        value={supplierText}
-                        items={supplierItems}
-                        placeholder="Type the supplier's name"
-                        ariaLabel="Supplier"
-                        invalid={Boolean(supErr.sup_id)}
-                        newLabel="supplier"
-                        onChange={(text) => {
-                          setSupplierText(text);
-                          const known = existingSuppliers.find((s) => lower(s.sup_name) === lower(text.trim()));
-                          setSupplier(known || { sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
-                        }}
-                        onPick={(item) => { chooseSupplier(String(item.key)); focusFirstLine(); }}
-                        onEnter={afterSupplier}
-                      />
-                    </div>
-                    {supErr.sup_id && <span className="ai-err" role="alert">{supErr.sup_id}</span>}
-                  </div>
-                ) : (
-                  <div>
-                    {[
-                      ["sup_name", "Supplier name *", "text", "e.g. Fresh Farm Traders"],
-                      ["sup_contact", "Contact number (optional)", "tel", "e.g. 0771234567"],
-                      ["sup_email", "Email (optional)", "email", ""],
-                      ["sup_address", "Address (optional)", "text", ""],
-                    ].map(([field, label, type, placeholder]) => (
-                      <div className="ai-field" key={field}>
-                        <label className="ai-label" htmlFor={`sup-${field}`}>{label}</label>
-                        <input
-                          id={`sup-${field}`}
-                          className={`ai-input${supErr[field] ? " is-invalid" : ""}`}
-                          type={type}
-                          placeholder={placeholder}
-                          value={supplier[field] || ""}
-                          onChange={(e) => setSupplier({ ...supplier, [field]: e.target.value })}
-                        />
-                        {supErr[field] && <span className="ai-err" role="alert">{supErr[field]}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-            {/* Items */}
-            <section className="ai-card ai-items" role="tabpanel" aria-label={tab.label}>
-              <div className="ai-card-head">
-                <h2 className="ai-card-title"><TabIcon size={18} aria-hidden="true" />{tab.title}</h2>
-              </div>
-              <p className="ai-card-blurb">{tab.blurb}</p>
-              <div className="ai-keys" aria-label="Keyboard">
-                <span><kbd>Tab</kbd>/<kbd>Enter</kbd> next cell</span>
-                <span><kbd>↑</kbd><kbd>↓</kbd> line above / below</span>
-                <span><kbd>Ctrl</kbd>+<kbd>V</kbd> paste rows from Excel</span>
-                <span><kbd>Ctrl</kbd>+<kbd>Del</kbd> remove line</span>
-                <span><kbd>Enter</kbd> on an empty line → payment</span>
-                <span><kbd>F</kbd> pay in full</span>
-                <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> save</span>
-              </div>
-
-              {draftRestored && (
-                <div className="ai-notice" role="status">
-                  <span>We restored the purchase you were working on.</span>
-                  <button type="button" className="ai-link" onClick={discardDraft}>Start over</button>
-                </div>
-              )}
-
-              {attempted && validation.errorCount > 0 && (
-                <div className="ai-banner" role="alert">
-                  <CircleAlert size={16} aria-hidden="true" />
-                  {validation.general
-                    ? validation.general
-                    : `Please fix the ${validation.errorCount === 1 ? "highlighted field" : `${validation.errorCount} highlighted fields`} to save.`}
-                </div>
-              )}
-
-
-              <PurchaseSheet
-                kind={itemType}
-                rows={rows}
-                items={pickerItems}
-                units={VALID_UNITS}
-                categories={categories}
-                errors={rowErrors}
-                matchFor={matchFor}
-                onNameChange={(key, text) => { const r = rows.find((x) => x.key === key); if (r) changeName(r, text); }}
-                onPick={(key, item) => { const r = rows.find((x) => x.key === key); if (r) pickItem(r, item); }}
-                onPatch={patchRow}
-                onRemove={removeRow}
-                onPaste={pasteRows}
-                onFinish={focusPaid}
-              />
-
-              {filledCount > 5 && (
-                <div className="ai-stickybar">
-                  <span><b>{filledCount}</b> items · <b>{money(totalCents)}</b></span>
-                  <button type="button" className="ai-primary ai-primary-sm" onClick={handleSubmit} disabled={isSaving}>
-                    {isSaving ? "Saving…" : "Save purchase"}
-                  </button>
-                </div>
-              )}
-            </section>
+          <aside className="ai-side" aria-label="Order summary and payment">
+            <div className="ai-totalcard">
+              <div className="ai-totalcard-top"><span>This purchase</span><span>{filledCount} item{filledCount === 1 ? "" : "s"}</span></div>
+              <div className="ai-totalcard-big">{money(totalCents)}</div>
+              <div className="ai-totalcard-line"><span>Paid now</span><b>{money(Math.min(paidCents, totalCents))}</b></div>
+              <div className="ai-totalcard-line"><span>Still owed to supplier</span><b className={owedCents > 0 ? "is-owed" : "is-clear"}>{money(owedCents)}</b></div>
             </div>
 
-            {/* Summary and payment */}
-            <aside className="ai-side">
+            <div className="ai-paycard">
+              <div className="ai-seg" role="group" aria-label="Payment">
+                <button type="button" className={fullyPaid ? "is-on" : ""} disabled={totalCents === 0} onClick={() => setPaymentAmount((totalCents / 100).toFixed(2))}>Pay in full</button>
+                <button type="button" className={nothingPaid ? "is-on" : ""} onClick={() => setPaymentAmount("")}>Pay later</button>
+              </div>
 
-              <section className="ai-card">
-                <div className="ai-card-head">
-                  <h2 className="ai-card-title"><Wallet size={18} aria-hidden="true" />Order summary</h2>
-                </div>
-
-                <div className="ai-sum-row"><span>Items</span><span>{filledCount}</span></div>
-                <div className="ai-sum-row ai-sum-total"><span>Total</span><span>{money(totalCents)}</span></div>
-
-                <div className="ai-field" style={{ marginTop: 16 }}>
-                  <label className="ai-label" htmlFor="ai-paid">Paid now (LKR)</label>
+              <label className="ai-paid" htmlFor="ai-paid">
+                <span className="ai-label-sm">Paid now</span>
+                <span className={`ai-moneyfield${payErr ? " is-invalid" : ""}`}>
+                  <span>LKR</span>
                   <input
                     id="ai-paid"
-                    className={`ai-input${payErr ? " is-invalid" : ""}`}
-                    type="number"
+                    type="text"
                     inputMode="decimal"
-                    min="0"
-                    step="0.01"
+                    autoComplete="off"
                     placeholder="0.00"
                     value={paymentAmount}
-                    onWheel={(e) => e.currentTarget.blur()}
-                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    onChange={(e) => setPaymentAmount(e.target.value.replace(/,/g, "").replace(/[^0-9.]/g, ""))}
                     onKeyDown={onPaidKey}
                     onFocus={(e) => e.currentTarget.select()}
                   />
-                  {payErr && <span className="ai-err" role="alert">{payErr}</span>}
-                  <div className="ai-chips">
-                    <button type="button" className="ai-chip" disabled={totalCents === 0} onClick={() => setPaymentAmount((totalCents / 100).toFixed(2))}>
-                      Pay in full
-                    </button>
-                    <button type="button" className="ai-chip" onClick={() => setPaymentAmount("")}>
-                      Pay later
-                    </button>
-                  </div>
-                </div>
+                </span>
+              </label>
+              {payErr && <span className="ai-err" role="alert">{payErr}</span>}
 
-                <div className="ai-field">
-                  <label className="ai-label" htmlFor="ai-method">Payment method</label>
-                  <select
-                    id="ai-method"
-                    className="ai-input"
-                    value={paymentMethod}
-                    disabled={paidCents === 0}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.ctrlKey) { e.preventDefault(); handleSubmit(); } }}
-                  >
-                    {PAY_METHODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                  </select>
+              <div className={`ai-methods${paidCents === 0 ? " is-off" : ""}`}>
+                <span className="ai-label-sm" id="ai-method-label">Payment method</span>
+                <div
+                  id="ai-method"
+                  role="radiogroup"
+                  aria-labelledby="ai-method-label"
+                  aria-disabled={paidCents === 0}
+                  tabIndex={paidCents === 0 ? -1 : 0}
+                  className="ai-pills"
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                      e.preventDefault();
+                      const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+                      setPaymentMethod(PAY_METHODS[(methodIndex + d + PAY_METHODS.length) % PAY_METHODS.length][0]);
+                    } else if (e.key === "Enter" && !e.ctrlKey) { e.preventDefault(); handleSubmit(); }
+                  }}
+                >
+                  {PAY_METHODS.map(([v, l]) => (
+                    <button key={v} type="button" role="radio" aria-checked={paymentMethod === v} tabIndex={-1} disabled={paidCents === 0} className={paymentMethod === v ? "is-on" : ""} onClick={() => setPaymentMethod(v)}>{l}</button>
+                  ))}
                 </div>
+                {paidCents === 0 && <span className="ai-help">Nothing paid now, so there's no method to choose.</span>}
+              </div>
 
-                <div className="ai-sum-row">
-                  <span>Still owed to supplier</span>
-                  <span className={owedCents > 0 ? "ai-owed" : undefined}>{money(owedCents)}</span>
-                </div>
-                <p className="ai-help">Anything unpaid is added to the supplier's balance. You can pay it later from the Suppliers page.</p>
-
-                <button type="button" className="ai-primary" onClick={handleSubmit} disabled={isSaving}>
-                  {isSaving ? (
-                    <><LoaderCircle size={18} className="ai-spin" aria-hidden="true" /> Saving…</>
-                  ) : (
-                    <>Save purchase{totalCents > 0 ? ` · ${money(totalCents)}` : ""}</>
-                  )}
-                </button>
-              </section>
-            </aside>
-          </div>
+              <button type="button" className="ai-save" onClick={handleSubmit} disabled={isSaving}>
+                {isSaving ? <><LoaderCircle size={18} className="ai-spin" aria-hidden="true" /> Saving…</> : <>Save purchase <kbd>Ctrl ↵</kbd></>}
+              </button>
+              <p className="ai-help ai-center">Anything unpaid goes on the supplier's balance — pay it later from Suppliers.</p>
+            </div>
+          </aside>
         </main>
       </div>
     </div>
