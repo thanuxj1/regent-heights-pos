@@ -83,8 +83,12 @@ export async function getRawMaterials(req, res, next) {
     const { role_id, com_id, b_id } = req.user;
     const branchFilter = req.query?.b_id ?? req.query?.B_id;
 
+    // last_price: what it cost on its latest purchase, so the purchase page can
+    // offer it instead of having it typed again.
     let query = `SELECT rm_id, rm_name, unit, stock_qty, record_level, item_category, yield_unit, yield_amount,
-              CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock
+              CASE WHEN stock_qty <= record_level THEN true ELSE false END AS low_stock,
+              (SELECT pi.unit_price FROM purchase_item pi WHERE pi.rm_id = "Raw_Material".rm_id
+                ORDER BY pi.pi_id DESC LIMIT 1) AS last_price
        FROM "Raw_Material"`;
 
     const conditions = [];

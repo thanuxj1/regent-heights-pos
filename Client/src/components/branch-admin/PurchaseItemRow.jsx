@@ -19,6 +19,8 @@ function Field({ label, error, className = "", children }) {
 }
 
 const noWheel = (e) => e.currentTarget.blur();
+// A number already in the box (the last price, say) is replaced by typing, not added to.
+const selectAll = (e) => e.currentTarget.select();
 
 /**
  * One line of a purchase. Ingredients, hotel supplies and resale products all use
@@ -43,6 +45,7 @@ export default function PurchaseItemRow({
   onCommit,
   onRemove,
   onNext,
+  onFinish,
 }) {
   const isProduct = kind === "product";
   const isIngredient = kind === "ingredient";
@@ -54,7 +57,12 @@ export default function PurchaseItemRow({
   // Enter in the price goes to the next line.
   const focusIn = (selector) => rowRef.current?.querySelector(selector)?.focus();
   const afterName = () => {
-    const unitBox = rowRef.current?.querySelector(".ai-c-unit select");
+    // Enter on a line with nothing typed: the list is done, go to payment.
+    if (!(isProduct ? row.pro_name : row.rm_name).trim()) {
+      onFinish?.();
+      return;
+    }
+    const unitBox = rowRef.current?.querySelector(".ai-c-unit input");
     if (unitBox && !unitBox.disabled) unitBox.focus();
     else focusIn(".ai-c-qty input");
   };
@@ -76,7 +84,6 @@ export default function PurchaseItemRow({
   const lineTotal = Math.round(qty * num(row.unit_price) * 100) / 100;
 
   const unit = match ? match.unit : row.unit;
-  const unitOptions = unit && !units.includes(unit) ? [unit, ...units] : units;
 
   const onEnterTo = (next) => (e) => {
     if (e.key !== "Enter") return;
@@ -210,17 +217,21 @@ export default function PurchaseItemRow({
 
         {!isProduct && (
           <Field label="Unit" error={errors.unit} className="ai-c-unit">
-            <select
-              className={`ai-input${errors.unit ? " is-invalid" : ""}`}
-              aria-label="Unit"
-              value={unit}
+            {/* Typed, not a dropdown: "k" + Enter is kg, and on to the quantity. */}
+            <ItemPicker
+              value={unit || ""}
+              // The real units only — not whatever has been typed so far.
+              items={units.map((u) => ({ key: u, code: "", name: u, meta: "" }))}
+              placeholder="kg, pcs…"
+              ariaLabel="Unit"
+              invalid={Boolean(errors.unit)}
+              allowNew={false}
               disabled={Boolean(match)}
               title={match ? "This item already has a unit" : undefined}
-              onChange={(e) => onPatch({ unit: e.target.value })}
-            >
-              <option value="" disabled>Select</option>
-              {unitOptions.map((u) => <option key={u} value={u}>{u}</option>)}
-            </select>
+              onChange={(text) => onPatch({ unit: text.trim().toLowerCase() })}
+              onPick={(item) => { onPatch({ unit: item.name }); setTimeout(() => focusIn(".ai-c-qty input"), 0); }}
+              onEnter={() => focusIn(".ai-c-qty input")}
+            />
           </Field>
         )}
 
@@ -236,6 +247,7 @@ export default function PurchaseItemRow({
             value={row.qty}
             onWheel={noWheel}
             onKeyDown={onEnterTo(".ai-c-price input")}
+            onFocus={selectAll}
             onChange={(e) => onPatch({ qty: e.target.value })}
           />
         </Field>
@@ -252,6 +264,7 @@ export default function PurchaseItemRow({
             value={row.unit_price}
             onWheel={noWheel}
             onKeyDown={onEnterTo(onNext)}
+            onFocus={selectAll}
             onChange={(e) => onPatch({ unit_price: e.target.value })}
           />
         </Field>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useLocation, useNavigate } from "react-router-dom";
 import { Carrot, Package, SprayCan, Plus, Truck, Wallet, CircleAlert, LoaderCircle } from "lucide-react";
 import PurchaseItemRow from "../../components/branch-admin/PurchaseItemRow";
+import ItemPicker from "../../components/branch-admin/ItemPicker";
 import Sidebar from "../../components/branch-admin/Sidebar";
 import Header from "../../components/branch-admin/Header";
 import ToastMessage from "../../components/branch-admin/ToastMessage";
@@ -84,6 +85,9 @@ const STYLES = `
 .ai-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
 .ai-card-title{display:flex;align-items:center;gap:10px;margin:0;font-size:16px;font-weight:600;color:#001F3F}
 .ai-card-title svg{color:#1565C0;flex:none}
+.ai-keys{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 12px;font-size:12px;color:#667085}
+.ai-keys kbd{display:inline-block;min-width:18px;padding:1px 5px;margin:0 2px;border:1px solid #D0D5DD;border-bottom-width:2px;border-radius:5px;background:#F9FAFB;font:600 11px/1.4 inherit;color:#344054;text-align:center}
+.ai-picker-new.is-active{background:#EFF4FF}
 .ai-card-blurb{margin:0 0 14px;color:#667085;font-size:13px}
 .ai-side{display:flex;flex-direction:column;gap:20px;position:sticky;top:16px}
 .ai-colhead,.ai-grid{display:grid;gap:8px;align-items:start}
@@ -205,6 +209,8 @@ const AddRawMaterials = () => {
   const [isNewSupplier, setIsNewSupplier] = useState(false);
   const [supplier, setSupplier] = useState({ sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
   const [existingSuppliers, setExistingSuppliers] = useState([]);
+  // What is typed in the supplier box (keyboard-only entry, see afterSupplier).
+  const [supplierText, setSupplierText] = useState("");
   const [branches, setBranches] = useState([]);
 
   const [paymentByType, setPaymentByType] = useState({ ingredient: "", product: "", supply: "" });
@@ -401,7 +407,12 @@ const AddRawMaterials = () => {
         ...(row.unit_price === "" && cost > 0 ? { unit_price: String(cost) } : {}),
       });
     } else {
-      patchRow(row.key, { rm_name: item.name, unit: item.raw.unit || row.unit, yield_unit: "", yield_amount: "" });
+      // What it cost last time, ready to keep or type over.
+      const last = Number(item.raw.last_price);
+      patchRow(row.key, {
+        rm_name: item.name, unit: item.raw.unit || row.unit, yield_unit: "", yield_amount: "",
+        ...(row.unit_price === "" && last > 0 ? { unit_price: String(last) } : {}),
+      });
     }
   };
 
@@ -482,7 +493,7 @@ const AddRawMaterials = () => {
   useEffect(() => {
     if (pendingSupplier.current == null || existingSuppliers.length === 0) return;
     const found = existingSuppliers.find((x) => String(x.sup_id) === String(pendingSupplier.current));
-    if (found) setSupplier(found);
+    if (found) { setSupplier(found); setSupplierText(found.sup_name || ""); }
     pendingSupplier.current = null;
   }, [existingSuppliers]);
 
@@ -512,6 +523,7 @@ const AddRawMaterials = () => {
   const discardDraft = () => {
     setRowsByType({ ingredient: [blankMaterial()], product: [blankProduct()], supply: [blankMaterial()] });
     setSupplier({ sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
+    setSupplierText("");
     setPaymentByType({ ingredient: "", product: "", supply: "" });
     setAttempted(false);
     setDraftRestored(false);
@@ -594,6 +606,7 @@ const AddRawMaterials = () => {
       if (itemType !== "product") {
         const match = matchFor(row);
         if (!(match ? match.unit : row.unit)) e.unit = "Choose a unit";
+        else if (!match && !VALID_UNITS.includes(row.unit)) e.unit = `Use one of: ${VALID_UNITS.join(", ")}`;
         if (!match) {
           if (row.record_level !== "" && (!isNumber(row.record_level) || Number(row.record_level) < 0 || Number(row.record_level) > MAX_MIN_STOCK)) {
             e.record_level = "Enter 0 or more";
@@ -674,7 +687,53 @@ const AddRawMaterials = () => {
   const chooseSupplier = (idText) => {
     const found = existingSuppliers.find((s) => String(s.sup_id) === idText);
     setSupplier(found || { sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
+    setSupplierText(found ? found.sup_name : "");
   };
+
+  // ── Keyboard only ──
+  // The workers here use the keyboard alone, so the whole purchase is typed:
+  // supplier, Enter, each line (Enter through its boxes), Enter on an empty
+  // line, the amount paid, Enter to save.
+  const supplierItems = useMemo(
+    () => existingSuppliers.map((s) => ({ key: s.sup_id, code: "", name: s.sup_name || "", meta: s.sup_contact || "", raw: s })),
+    [existingSuppliers],
+  );
+  const focusFirstLine = () => {
+    const first = rows.find((r) => !isFilled(r, itemType)) || rows[0];
+    // At once, not after a tick: a fast typist's next letter must land here.
+    if (first) focusRowName(first.key);
+  };
+  const afterSupplier = () => {
+    const text = supplierText.trim();
+    if (!text) return;
+    const known = existingSuppliers.find((s) => lower(s.sup_name) === lower(text));
+    if (known) chooseSupplier(String(known.sup_id));
+    else {
+      // A supplier not on the list yet: the new-supplier form, name filled in.
+      setIsNewSupplier(true);
+      setSupplier({ sup_name: text, sup_email: "", sup_contact: "", sup_address: "" });
+    }
+    focusFirstLine();
+  };
+  const focusPaid = () => {
+    if (filledCount === 0) return;
+    document.getElementById("ai-paid")?.focus();
+  };
+  const onPaidKey = (e) => {
+    if (e.key === "f" || e.key === "F") {
+      e.preventDefault();
+      if (totalCents > 0) setPaymentAmount((totalCents / 100).toFixed(2));
+    } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      if (Number(paymentAmount) > 0) document.getElementById("ai-method")?.focus();
+      else handleSubmit();
+    }
+  };
+  useEffect(() => {
+    if (!reorderFrom) setTimeout(() => document.getElementById("ai-supplier")?.querySelector("input")?.focus(), 0);
+    // Only on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- saving ---
   const handleSubmit = async () => {
@@ -722,6 +781,7 @@ const AddRawMaterials = () => {
         const savedSupplier = { ...validation.cleanSupplier, ...supRes.body };
         setExistingSuppliers((list) => [...list, savedSupplier]);
         setSupplier(savedSupplier);
+        setSupplierText(savedSupplier.sup_name || "");
         setIsNewSupplier(false);
       }
 
@@ -889,7 +949,10 @@ const AddRawMaterials = () => {
                 : " Nothing paid yet — on credit."}
             </p>
             <div style={{ display: "flex", gap: "12px" }}>
-              <button onClick={() => setReceipt(null)} style={{
+              <button autoFocus onClick={() => {
+                setReceipt(null);
+                setTimeout(() => document.getElementById("ai-supplier")?.querySelector("input")?.focus(), 0);
+              }} style={{
                 flex: 1, padding: "10px 16px", borderRadius: 10, border: "1px solid #D0D5DD",
                 background: "#fff", color: "#344054", fontWeight: 600, cursor: "pointer",
               }}>
@@ -951,6 +1014,13 @@ const AddRawMaterials = () => {
                 <h2 className="ai-card-title"><TabIcon size={18} aria-hidden="true" />{tab.title}</h2>
               </div>
               <p className="ai-card-blurb">{tab.blurb}</p>
+              <div className="ai-keys" aria-label="Keyboard">
+                <span><kbd>Enter</kbd> next box</span>
+                <span><kbd>↑</kbd><kbd>↓</kbd> choose</span>
+                <span><kbd>Enter</kbd> on an empty line → payment</span>
+                <span><kbd>F</kbd> pay in full</span>
+                <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> save</span>
+              </div>
 
               {draftRestored && (
                 <div className="ai-notice" role="status">
@@ -994,6 +1064,7 @@ const AddRawMaterials = () => {
                   onCommit={(text) => commitName(row, text)}
                   onRemove={() => removeRow(row.key)}
                   onNext={() => goNext(row.key)}
+                  onFinish={focusPaid}
                 />
               ))}
 
@@ -1030,15 +1101,23 @@ const AddRawMaterials = () => {
 
                 {!isNewSupplier ? (
                   <div>
-                    <select
-                      className={`ai-input${supErr.sup_id ? " is-invalid" : ""}`}
-                      aria-label="Supplier"
-                      value={supplier.sup_id || ""}
-                      onChange={(e) => chooseSupplier(e.target.value)}
-                    >
-                      <option value="">Choose a supplier…</option>
-                      {existingSuppliers.map((s) => <option key={s.sup_id} value={s.sup_id}>{s.sup_name}</option>)}
-                    </select>
+                    <div id="ai-supplier">
+                      <ItemPicker
+                        value={supplierText}
+                        items={supplierItems}
+                        placeholder="Type the supplier's name"
+                        ariaLabel="Supplier"
+                        invalid={Boolean(supErr.sup_id)}
+                        newLabel="supplier"
+                        onChange={(text) => {
+                          setSupplierText(text);
+                          const known = existingSuppliers.find((s) => lower(s.sup_name) === lower(text.trim()));
+                          setSupplier(known || { sup_name: "", sup_email: "", sup_contact: "", sup_address: "" });
+                        }}
+                        onPick={(item) => { chooseSupplier(String(item.key)); focusFirstLine(); }}
+                        onEnter={afterSupplier}
+                      />
+                    </div>
                     {supErr.sup_id && <span className="ai-err" role="alert">{supErr.sup_id}</span>}
                   </div>
                 ) : (
@@ -1087,6 +1166,8 @@ const AddRawMaterials = () => {
                     value={paymentAmount}
                     onWheel={(e) => e.currentTarget.blur()}
                     onChange={(e) => setPaymentAmount(e.target.value)}
+                    onKeyDown={onPaidKey}
+                    onFocus={(e) => e.currentTarget.select()}
                   />
                   {payErr && <span className="ai-err" role="alert">{payErr}</span>}
                   <div className="ai-chips">
@@ -1107,6 +1188,7 @@ const AddRawMaterials = () => {
                     value={paymentMethod}
                     disabled={paidCents === 0}
                     onChange={(e) => setPaymentMethod(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.ctrlKey) { e.preventDefault(); handleSubmit(); } }}
                   >
                     {PAY_METHODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
@@ -1117,7 +1199,6 @@ const AddRawMaterials = () => {
                   <span className={owedCents > 0 ? "ai-owed" : undefined}>{money(owedCents)}</span>
                 </div>
                 <p className="ai-help">Anything unpaid is added to the supplier's balance. You can pay it later from the Suppliers page.</p>
-                <p className="ai-help">Tip: press Enter to move through the fields, and Ctrl+Enter to save.</p>
 
                 <button type="button" className="ai-primary" onClick={handleSubmit} disabled={isSaving}>
                   {isSaving ? (
