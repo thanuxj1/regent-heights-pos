@@ -230,6 +230,7 @@ export default function Reports() {
       line("  of which cash on delivery received", money(d.restaurant.cod_received ?? 0), `${d.restaurant.cod_orders ?? 0} delivery order(s) — counted on the day the rider handed the cash over`),
       line("  of which credit sales paid", money(d.restaurant.credit_received ?? 0), `${d.restaurant.credit_orders ?? 0} bill(s) — counted on the day the customer paid`),
       line("  of which delivery charges", money(d.restaurant.delivery_charges ?? 0), "Already included in revenue"),
+      line("  of which packing charges", money(d.restaurant.packing_charges ?? 0), "Takeaway and delivery — already included in revenue"),
       line("  less refunds handed back", money(-(d.restaurant.refunds ?? 0)), `${d.restaurant.refund_count ?? 0} refund(s) — already taken off revenue, on the day each was given`),
       line("  Food and drink bought", money(d.restaurant.costs.food_and_drink_bought), "Ingredients and resale products, as paid to suppliers"),
       line("  Food wasted", money(d.restaurant.costs.food_wasted)),

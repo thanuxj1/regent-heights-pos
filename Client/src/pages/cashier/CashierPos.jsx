@@ -184,6 +184,8 @@ const CashierPos = () => {
   // same as "None" (0): a delivery cannot be sent until someone has said which,
   // so a charge is never lost to a cashier simply forgetting the row.
   const [deliveryCharge, setDeliveryCharge] = useState(null);
+  // Boxes and bags on a takeaway or delivery, typed in. "" is none.
+  const [packingCharge, setPackingCharge] = useState("");
   // Fetched, not hardcoded — a manager can add a partner and it's usable
   // here immediately. See Client/src/pages/branch-admin/DeliveryCod.jsx.
   const [deliveryPartners, setDeliveryPartners] = useState([]);
@@ -363,8 +365,9 @@ const CashierPos = () => {
       }));
       const subtotal = items.reduce((s, i) => s + i.total, 0);
       const charge = Number(ord.delivery_charge || 0);
+      const packing = Number(ord.packing_charge || 0);
       const total = Number(ord["or_totalCostWtax"] ?? ord.or_totalcost ?? 0);
-      const tax = Math.max(0, total - Number(ord.or_totalcost || 0) - charge);
+      const tax = Math.max(0, total - Number(ord.or_totalcost || 0) - charge - packing);
       printReceipt({
         orderId: o.or_id,
         invoiceNo: o.or_id,
@@ -377,6 +380,7 @@ const CashierPos = () => {
         serviceFee: Number(ord.service_fee || 0),
         tax,
         deliveryCharge: charge,
+        packingCharge: packing,
         total,
         paymentMethod: paidByLabel(ord.payment_method),
         customer: ord.customer_name ? { name: ord.customer_name, phone: ord.customer_phone } : null,
@@ -685,7 +689,10 @@ const CashierPos = () => {
   // the order's total and what every report and the drawer then count.
   const isDeliveryOrder = orderType === "delivery";
   const deliveryChargeAmount = isDeliveryOrder ? Number(deliveryCharge || 0) : 0;
-  const total = taxableBase + tax + deliveryChargeAmount;
+  const isPackable = orderType === "takeaway" || orderType === "delivery";
+  // Like the delivery charge: on top of the food and not taxed.
+  const packingChargeAmount = isPackable ? Math.max(0, Number(packingCharge) || 0) : 0;
+  const total = taxableBase + tax + deliveryChargeAmount + packingChargeAmount;
   // A delivery with no charge chosen can't be sent — see the guards in
   // handleSendToKitchen and handleCheckout.
   const deliveryChargeMissing = isDeliveryOrder && deliveryCharge === null;
@@ -864,6 +871,7 @@ const CashierPos = () => {
           discount_pct: Number(discountPct || 0),
           service_fee: Number(serviceFee || 0),
           delivery_charge: deliveryChargeAmount,
+          packing_charge: packingChargeAmount,
           kitchen_note: kitchenNoteText(),
           ...(kotPaymentMethod ? { payment_method: kotPaymentMethod, ...creditFields(kotPaymentMethod) } : {}),
           ...customerFields(),
@@ -894,6 +902,7 @@ const CashierPos = () => {
       setEditingOrderTableId(null);
       // The next delivery asks again; a charge is never carried over silently.
       setDeliveryCharge(null);
+      setPackingCharge("");
       setCreditName("");
       setDeliveryCustomer("");
       setDeliveryCustomerPhone("");
@@ -1165,6 +1174,7 @@ const CashierPos = () => {
           discount_pct: Number(discountPct || 0),
           service_fee: Number(serviceFee || 0),
           delivery_charge: deliveryChargeAmount,
+          packing_charge: packingChargeAmount,
           ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
         });
       } else {
@@ -1193,6 +1203,7 @@ const CashierPos = () => {
             // Part of or_totalCostWtax above; sent on its own too so the server
             // can check the two agree and the reports can show it separately.
             delivery_charge: deliveryChargeAmount,
+            packing_charge: packingChargeAmount,
             kitchen_note: kitchenNoteText(),
             // How it was paid, sent with the sale itself. Without this the
             // drawer cannot be counted at the end of the day: there is no way
@@ -1253,6 +1264,7 @@ const CashierPos = () => {
               discount: Number(discountPct || 0),
               serviceFee: Number(serviceFee || 0),
               deliveryCharge: deliveryChargeAmount,
+              packingCharge: packingChargeAmount,
               tax: Number(tax.toFixed(2)),
               total: Number(total.toFixed(2)),
             }, { onDone: printTicket });
@@ -1291,6 +1303,7 @@ const CashierPos = () => {
       approvalPinRef.current = "";
       // And the next delivery has to choose its charge again.
       setDeliveryCharge(null);
+      setPackingCharge("");
       setCreditName("");
       setDeliveryCustomer("");
       setDeliveryCustomerPhone("");
@@ -1317,6 +1330,7 @@ const CashierPos = () => {
           discount: Number(discountPct || 0),
           serviceFee: Number(serviceFee || 0),
           deliveryCharge: deliveryChargeAmount,
+          packingCharge: packingChargeAmount,
           allergies,
           addons,
           notes,
@@ -1369,6 +1383,7 @@ const CashierPos = () => {
       // settling with "none" would quietly wipe a charge the customer owes.
       setDeliveryCharge(ao.or_type === "delivery" && ao.delivery_charge != null
         ? Number(ao.delivery_charge) : null);
+      setPackingCharge(Number(ao.packing_charge || 0) > 0 ? String(Number(ao.packing_charge)) : "");
       setNotes(ao.or_notes || "");
       setEditingOrderId(ao.or_id);
       setEditingOrderCurrentStatus(ao.or_status ?? "pending");
@@ -1395,6 +1410,7 @@ const CashierPos = () => {
     setOrderEdit(null);
     setDiscountPct(0);
     setDeliveryCharge(null);
+    setPackingCharge("");
   };
 
   /**
@@ -1438,6 +1454,7 @@ const CashierPos = () => {
         discount_pct: Number(discountPct || 0),
         service_fee: Number(serviceFee || 0),
         delivery_charge: deliveryChargeAmount,
+        packing_charge: packingChargeAmount,
         ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
       });
 
@@ -1487,6 +1504,7 @@ const CashierPos = () => {
       deliveryCustomer,
       deliveryCustomerPhone,
       deliveryCharge,
+      packingCharge,
       allergies,
       addons,
       notes,
@@ -1515,6 +1533,7 @@ const CashierPos = () => {
     setDeliveryPartner("pickme_food");
     setDeliveryPaymentMethod("cod");
     setDeliveryCharge(null);
+    setPackingCharge("");
     setAllergies("");
     setAddons("");
     setNotes("");
@@ -1555,6 +1574,7 @@ const CashierPos = () => {
     setDeliveryCustomer(orderToResume.deliveryCustomer || "");
     setDeliveryCustomerPhone(orderToResume.deliveryCustomerPhone || "");
     setDeliveryCharge(orderToResume.deliveryCharge ?? null);
+    setPackingCharge(orderToResume.packingCharge ?? "");
     setAllergies(orderToResume.allergies || "");
     setAddons(orderToResume.addons || "");
     setNotes(orderToResume.notes || "");
@@ -2350,6 +2370,22 @@ const CashierPos = () => {
                     </span>
                   </label>
                 </div>
+                {isPackable && (
+                  <label className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                    Packing charge
+                    <span className="flex items-center gap-1">
+                      LKR
+                      <input
+                        type="number" min={0} step="10"
+                        value={packingCharge}
+                        onChange={(e) => setPackingCharge(e.target.value === "" ? "" : String(Math.max(0, Number(e.target.value) || 0)))}
+                        placeholder="0"
+                        aria-label="Packing charge"
+                        className="w-20 rounded-md border border-slate-200 px-1.5 py-1 text-right text-xs outline-none focus:border-[#0A5BAE]"
+                      />
+                    </span>
+                  </label>
+                )}
                 {Number(discountPct) > DISCOUNT_LIMIT_PCT && !isManager && discountPinNeeded && (
                   <p className="mt-1 text-[11px] text-amber-600">A manager's PIN will be needed at checkout.</p>
                 )}
@@ -2379,6 +2415,12 @@ const CashierPos = () => {
                   <span>Tax{effectiveTaxRate > 0 ? ` (${effectiveTaxRate.toFixed(1)}%)` : ""}</span>
                   <span className="font-medium text-slate-700">LKR {tax.toFixed(2)}</span>
                 </div>
+                {packingChargeAmount > 0 && (
+                  <div className="flex justify-between">
+                    <span>Packing charge</span>
+                    <span className="font-medium text-slate-700">LKR {packingChargeAmount.toFixed(2)}</span>
+                  </div>
+                )}
                 {isDeliveryOrder && (
                   <div className="flex justify-between">
                     <span>Delivery charge</span>

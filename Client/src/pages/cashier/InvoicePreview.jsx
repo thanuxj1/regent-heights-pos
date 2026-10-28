@@ -55,6 +55,7 @@ const InvoicePreview = () => {
   const serviceFee = Number(invoice.serviceFee ?? 0).toFixed(2);
   const tax = Number(invoice.tax ?? 0).toFixed(2);
   const deliveryCharge = Number(invoice.deliveryCharge ?? 0).toFixed(2);
+  const packingCharge = Number(invoice.packingCharge ?? 0).toFixed(2);
 
   const handlePrint = () => {
     printReceipt(invoice);
@@ -231,6 +232,12 @@ const InvoicePreview = () => {
                 <div className="flex items-center justify-between">
                   <span>Tax</span>
                   <span className="font-semibold text-slate-900">LKR {tax}</span>
+                </div>
+              )}
+              {Number(packingCharge) > 0 && (
+                <div className="flex items-center justify-between">
+                  <span>Packing Charge</span>
+                  <span className="font-semibold text-slate-900">LKR {packingCharge}</span>
                 </div>
               )}
               {Number(deliveryCharge) > 0 && (

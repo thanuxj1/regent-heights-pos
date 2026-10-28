@@ -16,6 +16,7 @@ import { logActivity } from "../utils/activityLog.js";
 import { requireApproval, checkDeletePin, DISCOUNT_APPROVAL_PCT } from "../utils/approval.js";
 import { hotelToday } from "../utils/hotelTime.js";
 import { resolveDeliveryCharge } from "../utils/deliveryCharge.js";
+import { resolvePackingCharge } from "../utils/packingCharge.js";
 import { hasKitchenScreen } from "../utils/kitchenScreen.js";
 import { soldOrder } from "../utils/sales.js";
 import { isOutsideLine, readOutsideLine } from "../utils/outsideItem.js";
@@ -88,6 +89,8 @@ const STATUS_TRANSITIONS = {
  *
  * Returns an error string or null if valid.
  */
+// deliveryCharge here is everything added on top of the taxed total: the
+// delivery charge and the packing charge.
 function validateCosts(or_tax, or_totalcost, or_totalCostWtax, deliveryCharge = 0) {
   const tax = parseFloat(or_tax);
   const cost = parseFloat(or_totalcost);
@@ -114,7 +117,7 @@ function validateCosts(or_tax, or_totalcost, or_totalCostWtax, deliveryCharge = 
     const diff = Math.abs(expected - costWtx);
     if (diff > 0.05) {
       return charge
-        ? `or_totalCostWtax (${costWtx}) does not match or_totalcost * (1 + tax/100) + delivery charge ${charge} = ${expected}`
+        ? `or_totalCostWtax (${costWtx}) does not match or_totalcost * (1 + tax/100) + delivery/packing charges ${charge} = ${expected}`
         : `or_totalCostWtax (${costWtx}) does not match or_totalcost * (1 + tax/100) = ${expected}`;
     }
   }
@@ -476,6 +479,7 @@ export const updateOrder = async (req, res) => {
       discount_pct,
       service_fee,
       delivery_charge,
+      packing_charge,
       approval_pin,
       credit_customer,
       credit_phone,
@@ -503,7 +507,7 @@ export const updateOrder = async (req, res) => {
     const existing = await pool.query(
       // discount_pct and service_fee come along so the settle-time total check
       // below allows for a discount that was properly declared and approved.
-      `SELECT or_status, discount_pct, service_fee, discount_approved_by, payment_method, delivery_charge FROM "ORDER" WHERE or_id = $1`,
+      `SELECT or_status, discount_pct, service_fee, discount_approved_by, payment_method, delivery_charge, packing_charge FROM "ORDER" WHERE or_id = $1`,
       [id],
     );
     if (!existing.rows.length) {
@@ -583,9 +587,21 @@ export const updateOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: charge.error });
     }
     const resolvedDeliveryCharge = charge.value;
+    // The packing charge the same way: sent, it is the new one; not sent, a
+    // takeaway or delivery keeps what it has.
+    const packing = resolvePackingCharge(
+      or_type,
+      packing_charge !== undefined
+        ? packing_charge
+        : (or_type === "takeaway" || or_type === "delivery" ? existing.rows[0].packing_charge : 0),
+    );
+    if (packing.error) {
+      return res.status(400).json({ success: false, error: packing.error });
+    }
+    const resolvedPackingCharge = packing.value;
 
     // ── Cost validation ──
-    const costError = validateCosts(or_tax, or_totalcost, or_totalCostWtax, resolvedDeliveryCharge);
+    const costError = validateCosts(or_tax, or_totalcost, or_totalCostWtax, resolvedDeliveryCharge + resolvedPackingCharge);
     if (costError) {
       return res.status(400).json({ success: false, error: costError });
     }
@@ -702,7 +718,8 @@ export const updateOrder = async (req, res) => {
          credit_customer    = CASE WHEN $11::text IS NULL THEN credit_customer WHEN $11::text = 'credit' THEN $18 ELSE NULL END,
          credit_phone       = CASE WHEN $11::text IS NULL THEN credit_phone    WHEN $11::text = 'credit' THEN $19 ELSE NULL END,
          customer_name      = COALESCE($20, customer_name),
-         customer_phone     = COALESCE($21, customer_phone)
+         customer_phone     = COALESCE($21, customer_phone),
+         packing_charge     = $22
        WHERE or_id = $10
        RETURNING *`,
       [
@@ -727,6 +744,7 @@ export const updateOrder = async (req, res) => {
         credit.phone,
         optionalText(customer_name, 120),
         optionalText(customer_phone, 30),
+        resolvedPackingCharge,
       ],
     );
 
@@ -1190,8 +1208,11 @@ export const createOrderWithItems = async (req, res) => {
   const charge = resolveDeliveryCharge(order.or_type, order.delivery_charge);
   if (charge.error) return res.status(400).json({ success: false, error: charge.error });
   const deliveryCharge = charge.value;
+  const packing = resolvePackingCharge(order.or_type, order.packing_charge);
+  if (packing.error) return res.status(400).json({ success: false, error: packing.error });
+  const packingCharge = packing.value;
 
-  const costError = validateCosts(order.or_tax ?? 0, order.or_totalcost, order.or_totalCostWtax, deliveryCharge);
+  const costError = validateCosts(order.or_tax ?? 0, order.or_totalcost, order.or_totalCostWtax, deliveryCharge + packingCharge);
   if (costError) return res.status(400).json({ success: false, error: costError });
 
   // An outside item (bought elsewhere, sold on) names no product; what it is
@@ -1340,8 +1361,8 @@ export const createOrderWithItems = async (req, res) => {
           discount_pct, service_fee, discount_approved_by,
           payment_method, session_id, kitchen_note, delivery_partner,
           delivery_charge, credit_customer, credit_phone, customer_name, customer_phone,
-          status_changed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+          status_changed_at, packing_charge)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        RETURNING *`,
       [
         parseFloat(order.or_tax), parseFloat(order.or_totalcost),
@@ -1358,6 +1379,7 @@ export const createOrderWithItems = async (req, res) => {
         optionalText(order.customer_name, 120),
         optionalText(order.customer_phone, 30),
         status === "completed" ? new Date() : null,
+        packingCharge,
       ],
     );
     const created = rows[0];

@@ -21,6 +21,7 @@ export const printReceipt = (invoice, { onDone } = {}) => {
   const tax = Number(invoice.tax || 0).toFixed(2);
   const serviceFee = Number(invoice.serviceFee || 0).toFixed(2);
   const deliveryCharge = Number(invoice.deliveryCharge || 0).toFixed(2);
+  const packingCharge = Number(invoice.packingCharge || 0).toFixed(2);
   const total = Number(invoice.total || 0).toFixed(2);
 
   const page = `
@@ -205,6 +206,13 @@ export const printReceipt = (invoice, { onDone } = {}) => {
             <span>Tax</span>
             <span>LKR ${tax}</span>
           </div>
+
+          ${Number(packingCharge) > 0 ? `
+          <div class="row">
+            <span>Packing Charge</span>
+            <span>LKR ${packingCharge}</span>
+          </div>
+          ` : ""}
 
           ${Number(deliveryCharge) > 0 ? `
           <div class="row">

@@ -60,6 +60,9 @@ export async function getSummary(req, res, next) {
                 -- paid); reported again on its own so it is visible, not lost in
                 -- the food sales. Same rows, same dates, so the two always agree.
                 COALESCE(SUM(o.delivery_charge),0) AS delivery_charges,
+                -- Packing charges on takeaway and delivery (migration 079): also
+                -- inside "total", shown on their own the same way.
+                COALESCE(SUM(o.packing_charge),0) AS packing_charges,
                 -- The part of "total" that is cash-on-delivery money a rider has handed over in
                 -- the range (an order counts only from the day its cash arrives). The rest was
                 -- paid at the till or by card.
@@ -300,6 +303,7 @@ export async function getSummary(req, res, next) {
     const hotelRev = +(liveHotelRev + importedHotel).toFixed(2);
     const restRev  = +(num(restaurant.rows[0].total) + importedRest - refundsTotal).toFixed(2);
     const deliveryCharges = num(restaurant.rows[0].delivery_charges);
+    const packingCharges = num(restaurant.rows[0].packing_charges);
     const expTotal = num(expenses.rows[0].total);
     const supTotal = num(suppliers.rows[0].total);
     const wasteTotal = num(waste.rows[0].total);
@@ -384,7 +388,7 @@ export async function getSummary(req, res, next) {
         cod_orders: num(restaurant.rows[0].cod_orders),
         credit_received: num(restaurant.rows[0].credit_received),
         credit_orders: num(restaurant.rows[0].credit_orders),
-        paid_at_till: +(restRev - importedRest + refundsTotal - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, orders: num(restaurant.rows[0].orders),
+        paid_at_till: +(restRev - importedRest + refundsTotal - num(restaurant.rows[0].cod_received) - num(restaurant.rows[0].credit_received)).toFixed(2), delivery_charges: deliveryCharges, packing_charges: packingCharges, orders: num(restaurant.rows[0].orders),
         imported: importedRest,
         // Already taken off "revenue" above: money handed back in the range.
         refunds: refundsTotal, refund_count: refundCount,
