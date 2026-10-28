@@ -89,7 +89,7 @@ export async function getKitchenBoard(req, res) {
               o.table_id, t.table_number, o.room_id, r.room_number,
               o.status_changed_at, o."or_totalCostWtax" AS total,
               o.payment_method, o.delivery_partner, o.cod_settlement_id, o.delivery_charge, o.credit_customer, o.customer_name, o.customer_phone,
-              o.kitchen_note, u.role_id AS placed_by_role,
+              o.kitchen_note, o.u_id, o.discount_pct, u.role_id AS placed_by_role,
               (o.u_id IS NOT DISTINCT FROM ${me}::int) AS mine,
               TRIM(COALESCE(u.u_fname, '') || ' ' || COALESCE(u.u_lname, '')) AS placed_by,
               FLOOR(EXTRACT(EPOCH FROM (NOW() - o.status_changed_at)) / 60)::int AS minutes_in_status,

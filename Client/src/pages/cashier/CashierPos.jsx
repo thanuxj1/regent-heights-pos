@@ -213,6 +213,10 @@ const CashierPos = () => {
   const [holdTableInput, setHoldTableInput] = useState("");
   const [pendingHoldData, setPendingHoldData] = useState(null);
   const [editingOrderId, setEditingOrderId] = useState(null);
+  // Set when an order from Kitchen Orders was opened to change it (not to take
+  // payment): { or_id, u_id, table }. Only counts while that order is the one
+  // in the cart, so nothing else has to clear it.
+  const [orderEdit, setOrderEdit] = useState(null);
   const [editingOrderCurrentStatus, setEditingOrderCurrentStatus] = useState(null);
   const [editingOrderTableId, setEditingOrderTableId] = useState(null);
 
@@ -1328,7 +1332,7 @@ const CashierPos = () => {
     }
   };
 
-  const handleEditWaiterOrder = async (ao) => {
+  const handleEditWaiterOrder = async (ao, { change = false } = {}) => {
     try {
       setLoadingWaiterOrders(true);
       const items = await getOrderItemsByOrderId(ao.or_id);
@@ -1366,11 +1370,105 @@ const CashierPos = () => {
       setEditingOrderId(ao.or_id);
       setEditingOrderCurrentStatus(ao.or_status ?? "pending");
       setEditingOrderTableId(ao.table_id ?? null);
+      setDiscountPct(Number(ao.discount_pct || 0));
+      setOrderEdit(change
+        ? { or_id: ao.or_id, u_id: ao.u_id ?? null, table: ao.table_number ? `Table ${ao.table_number}` : null }
+        : null);
       setShowKitchenModal(false);
     } catch (err) {
       alert("Failed to load order for editing: " + err.message);
     } finally {
       setLoadingWaiterOrders(false);
+    }
+  };
+
+  const editingFor = orderEdit && orderEdit.or_id === editingOrderId ? orderEdit : null;
+  const stopEditing = () => {
+    setCart([]);
+    setEditingOrderId(null);
+    setEditingOrderCurrentStatus(null);
+    setEditingOrderTableId(null);
+    setOrderEdit(null);
+    setDiscountPct(0);
+    setDeliveryCharge(null);
+  };
+
+  /**
+   * Save the changes to an order the kitchen already has, without taking
+   * payment. Only what changed is touched (syncOrderLines), the order's total
+   * follows, and a ticket saying what to add and what to cancel goes to the
+   * kitchen — it cooks from paper, so an edit nobody prints never reaches it.
+   */
+  const handleSaveOrderEdit = async () => {
+    const id = editingOrderId;
+    if (!id || !editingFor) return;
+    if (!cart.length) {
+      setError("An order needs at least one item. To cancel the whole order, void it instead.");
+      return;
+    }
+    if (!online) {
+      setError("Changing an order needs the connection.");
+      return;
+    }
+    if (deliveryChargeMissing) {
+      setError(DELIVERY_CHARGE_PROMPT);
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setError("");
+      setSuccessNote("");
+      const before = (await getOrderItemsByOrderId(id)) || [];
+      await syncOrderLines(id);
+      await updateOrder(id, {
+        or_tax: Number(effectiveTaxRate.toFixed(4)),
+        or_totalcost: Number(taxableBase.toFixed(2)),
+        or_totalCostWtax: Number(total.toFixed(2)),
+        or_status: editingOrderCurrentStatus || "pending",
+        or_type: orderType,
+        cust_id: null,
+        // Still the order of whoever placed it.
+        u_id: editingFor.u_id || user.u_id,
+        b_id: branchId,
+        table_id: editingOrderTableId ?? null,
+        discount_pct: Number(discountPct || 0),
+        service_fee: Number(serviceFee || 0),
+        delivery_charge: deliveryChargeAmount,
+        ...(approvalPinRef.current ? { approval_pin: approvalPinRef.current } : {}),
+      });
+
+      // What the kitchen has to do differently, dish by dish.
+      const tally = (list, nameOf, qtyOf) => list.reduce(
+        (m, l) => m.set(nameOf(l), (m.get(nameOf(l)) || 0) + qtyOf(l)), new Map());
+      const was = tally(before, (l) => l.pro_name || "Item", (l) => Number(l.pro_quantity || 0));
+      const now = tally(cart, (i) => i.pro_name, (i) => Number(i.qty || 0));
+      const changes = [];
+      for (const [name, q] of now) {
+        const d = q - (was.get(name) || 0);
+        if (d > 0) changes.push({ name: `ADD  ${name}`, qty: d });
+      }
+      for (const [name, q] of was) {
+        const d = q - (now.get(name) || 0);
+        if (d > 0) changes.push({ name: `CANCEL  ${name}`, qty: d });
+      }
+      if (changes.length) {
+        printKotAtTill(
+          { or_id: id, or_type: orderType, table: editingFor.table, allergies, addons, notes, customer: customerLabel() },
+          changes,
+          { branchName, staffName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(), changed: true },
+        );
+      }
+      approvalPinRef.current = "";
+      stopEditing();
+      setSuccessNote(changes.length
+        ? `Order #${id} changed — a ticket with the changes went to the kitchen.`
+        : `Order #${id} saved — nothing changed for the kitchen.`);
+      fetchKitchenBoard();
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message || "Could not save the changes";
+      if (!handlePossiblePinError(msg)) setError(msg);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1845,6 +1943,16 @@ const CashierPos = () => {
             </div>
 
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5">
+              {editingFor && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] text-sky-800">
+                  <span>
+                    <b>Changing order #{editingFor.or_id}</b>{editingFor.table ? ` · ${editingFor.table}` : ""} — add or remove items, then Save changes.
+                  </span>
+                  <button type="button" onClick={stopEditing} className="shrink-0 font-semibold underline">
+                    Cancel
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={openOutside}
@@ -2283,7 +2391,17 @@ const CashierPos = () => {
                     in one transaction. A separate KOT here let a cashier send a
                     second, detached order that the kitchen cooked and nobody paid
                     for. In Room mode there is one action, below. */}
-                {!(paymentMethod === "Room" && orderType !== "delivery") && (
+                {editingFor ? (
+                  <button
+                    type="button"
+                    onClick={handleSaveOrderEdit}
+                    disabled={submitting || cart.length === 0}
+                    className="inline-flex flex-[3] items-center justify-center gap-1.5 rounded-xl bg-sky-700 px-2 py-2.5 text-[13px] font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                  >
+                    <FaUtensils className="h-3.5 w-3.5" />
+                    Save changes
+                  </button>
+                ) : !(paymentMethod === "Room" && orderType !== "delivery") && (
                   <button
                     type="button"
                     onClick={handleSendToKitchen}
@@ -2748,13 +2866,25 @@ const CashierPos = () => {
                           Paid by {o.payment_method}
                         </div>
                       ) : (
-                        <button
-                          onClick={() => handleEditWaiterOrder(o)}
-                          disabled={loadingWaiterOrders}
-                          className="w-full rounded-lg bg-[#0A5BAE] text-white px-4 py-2 text-sm font-semibold hover:bg-[#094f96] transition"
-                        >
-                          Bill &amp; Pay at Terminal
-                        </button>
+                        <div className="flex gap-2">
+                          {o.or_status !== "completed" && (
+                            <button
+                              onClick={() => handleEditWaiterOrder(o, { change: true })}
+                              disabled={loadingWaiterOrders}
+                              title="Add or remove items; the kitchen gets a ticket with the changes"
+                              className="flex-1 rounded-lg border border-[#0A5BAE] bg-white px-3 py-2 text-sm font-semibold text-[#0A5BAE] transition hover:bg-sky-50"
+                            >
+                              Edit order
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleEditWaiterOrder(o)}
+                            disabled={loadingWaiterOrders}
+                            className="flex-[2] rounded-lg bg-[#0A5BAE] text-white px-4 py-2 text-sm font-semibold hover:bg-[#094f96] transition"
+                          >
+                            Bill &amp; Pay at Terminal
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>

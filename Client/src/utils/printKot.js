@@ -13,10 +13,12 @@ import { printElement } from "./printElement";
  *
  * @param {object}   order              { or_id, or_type, or_time, table, allergies, addons, notes }
  * @param {Array}    items              [{ name, qty, note }]
- * @param {object}   meta               { branchName, staffName, reprint, test }
+ * @param {object}   meta               { branchName, staffName, reprint, test, changed }
+ *                                      changed: the order was edited after it went
+ *                                      to the kitchen; items are what to add/cancel.
  */
 export function kotHtml(order, items, meta = {}) {
-  const { branchName = "", staffName = "", reprint = false, test = false } = meta;
+  const { branchName = "", staffName = "", reprint = false, test = false, changed = false } = meta;
 
   const esc = (v) =>
     String(v ?? "").replace(/[&<>"]/g, (c) => (
@@ -74,7 +76,7 @@ export function kotHtml(order, items, meta = {}) {
       .kot .flag { text-align: center; font-size: 13px; font-weight: 700; border: 2px solid #000; padding: 3px; margin-bottom: 8px; }
     </style>
     <div class="kot">
-      ${test ? '<div class="flag">* * T E S T   T I C K E T * *</div>' : reprint ? '<div class="flag">* * R E P R I N T * *</div>' : ""}
+      ${test ? '<div class="flag">* * T E S T   T I C K E T * *</div>' : changed ? '<div class="flag">* * O R D E R   C H A N G E D * *</div>' : reprint ? '<div class="flag">* * R E P R I N T * *</div>' : ""}
       <div class="head">
         <h1>KITCHEN ORDER</h1>
         <div class="sub">${esc(branchName)}</div>
@@ -89,7 +91,7 @@ export function kotHtml(order, items, meta = {}) {
       </div>
       ${orderNotes}
       <table>${rows}</table>
-      <div class="foot">${(items || []).reduce((n, i) => n + Number(i.qty || 0), 0)} item(s) &mdash; prepare and mark ready</div>
+      <div class="foot">${changed ? "Only the changes &mdash; the rest of the order stands" : `${(items || []).reduce((n, i) => n + Number(i.qty || 0), 0)} item(s) &mdash; prepare and mark ready`}</div>
     </div>`;
 }
 
