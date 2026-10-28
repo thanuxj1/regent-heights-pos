@@ -213,9 +213,10 @@ const CashierPos = () => {
   const [holdTableInput, setHoldTableInput] = useState("");
   const [pendingHoldData, setPendingHoldData] = useState(null);
   const [editingOrderId, setEditingOrderId] = useState(null);
-  // Set when an order from Kitchen Orders was opened to change it (not to take
-  // payment): { or_id, u_id, table }. Only counts while that order is the one
-  // in the cart, so nothing else has to clear it.
+  // Set when an order from Kitchen Orders is in the cart, whichever button
+  // opened it: { or_id, u_id, table }. Items added to it go on that same order
+  // (Save changes), never a second one. Only counts while that order is the
+  // one in the cart, so nothing else has to clear it.
   const [orderEdit, setOrderEdit] = useState(null);
   const [editingOrderCurrentStatus, setEditingOrderCurrentStatus] = useState(null);
   const [editingOrderTableId, setEditingOrderTableId] = useState(null);
@@ -803,6 +804,8 @@ const CashierPos = () => {
 
   const handleSendToKitchen = async () => {
     if (!cart.length || !user?.u_id) return;
+    // An order the kitchen already has is changed, not sent again.
+    if (editingOrderId) return handleSaveOrderEdit();
     if (!branchId) {
       setError("No branch is assigned to this user.");
       return;
@@ -1371,9 +1374,10 @@ const CashierPos = () => {
       setEditingOrderCurrentStatus(ao.or_status ?? "pending");
       setEditingOrderTableId(ao.table_id ?? null);
       setDiscountPct(Number(ao.discount_pct || 0));
-      setOrderEdit(change
-        ? { or_id: ao.or_id, u_id: ao.u_id ?? null, table: ao.table_number ? `Table ${ao.table_number}` : null }
-        : null);
+      // Either way it is this order: "Send to kitchen" on it used to make a
+      // second order for whatever was added, cooked and billed apart.
+      setOrderEdit({ or_id: ao.or_id, u_id: ao.u_id ?? null, change,
+                     table: ao.table_number ? `Table ${ao.table_number}` : null });
       setShowKitchenModal(false);
     } catch (err) {
       alert("Failed to load order for editing: " + err.message);
@@ -1401,7 +1405,7 @@ const CashierPos = () => {
    */
   const handleSaveOrderEdit = async () => {
     const id = editingOrderId;
-    if (!id || !editingFor) return;
+    if (!id) return;
     if (!cart.length) {
       setError("An order needs at least one item. To cancel the whole order, void it instead.");
       return;
@@ -1428,7 +1432,7 @@ const CashierPos = () => {
         or_type: orderType,
         cust_id: null,
         // Still the order of whoever placed it.
-        u_id: editingFor.u_id || user.u_id,
+        u_id: editingFor?.u_id || user.u_id,
         b_id: branchId,
         table_id: editingOrderTableId ?? null,
         discount_pct: Number(discountPct || 0),
@@ -1453,7 +1457,7 @@ const CashierPos = () => {
       }
       if (changes.length) {
         printKotAtTill(
-          { or_id: id, or_type: orderType, table: editingFor.table, allergies, addons, notes, customer: customerLabel() },
+          { or_id: id, or_type: orderType, table: editingFor?.table, allergies, addons, notes, customer: customerLabel() },
           changes,
           { branchName, staffName: `${user?.u_fname || ""} ${user?.u_lname || ""}`.trim(), changed: true },
         );
@@ -1946,7 +1950,7 @@ const CashierPos = () => {
               {editingFor && (
                 <div className="flex items-center justify-between gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] text-sky-800">
                   <span>
-                    <b>Changing order #{editingFor.or_id}</b>{editingFor.table ? ` · ${editingFor.table}` : ""} — add or remove items, then Save changes.
+                    <b>Order #{editingFor.or_id}</b>{editingFor.table ? ` · ${editingFor.table}` : ""} — add or remove items and Save changes (it stays one order), or take payment below.
                   </span>
                   <button type="button" onClick={stopEditing} className="shrink-0 font-semibold underline">
                     Cancel
