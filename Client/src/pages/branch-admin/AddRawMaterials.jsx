@@ -17,6 +17,8 @@ const MAX_NAME = 120;
 const MAX_QTY = 100_000;
 const MAX_UNIT_PRICE = 999_999.99;
 const MAX_MIN_STOCK = 99_999.999;
+// A line total, the order total and a payment are stored as numeric(10,2).
+const MAX_AMOUNT = 99_999_999.99;
 
 const TABS = {
   ingredient: {
@@ -661,6 +663,9 @@ const AddRawMaterials = () => {
 
       if (!isNumber(row.unit_price) || Number(row.unit_price) <= 0) e.unit_price = "Enter the price";
       else if (Number(row.unit_price) > MAX_UNIT_PRICE) e.unit_price = "That's too high";
+      else if (!e.qty && Number(row.qty) * Number(row.unit_price) > MAX_AMOUNT) {
+        e.unit_price = `This line comes to more than ${money(MAX_AMOUNT * 100)} — too large to record`;
+      }
 
       if (Object.keys(e).length) rowErrors[row.key] = e;
     }
@@ -698,7 +703,9 @@ const AddRawMaterials = () => {
       else if (paidCents > totalCents) payment = `That's more than the order total (${money(totalCents)})`;
     }
 
-    const general = filled.length === 0 ? "Add at least one item before saving." : null;
+    const general = filled.length === 0
+      ? "Add at least one item before saving."
+      : totalCents > MAX_AMOUNT * 100 ? `The order comes to more than ${money(MAX_AMOUNT * 100)} — save it as two purchases` : null;
     const errorCount = Object.values(rowErrors).reduce((n, e) => n + Object.keys(e).length, 0)
       + Object.keys(supplierErrors).length + (payment ? 1 : 0) + (general ? 1 : 0);
 
@@ -1102,8 +1109,14 @@ const AddRawMaterials = () => {
                 {isNewSupplier ? "Choose existing" : "+ New supplier"}
               </button>
             </section>
-            {(supErr.sup_id || supErr.sup_name || supErr.sup_contact || supErr.sup_email || supErr.sup_address) && (
-              <span className="ai-err" role="alert">{supErr.sup_id || supErr.sup_name || supErr.sup_contact || supErr.sup_email || supErr.sup_address}</span>
+            {Object.keys(supErr).length > 0 && (
+              // Every problem at once, each with its field, so none hides behind another.
+              <span className="ai-err" role="alert">
+                {[["sup_id", ""], ["sup_name", "Name"], ["sup_contact", "Phone"], ["sup_email", "Email"], ["sup_address", "Address"]]
+                  .filter(([f]) => supErr[f])
+                  .map(([f, label]) => (label ? `${label}: ${supErr[f]}` : supErr[f]))
+                  .join("  ·  ")}
+              </span>
             )}
 
             {attempted && validation.general && <div className="ai-banner" role="alert">{validation.general}</div>}

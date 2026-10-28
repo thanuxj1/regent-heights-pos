@@ -201,13 +201,19 @@ export default function ExcelSheet({
       .slice(0, 6);
   };
 
-  // Units for the list: those starting with the text first, then the rest that
-  // contain it (in the unit or its name). Nothing typed: every unit.
+  // Units for the list, best first: the unit starts with the text ("k" → kg),
+  // then its name does ("li" → litres, "tin" → can), then either contains it.
+  // Nothing typed: every unit.
   const unitMatches = (text) => {
     const t = lower(text);
     if (!t) return units;
-    const starts = units.filter((u) => u.startsWith(t));
-    return [...starts, ...units.filter((u) => !starts.includes(u) && (u.includes(t) || (UNIT_HINT[u] || "").includes(t)))];
+    const rank = (u) => {
+      const hint = UNIT_HINT[u] || "";
+      if (u.startsWith(t)) return 0;
+      if (hint.split(/[ ,]+/).some((w) => w.startsWith(t))) return 1;
+      return u.includes(t) || hint.includes(t) ? 2 : 9;
+    };
+    return units.filter((u) => rank(u) < 9).sort((x, y) => rank(x) - rank(y));
   };
   const unitFor = (text) => {
     const t = lower(text);
