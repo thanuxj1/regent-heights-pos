@@ -339,9 +339,9 @@ const InventoryDashboard = () => {
           onClose={() => setCountingItem(null)}
           onSave={async (count) => {
             if (countingItem.isProduct) {
-              await countBranchProduct(countingItem.rm_id, { counted: count, note: "Inventory Dashboard count" });
+              await countBranchProduct(countingItem.rm_id, count);
             } else {
-              await countRawMaterial(countingItem.rm_id, { counted: count, note: "Inventory Dashboard count" });
+              await countRawMaterial(countingItem.rm_id, count);
             }
             await fetchInventory();
           }}
