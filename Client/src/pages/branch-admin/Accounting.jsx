@@ -8,6 +8,7 @@ import {
 } from "../../services/api";
 import { dayKey, todayKey } from "../../utils/dates";
 import { exportCsv, dateCell } from "../../utils/exportCsv";
+import BankTransactions from "../../components/branch-admin/BankTransactions";
 
 const CATEGORIES = [
   { key:"utilities",    label:"Utilities",       icon:"💡" },
@@ -53,7 +54,7 @@ export default function Accounting() {
   const { user } = useAuth();
   const branchId = user?.b_id ?? user?.B_id ?? null;
 
-  const [tab, setTab] = useState("overview"); // overview | expenses | income
+  const [tab, setTab] = useState("overview"); // overview | expenses | income | bank
   const [expenses, setExpenses] = useState([]);
   const [summary, setSummary] = useState({});
   const [loading, setLoading] = useState(true);
@@ -274,7 +275,7 @@ export default function Accounting() {
           {/* Tabs */}
           <div style={{ background:"#fff", borderRadius:"12px 12px 0 0", border:"1px solid #E2E8F0", borderBottom:"none" }}>
             <div style={{ display:"flex", borderBottom:"1px solid #E2E8F0", paddingLeft:8 }}>
-              {[["overview","Overview"],["expenses","Expenses"],["income","Income"]].map(([k,l]) => (
+              {[["overview","Overview"],["expenses","Expenses"],["income","Income"],["bank","Bank Transactions"]].map(([k,l]) => (
                 <button key={k} onClick={() => setTab(k)} style={TAB_STYLE(k)}>{l}</button>
               ))}
             </div>
@@ -517,6 +518,9 @@ export default function Accounting() {
                 )}
               </div>
             )}
+
+            {/* BANK TRANSACTIONS TAB — money into and out of the bank account */}
+            {tab === "bank" && <BankTransactions branchId={branchId} />}
           </div>
         </main>
       </div>

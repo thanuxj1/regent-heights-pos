@@ -867,6 +867,17 @@ export const deleteExpense = async (id) => {
   await api.delete(`/expenses/${id}`);
 };
 
+// ─── Bank book (Accounting → Bank Transactions) ───────────────────────────────
+export const getBankTransactions = async (params = {}) => (await api.get("/bank", { params })).data ?? [];
+export const createBankTransaction = async (payload) => (await api.post("/bank", payload)).data;
+export const updateBankTransaction = async (id, payload) => (await api.put(`/bank/${id}`, payload)).data;
+export const deleteBankTransaction = async (id) => { await api.delete(`/bank/${id}`); };
+export const getBankCategories = async (params = {}) =>
+  (await api.get("/bank/categories", { params })).data ?? { builtin: [], custom: [], used: {} };
+export const createBankCategory = async (payload) => (await api.post("/bank/categories", payload)).data;
+export const updateBankCategory = async (id, payload) => (await api.put(`/bank/categories/${id}`, payload)).data;
+export const deleteBankCategory = async (id) => { await api.delete(`/bank/categories/${id}`); };
+
 // ═══ HOTEL ════════════════════════════════════════════════════════════════════
 
 // Room types
