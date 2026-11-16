@@ -83,6 +83,7 @@ import cashRoutes from "./routes/cashRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import creditRoutes from "./routes/creditRoutes.js";
 import activityRoutes from "./routes/activityRoutes.js";
+import hostingRoutes from "./routes/hostingRoutes.js";
 
 // ─────────────────────────────────────────────
 // APP INIT
@@ -224,6 +225,7 @@ app.use("/api/hotel", hotelRoutes);
 app.use("/api/security", securityRoutes);
 app.use("/api/cash", cashRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/hosting", hostingRoutes);
 app.use("/api/activity", activityRoutes);
 
 // ─────────────────────────────────────────────

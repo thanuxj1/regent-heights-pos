@@ -4,6 +4,7 @@ import Sidebar from "../../components/super-admin/Sidebar";
 import Header from "../../components/super-admin/Header";
 import { getBranches, getUsers, getCompanies, setAuthToken, logout } from "../../services/api";
 import Spinner from "../../components/super-admin/Spinner";
+import HostingCard from "../../components/super-admin/HostingCard";
 import { dayKey } from "../../utils/dates";
 
 // DD-MM-YYYY for display; "—" for anything that isn't a real date. Goes through
@@ -235,6 +236,7 @@ const Dashboard = () => {
         <Header title="System Admin DashBoard" />
 
         <div style={{ padding: "24px 28px" }}>
+          <HostingCard />
           {/* ── Stat Cards ─────────────────────────────────── */}
           <div style={{ display: "flex", gap: 20, marginBottom: 28 }}>
             <StatCard

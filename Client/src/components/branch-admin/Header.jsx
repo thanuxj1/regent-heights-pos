@@ -4,6 +4,7 @@ import { useAuth } from "../../context/AuthContext";
 import { getLowStockMaterials } from "../../services/api";
 import { ROLE, canSeeLowStock } from "../../constants/roles";
 import { getSocket } from "../../services/socket";
+import { HostingChip } from "../HostingNotice";
 
 /** "just now", "4 min ago" — an alert with no age looks new forever. */
 function ago(ts) {
@@ -282,6 +283,7 @@ const Header = ({ title = "Product Management", actions = null }) => {
           to grow a second bar of its own to hold them. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         {actions}
+        <HostingChip />
         <NotificationBell
           branchId={user?.b_id ?? null}
           showLowStock={canSeeLowStock(user?.role_id)}

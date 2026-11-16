@@ -29,6 +29,7 @@ const CashierPos = lazy(() => import('./pages/cashier/CashierPos'));
 const InvoicePreview = lazy(() => import('./pages/cashier/InvoicePreview'));
 import ProtectedRoute from './components/ProtectedRoute';
 import ConnectionBanner from './components/ConnectionBanner';
+import HostingNotice from './components/HostingNotice';
 import { useAuth } from './context/AuthContext';
 
 // Mirrors the two capability keys (of the full backend catalog) that can
@@ -103,6 +104,7 @@ function App() {
   return (
     <>
     <ConnectionBanner />
+    <HostingNotice />
     <Suspense fallback={<RouteFallback />}>
     <Routes>
       <Route path="/" element={<Login />} />
