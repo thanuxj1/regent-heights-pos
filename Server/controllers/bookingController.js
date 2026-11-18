@@ -1109,7 +1109,24 @@ export async function checkIn(req, res, next) {
       }
       // A day-use stay ends on the day it starts, so "ends today" is its normal
       // case, not a stay that's already over.
-      if (leave < today || (leave === today && arrive !== leave)) {
+      //
+      // A stay that ends today but began earlier is usually a guest who slept
+      // here and the desk forgot to check them in on arrival. That needs to be
+      // put right before they can be checked out, so it is allowed once the desk
+      // confirms it (late_check_in) — never silently, since the same screen is
+      // also how a guest arriving for the wrong dates would slip through.
+      const forgotten = leave === today && arrive < today;
+      if (forgotten && req.body?.late_check_in !== true) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          late_check_in: true,
+          message:
+            `This stay was booked from ${nice(arrive)} to ${nice(leave)}, and ends today. `
+            + `If the guest stayed and was not checked in on arrival, confirm to check them in now; `
+            + `the full stay is billed. If they have arrived for a different stay, change the dates with Edit Booking instead.`,
+        });
+      }
+      if (leave < today) {
         await client.query("ROLLBACK");
         res.status(409);
         return next(new Error(
@@ -1244,7 +1261,9 @@ export async function checkIn(req, res, next) {
     await client.query("COMMIT");
     announce(b.b_id, { action: "checked_in", booking_id: id });
     logActivity(req, { action: "check_in", entity: "booking", entity_id: id, b_id: b.b_id,
-      summary: `Checked in booking ${b.booking_ref}` });
+      summary: req.body?.late_check_in === true
+        ? `Checked in booking ${b.booking_ref} late (stay began ${dateOnly(b.check_in_date)}, not checked in on arrival)`
+        : `Checked in booking ${b.booking_ref}` });
     res.json({ success: true, folio_id: folioId, message: "Checked in" });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

@@ -248,12 +248,25 @@ export default function BookingDetail() {
     finally { setBusy(""); }
   };
 
-  const doCheckIn = () => run("check-in", () => checkInBooking(id, {
-    room_assignments: Object.entries(assignments).map(([booking_room_id, room_id]) => ({
-      booking_room_id: Number(booking_room_id), room_id: Number(room_id),
-    })),
-    ...(selectedMealPlanId ? { meal_plan_id: Number(selectedMealPlanId) } : {}),
-  }));
+  // A stay that ends today but was never checked in (the desk forgot on arrival)
+  // comes back asking to be confirmed; on OK it is sent again as a late check-in.
+  const doCheckIn = () => run("check-in", async () => {
+    const payload = {
+      room_assignments: Object.entries(assignments).map(([booking_room_id, room_id]) => ({
+        booking_room_id: Number(booking_room_id), room_id: Number(room_id),
+      })),
+      ...(selectedMealPlanId ? { meal_plan_id: Number(selectedMealPlanId) } : {}),
+    };
+    try {
+      await checkInBooking(id, payload);
+    } catch (err) {
+      const data = err?.response?.data;
+      if (!data?.late_check_in) throw err;
+      const ok = confirm(`${data.message}\n\nOK = check the guest in now.\nCancel = go back.`);
+      if (!ok) return;
+      await checkInBooking(id, { ...payload, late_check_in: true });
+    }
+  });
 
   // A late fee the guest was never told about is a complaint at the desk, so it
   // is quoted and confirmed before it is charged — and can be waived instead.

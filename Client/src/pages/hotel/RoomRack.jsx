@@ -344,7 +344,16 @@ function RoomDetailModal({ room, onClose, onChanged, onMarkClean, onRoomService,
                   style={{ ...btn("danger"), flex: 1 }}>
                   Cancel booking
                 </button>
-                <button onClick={() => act("check-in", () => checkInBooking(room.booking_id, {}))}
+                <button onClick={() => act("check-in", async () => {
+                    // A stay ending today that was never checked in: confirm, then send as a late check-in.
+                    try { await checkInBooking(room.booking_id, {}); }
+                    catch (e) {
+                      const data = e?.response?.data;
+                      if (!data?.late_check_in) throw e;
+                      if (!confirm(`${data.message}\n\nOK = check the guest in now.\nCancel = go back.`)) { setBusy(""); return; }
+                      await checkInBooking(room.booking_id, { late_check_in: true });
+                    }
+                  })}
                   disabled={!!busy} style={{ ...btn("primary"), flex: 1.4 }}>
                   {busy === "check-in" ? "Checking in…" : "Proceed to check-in"}
                 </button>
